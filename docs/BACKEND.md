@@ -19,7 +19,7 @@ app/
 ├── models/         # Pydantic request/response models + ORM models
 ├── services/       # business logic (import, generation, auth)
 ├── pdf/            # PDF parsing (in) and PDF rendering (out)
-├── storage/        # Oracle Object Storage client + signed URL helpers
+├── storage/        # AWS S3 client + signed URL helpers
 ├── ai/             # Claude API clients (see AI_INTEGRATION.md)
 └── main.py
 ```
