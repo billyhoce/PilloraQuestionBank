@@ -11,11 +11,11 @@ After import confirmation. Frontend calls `POST /api/import/ai-topics`; backend 
 **Claude Sonnet** (latest — `claude-sonnet-4-6`). Vision input required.
 
 ### Prompt Strategy
-Send the question's page image(s) to Claude alongside the **list of valid topics/subtopics for the question's subject**. Ask for JSON only.
+Send the question's page image(s) to Claude alongside the **list of valid topics/subtopics for the question's (subject, stream)**. Ask for JSON only.
 
 ```
 System:
-You are a topic classifier for {subject} exam questions.
+You are a topic classifier for {subject} ({stream}) exam questions.
 Valid topics: [
   { id: 1, name: "Algebra", subtopics: [
       { id: 11, name: "Linear equations" },
@@ -37,7 +37,7 @@ Classify this question into one or more topics from the list above.
 {
   "topics": [
     { "topic_id": 1, "subtopic_id": 11 },
-    { "topic_id": 1, "subtopic_id": null }
+    { "topic_id": 3, "subtopic_id": 1 }
   ]
 }
 ```
@@ -45,7 +45,7 @@ Classify this question into one or more topics from the list above.
 The backend stages these in `QuestionTopic` (or holds them pending) so the user can review and correct in the frontend's topic-review screen.
 
 ### Prompt Caching
-The valid-topics list is identical for every question in a subject. Use Anthropic's **prompt caching** (mark the system block with `cache_control: { type: "ephemeral" }`) so the topic list is cached across the batch of questions in one paper. Cache hits are dramatically cheaper than fresh tokens.
+The valid-topics list is identical for every question in a given (subject, stream) — and a single paper is always one (subject, stream) — so the same cached system block is reused across every question in the paper. Use Anthropic's **prompt caching** (mark the system block with `cache_control: { type: "ephemeral" }`). Cache hits are dramatically cheaper than fresh tokens.
 
 ## Filename Metadata Extraction
 

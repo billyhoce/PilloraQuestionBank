@@ -5,18 +5,19 @@
 ## Reference Tables (Admin CRUD)
 
 ```
+SchoolLevel:    { id, name }                          -- "primary", "secondary"
 Subject:        { id, name }                          -- e.g. "Math", "Science"
-Stream:         { id, name }                          -- e.g. "G1", "G2", "G3", "Express", "NA"
-Level:          { id, name, sort_order }              -- e.g. "Sec 1", "Sec 2", "Sec 3", "Sec 4"
+Stream:         { id, name, school_level_id (FK) }    -- e.g. "G1", "G2", "G3", "Foundation", "Standard"
+Level:          { id, name, sort_order, school_level_id (FK) }  -- e.g. "Pri 1", "Sec 2"
 School:         { id, name }
 ExamType:       { id, name }                          -- e.g. "WA1", "WA2", "EOY", "Prelim"
-Topic:          { id, subject_id (FK), name, topic_number }
+Topic:          { id, subject_id (FK), stream_id (FK), name, topic_number }
 Subtopic:       { id, topic_id (FK), name }
 ```
 
 ### Key Relationship
 
-Topics belong to a **Subject**. Streams do **NOT** own topics — a "G2 Math" and "G3 Math" paper both reference `Subject = "Math"`, and topics are shared under Math. Stream is metadata on the Paper, not on the Topic.
+Topics belong to a **(Subject, Stream)** pair. The same subject can have a different topic list per stream — e.g. "G2 Math" and "G3 Math" can each define their own topics under `Subject = "Math"`. Topic names need only be unique within a `(subject, stream)`, so "Algebra" can exist independently under both G2 Math and G3 Math.
 
 ## Core Tables
 

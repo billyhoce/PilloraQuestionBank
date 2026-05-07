@@ -37,12 +37,13 @@ POST   /api/auth/logout
 ### Reference Data — Admin write, Public read
 
 ```
+GET|POST|PUT|DELETE  /api/school-levels
 GET|POST|PUT|DELETE  /api/subjects
 GET|POST|PUT|DELETE  /api/streams
 GET|POST|PUT|DELETE  /api/levels
 GET|POST|PUT|DELETE  /api/schools
 GET|POST|PUT|DELETE  /api/exam-types
-GET|POST|PUT|DELETE  /api/topics          -- filtered by ?subject_id=
+GET|POST|PUT|DELETE  /api/topics          -- filtered by ?subject_id=&stream_id=
 GET|POST|PUT|DELETE  /api/subtopics       -- filtered by ?topic_id=
 ```
 

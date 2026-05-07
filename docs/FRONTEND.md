@@ -90,7 +90,7 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - **Year** — single-select dropdown OR range
 - **School** — multi-select
 - **Exam Type** — multi-select
-- **Topic** — multi-select, **scoped to selected Subject** (greyed out until subject chosen)
+- **Topic** — multi-select, **scoped to selected Subject + Stream** (greyed out until both are chosen)
 - **Subtopic** — multi-select, **scoped to selected Topic(s)**
 
 ### Results View
@@ -128,7 +128,7 @@ A simple management surface — list / create / edit / delete — for each of:
 - Levels (with `sort_order`)
 - Schools
 - Exam Types
-- Topics (scoped to a Subject; includes `topic_number` and a nested editor for Subtopics)
+- Topics (scoped to a Subject + Stream; includes `topic_number` and a nested editor for Subtopics)
 
 ### User Management
 - List users.
