@@ -26,7 +26,7 @@ A VM disk crash on Oracle Cloud's free tier would lose all data. Supabase provid
 - point-in-time recovery,
 - high availability,
 
-…all at zero cost in the free tier. Images in Oracle Object Storage are already durable by design. Putting the DB on the VM trades reliability for nothing.
+…all at zero cost in the free tier. Images in AWS S3 are already durable by design. Putting the DB on the VM trades reliability for nothing.
 
 ## Alternatives Considered
 
