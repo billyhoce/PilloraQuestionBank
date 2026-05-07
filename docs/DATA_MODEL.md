@@ -8,7 +8,7 @@
 SchoolLevel:    { id, name }                          -- "primary", "secondary"
 Subject:        { id, name }                          -- e.g. "Math", "Science"
 Stream:         { id, name, school_level_id (FK) }    -- e.g. "G1", "G2", "G3", "Foundation", "Standard"
-Level:          { id, name, sort_order, school_level_id (FK) }  -- e.g. "Pri 1", "Sec 2"
+Level:          { id, name, sort_order, school_level_id (FK) }
 School:         { id, name }
 ExamType:       { id, name }                          -- e.g. "WA1", "WA2", "EOY", "Prelim"
 Topic:          { id, subject_id (FK), stream_id (FK), name, topic_number }
