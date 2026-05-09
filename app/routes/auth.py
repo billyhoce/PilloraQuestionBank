@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
@@ -48,7 +48,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="public",
-        created_at=datetime.now(datetime.timezone.utc),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(user)
     try:
