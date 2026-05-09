@@ -66,7 +66,7 @@ def test_decode_tampered_token():
 
 
 def test_register_success(client):
-    resp = client.post("/api/auth/register", json={"email": "new@example.com", "password": "secure123"})
+    resp = client.post("/api/auth/register", json={"email": "new@example.com", "password": "Secure123!"})
     assert resp.status_code == 201
     body = resp.json()
     assert body["email"] == "new@example.com"
@@ -75,19 +75,30 @@ def test_register_success(client):
 
 
 def test_register_duplicate_email_returns_409(client):
-    payload = {"email": "dup@example.com", "password": "secure123"}
+    payload = {"email": "dup@example.com", "password": "Secure123!"}
     client.post("/api/auth/register", json=payload)
     resp = client.post("/api/auth/register", json=payload)
     assert resp.status_code == 409
 
 
 def test_register_invalid_email_returns_422(client):
-    resp = client.post("/api/auth/register", json={"email": "notanemail", "password": "secure123"})
+    resp = client.post("/api/auth/register", json={"email": "notanemail", "password": "Secure123!"})
     assert resp.status_code == 422
 
 
 def test_register_short_password_returns_422(client):
     resp = client.post("/api/auth/register", json={"email": "ok@example.com", "password": "short"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("password", [
+    "secure123!",    # no uppercase
+    "SECURE123!",    # no lowercase
+    "Securepass!",   # no number
+    "Secure1234",    # no special character
+])
+def test_register_weak_password_returns_422(client, password):
+    resp = client.post("/api/auth/register", json={"email": "ok@example.com", "password": password})
     assert resp.status_code == 422
 
 
@@ -97,7 +108,7 @@ def test_register_short_password_returns_422(client):
 
 
 def test_login_success_sets_httponly_cookie(client, admin_user):
-    resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "adminpass123"})
+    resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "Adminpass123!"})
     assert resp.status_code == 200
     cookie_header = resp.headers.get("set-cookie", "")
     assert "access_token" in cookie_header

@@ -7,7 +7,7 @@ markers = [
 ]
 env = [
     "DATABASE_URL=sqlite:///:memory:",
-    "SECRET_KEY=test-secret-key-not-for-production",
+    "JWT_SECRET_KEY=test-secret-key-not-for-production",
     "AWS_DEFAULT_REGION=us-east-1",
     "AWS_ACCESS_KEY_ID=testing",
     "AWS_SECRET_ACCESS_KEY=testing",

@@ -3,7 +3,7 @@ import os
 
 # Must be before any app imports — db.py reads DATABASE_URL at import time
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
@@ -113,18 +113,18 @@ def _create_user(db_session: Session, email: str, password: str, role: str) -> U
 
 @pytest.fixture
 def admin_user(db_session):
-    return _create_user(db_session, "admin@test.com", "adminpass123", "admin")
+    return _create_user(db_session, "admin@test.com", "Adminpass123!", "admin")
 
 
 @pytest.fixture
 def public_user(db_session):
-    return _create_user(db_session, "user@test.com", "userpass123", "public")
+    return _create_user(db_session, "user@test.com", "Userpass123!", "public")
 
 
 @pytest.fixture
 def admin_client(client, admin_user):
     """TestClient pre-authenticated as the admin user."""
-    resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "adminpass123"})
+    resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "Adminpass123!"})
     assert resp.status_code == 200, f"Admin login failed: {resp.text}"
     return client
 
@@ -132,7 +132,7 @@ def admin_client(client, admin_user):
 @pytest.fixture
 def public_client(client, public_user):
     """TestClient pre-authenticated as a public user."""
-    resp = client.post("/api/auth/login", json={"email": "user@test.com", "password": "userpass123"})
+    resp = client.post("/api/auth/login", json={"email": "user@test.com", "password": "Userpass123!"})
     assert resp.status_code == 200, f"Public login failed: {resp.text}"
     return client
 

@@ -48,7 +48,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         email=payload.email,
         password_hash=hash_password(payload.password),
         role="public",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(datetime.timezone.utc),
     )
     db.add(user)
     try:
