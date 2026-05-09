@@ -88,7 +88,7 @@ def client(db_session):
         yield db_session
 
     app.dependency_overrides[get_db] = _override
-    with TestClient(app, raise_server_exceptions=True) as c:
+    with TestClient(app, base_url="https://testserver", raise_server_exceptions=True) as c:
         yield c
     app.dependency_overrides.pop(get_db, None)
 
