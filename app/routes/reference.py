@@ -215,7 +215,7 @@ def delete_stream(stream_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.get("/levels")
 def list_levels(db: Session = Depends(get_db)):
-    return {"data": db.query(Level).all()}
+    return {"data": db.query(Level).order_by(Level.sort_order).all()}
 
 
 @router.get("/levels/{level_id}", response_model=LevelResponse)

@@ -76,6 +76,11 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     return {"message": "Logged in"}
 
 
+@router.get("/me", response_model=UserResponse)
+def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie(key=_COOKIE_NAME, secure=True, samesite="lax")
