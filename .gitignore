@@ -1,6 +1,7 @@
 .claude
 
 .env
+.vscode/
 
 # Python
 __pycache__/
