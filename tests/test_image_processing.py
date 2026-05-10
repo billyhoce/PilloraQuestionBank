@@ -46,11 +46,11 @@ def test_standardize_narrow_image_right_side_is_white():
 
 
 def test_standardize_wide_image_content_not_cropped():
-    # Input exactly at target width — margin added, content shifted right
+    # Input exactly at target width should not be shifted or cropped
     img = _make_image(_TARGET_WIDTH, 300, color=(0, 0, 200))
     result = standardize(img)
-    # The original content (blue) should start at MARGIN_PX
-    assert result.getpixel((_MARGIN_PX, 0))[:3] == (0, 0, 200)
+    assert result.width == _TARGET_WIDTH
+    assert result.getpixel((0, 0))[:3] == (0, 0, 200)
 
 
 def test_to_webp_bytes_returns_webp_format():

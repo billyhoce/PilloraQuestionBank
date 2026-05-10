@@ -145,10 +145,15 @@ def public_client(client, public_user):
 @pytest.fixture
 def mock_s3():
     """Mocked AWS S3 with a pre-created test bucket."""
-    with mock_aws():
-        s3 = boto3.client("s3", region_name="us-east-1")
-        s3.create_bucket(Bucket=_S3_BUCKET)
-        yield s3
+    old_endpoint = os.environ.pop("S3_ENDPOINT_URL", None)
+    try:
+        with mock_aws():
+            s3 = boto3.client("s3", region_name="us-east-1")
+            s3.create_bucket(Bucket=_S3_BUCKET)
+            yield s3
+    finally:
+        if old_endpoint is not None:
+            os.environ["S3_ENDPOINT_URL"] = old_endpoint
 
 
 # ---------------------------------------------------------------------------
