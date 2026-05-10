@@ -121,6 +121,12 @@ class Paper(Base):
 
     questions: Mapped[list["Question"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
 
+    subject:   Mapped["Subject"]   = relationship()
+    stream:    Mapped["Stream"]    = relationship()
+    level:     Mapped["Level"]     = relationship()
+    school:    Mapped["School"]    = relationship()
+    exam_type: Mapped["ExamType"]  = relationship()
+
 
 class Question(Base):
     __tablename__ = "question"

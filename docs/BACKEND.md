@@ -26,7 +26,7 @@ app/
 
 ## API Endpoints
 
-### Auth
+### Auth (Implemented)
 
 ```
 POST   /api/auth/register       -- public registration
@@ -34,7 +34,7 @@ POST   /api/auth/login          -- returns JWT/session
 POST   /api/auth/logout
 ```
 
-### Reference Data — Admin write, Public read
+### Reference Data — Admin write, Public read (Implemented)
 
 ```
 GET|POST|PUT|DELETE  /api/school-levels
