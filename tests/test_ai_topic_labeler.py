@@ -116,12 +116,7 @@ def _make_mock_response(content_text: str):
 _VALID_RESPONSE = '{"topics": [{"topic_id": 1, "subtopic_id": 11}]}'
 
 
-@patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_session, reference_data):
-    mock_client = MagicMock()
-    mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_RESPONSE)
-
+def _make_paper_and_question(db_session, reference_data, admin_user):
     from app.models.orm import Question, Paper
     from datetime import datetime
 
@@ -134,7 +129,7 @@ def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_sessio
         exam_type_id=rd["exam_type"].id,
         year=2024,
         paper_number="1",
-        created_by=1,
+        created_by=admin_user.id,
         created_at=datetime.utcnow(),
     )
     db_session.add(paper)
@@ -142,6 +137,17 @@ def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_sessio
     question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
     db_session.add(question)
     db_session.flush()
+    return paper, question
+
+
+@patch("app.ai.topic_labeler.anthropic.Anthropic")
+def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_session, reference_data, admin_user):
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+    mock_client.messages.create.return_value = _make_mock_response(_VALID_RESPONSE)
+
+    rd = reference_data
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear Equations"}]}]
 
@@ -156,31 +162,13 @@ def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_sessio
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_uses_sonnet_model(mock_anthropic_cls, db_session, reference_data):
+def test_label_question_uses_sonnet_model(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.return_value = _make_mock_response(_VALID_RESPONSE)
 
-    from app.models.orm import Question, Paper
-    from datetime import datetime
-
     rd = reference_data
-    paper = Paper(
-        subject_id=rd["subject"].id,
-        stream_id=rd["stream"].id,
-        level_id=rd["level"].id,
-        school_id=rd["school"].id,
-        exam_type_id=rd["exam_type"].id,
-        year=2024,
-        paper_number="1",
-        created_by=1,
-        created_at=datetime.utcnow(),
-    )
-    db_session.add(paper)
-    db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
-    db_session.add(question)
-    db_session.flush()
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
     label_question(
@@ -197,31 +185,13 @@ def test_label_question_uses_sonnet_model(mock_anthropic_cls, db_session, refere
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_sends_image_in_user_message(mock_anthropic_cls, db_session, reference_data):
+def test_label_question_sends_image_in_user_message(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.return_value = _make_mock_response(_VALID_RESPONSE)
 
-    from app.models.orm import Question, Paper
-    from datetime import datetime
-
     rd = reference_data
-    paper = Paper(
-        subject_id=rd["subject"].id,
-        stream_id=rd["stream"].id,
-        level_id=rd["level"].id,
-        school_id=rd["school"].id,
-        exam_type_id=rd["exam_type"].id,
-        year=2024,
-        paper_number="1",
-        created_by=1,
-        created_at=datetime.utcnow(),
-    )
-    db_session.add(paper)
-    db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
-    db_session.add(question)
-    db_session.flush()
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
     label_question(
@@ -243,31 +213,13 @@ def test_label_question_sends_image_in_user_message(mock_anthropic_cls, db_sessi
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_system_has_cache_control_ephemeral(mock_anthropic_cls, db_session, reference_data):
+def test_label_question_system_has_cache_control_ephemeral(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     mock_client.messages.create.return_value = _make_mock_response(_VALID_RESPONSE)
 
-    from app.models.orm import Question, Paper
-    from datetime import datetime
-
     rd = reference_data
-    paper = Paper(
-        subject_id=rd["subject"].id,
-        stream_id=rd["stream"].id,
-        level_id=rd["level"].id,
-        school_id=rd["school"].id,
-        exam_type_id=rd["exam_type"].id,
-        year=2024,
-        paper_number="1",
-        created_by=1,
-        created_at=datetime.utcnow(),
-    )
-    db_session.add(paper)
-    db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
-    db_session.add(question)
-    db_session.flush()
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
     label_question(
@@ -288,7 +240,7 @@ def test_label_question_system_has_cache_control_ephemeral(mock_anthropic_cls, d
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_filters_out_hallucinated_topic_ids(mock_anthropic_cls, db_session, reference_data):
+def test_label_question_filters_out_hallucinated_topic_ids(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
     # Claude returns a topic_id not in the valid set
@@ -296,26 +248,10 @@ def test_label_question_filters_out_hallucinated_topic_ids(mock_anthropic_cls, d
         '{"topics": [{"topic_id": 999, "subtopic_id": null}]}'
     )
 
-    from app.models.orm import Question, Paper, QuestionTopic
-    from datetime import datetime
+    from app.models.orm import QuestionTopic
 
     rd = reference_data
-    paper = Paper(
-        subject_id=rd["subject"].id,
-        stream_id=rd["stream"].id,
-        level_id=rd["level"].id,
-        school_id=rd["school"].id,
-        exam_type_id=rd["exam_type"].id,
-        year=2024,
-        paper_number="1",
-        created_by=1,
-        created_at=datetime.utcnow(),
-    )
-    db_session.add(paper)
-    db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
-    db_session.add(question)
-    db_session.flush()
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
     label_question(

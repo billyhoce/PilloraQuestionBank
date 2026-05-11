@@ -55,7 +55,7 @@ POST   /api/import/confirm       -- submit labeled paper + questions
 POST   /api/import/ai-topics     -- trigger AI topic labeling for a paper
 ```
 
-### Questions — Public read
+### Questions — Public read (Implemented)
 
 ```
 GET    /api/questions             -- filter params: subject_id, stream_id,

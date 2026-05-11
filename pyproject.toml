@@ -1,16 +1,3 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--tb=short -q -m 'not integration'"
-markers = [
-    "integration: requires real Postgres and S3 (deselected by default)",
-]
-env = [
-    "DATABASE_URL=sqlite:///:memory:",
-    "JWT_SECRET_KEY=test-secret-key-not-for-production",
-    "AWS_DEFAULT_REGION=us-east-1",
-    "AWS_ACCESS_KEY_ID=testing",
-    "AWS_SECRET_ACCESS_KEY=testing",
-    "S3_BUCKET=test-bucket",
-    "ANTHROPIC_API_KEY=test-key",
-]

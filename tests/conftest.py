@@ -1,14 +1,14 @@
 import io
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Must be before any app imports — db.py reads DATABASE_URL at import time
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# Force SQLite regardless of .env — unit tests must never hit real Postgres
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
-os.environ.setdefault("S3_BUCKET", "test-bucket")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 from datetime import datetime
 
@@ -146,6 +146,8 @@ def public_client(client, public_user):
 def mock_s3():
     """Mocked AWS S3 with a pre-created test bucket."""
     old_endpoint = os.environ.pop("S3_ENDPOINT_URL", None)
+    old_bucket = os.environ.get("S3_BUCKET")
+    os.environ["S3_BUCKET"] = _S3_BUCKET
     try:
         with mock_aws():
             s3 = boto3.client("s3", region_name="us-east-1")
@@ -154,6 +156,10 @@ def mock_s3():
     finally:
         if old_endpoint is not None:
             os.environ["S3_ENDPOINT_URL"] = old_endpoint
+        if old_bucket is not None:
+            os.environ["S3_BUCKET"] = old_bucket
+        else:
+            os.environ.pop("S3_BUCKET", None)
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.orm import Paper, Question, QuestionPage, QuestionTopic
 from app.pdf.image_processing import standardize, to_webp_bytes
-from app.services.import_ import confirm_import, pdf_to_images
+from app.services.ingest import confirm_import, pdf_to_images
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ def test_standardize_image_returns_webp_bytes():
 def test_pdf_to_images_calls_pdf2image_convert(minimal_pdf_bytes):
     mock_img = Image.new("RGB", (2000, 3000), color=(255, 255, 255))
 
-    with patch("app.services.import_.pdf2image.convert_from_bytes", return_value=[mock_img]) as mock_convert:
+    with patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_img]) as mock_convert:
         result = pdf_to_images(minimal_pdf_bytes)
         mock_convert.assert_called_once()
     assert len(result) == 1
@@ -210,7 +210,7 @@ def test_confirm_rollback_on_s3_failure(db_session, mock_s3, reference_data, adm
         ],
     )
 
-    with patch("app.services.import_.copy_object", side_effect=Exception("S3 error")):
+    with patch("app.services.ingest.copy_object", side_effect=Exception("S3 error")):
         with pytest.raises(Exception):
             confirm_import(payload=payload, created_by=admin_user, db=db_session)
 
@@ -234,8 +234,8 @@ def test_upload_pdf_returns_page_image_data(admin_client, mock_s3, minimal_pdf_b
     mock_page = Image.new("RGB", (2000, 3000), color=(255, 255, 255))
 
     with (
-        patch("app.services.import_.pdf2image.convert_from_bytes", return_value=[mock_page, mock_page]),
-        patch("app.services.import_.put_image"),
+        patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_page, mock_page]),
+        patch("app.services.ingest.put_image"),
     ):
         resp = admin_client.post(
             "/api/import/upload-pdf",
@@ -254,10 +254,10 @@ def test_upload_pdf_includes_ai_filename_suggestion(admin_client, mock_s3, minim
     mock_page = Image.new("RGB", (2000, 3000))
 
     with (
-        patch("app.services.import_.pdf2image.convert_from_bytes", return_value=[mock_page]),
-        patch("app.services.import_.put_image"),
+        patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_page]),
+        patch("app.services.ingest.put_image"),
         patch(
-            "app.services.import_.extract_metadata",
+            "app.services.ingest.extract_metadata",
             return_value={"school_id": 1, "year": 2024, "subject_id": 1, "level_id": None, "exam_type_id": None, "paper_number": "1"},
         ),
     ):
@@ -311,9 +311,9 @@ def test_ai_topics_admin_only(public_client, sample_paper):
 
 def test_ai_topics_calls_labeler_per_question(admin_client, mock_s3, sample_paper, db_session):
     with (
-        patch("app.routes.import_.label_question", return_value=None) as mock_label,
-        patch("app.routes.import_.get_presigned_url", return_value="https://fake.url"),
-        patch("app.routes.import_.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.label_question", return_value=None) as mock_label,
+        patch("app.routes.ingest.get_presigned_url", return_value="https://fake.url"),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
     ):
         resp = admin_client.post("/api/import/ai-topics", json={"paper_id": sample_paper.id})
 
@@ -325,12 +325,12 @@ def test_ai_topics_calls_labeler_per_question(admin_client, mock_s3, sample_pape
 def test_ai_topics_persists_question_topics(admin_client, mock_s3, sample_paper, db_session, reference_data):
     with (
         patch(
-            "app.routes.import_.label_question",
+            "app.routes.ingest.label_question",
             side_effect=lambda question, topics, image_bytes_list, db: _insert_topic(
                 question, reference_data, db
             ),
         ),
-        patch("app.routes.import_.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
     ):
         resp = admin_client.post("/api/import/ai-topics", json={"paper_id": sample_paper.id})
 
