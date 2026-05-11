@@ -2,17 +2,22 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-import pdf2image
+import fitz  # PyMuPDF
 from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
 from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
-from app.storage.s3_client import copy_object, put_image
+from app.storage.s3_client import copy_object, get_presigned_url, put_image
 
 
 def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
-    return pdf2image.convert_from_bytes(pdf_bytes)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    images = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=300)
+        images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+    return images
 
 
 def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
@@ -25,7 +30,11 @@ def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
         w, h = get_dimensions(std)
         key = f"tmp/{upload_id}/page_{i}.webp"
         put_image(key, webp)
-        pages.append({"temp_key": key, "dimensions": {"width": w, "height": h}})
+        pages.append({
+            "temp_key": key,
+            "url": get_presigned_url(key, expires_in=7200),
+            "dimensions": {"width": w, "height": h},
+        })
     suggested = extract_metadata(filename, db)
     return {"pages": pages, "suggested_metadata": suggested}
 

@@ -3,7 +3,7 @@ import io
 from PIL import Image
 
 _TARGET_WIDTH = 2480
-_MARGIN_PX = 180
+_MARGIN_PX = 90
 
 
 def standardize(img: Image.Image) -> Image.Image:

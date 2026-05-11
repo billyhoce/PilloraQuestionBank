@@ -50,6 +50,24 @@ async function request(method, path, body) {
 }
 
 export const api = {
+  import: {
+    uploadPdf: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return fetch('/api/import/upload-pdf', { method: 'POST', credentials: 'include', body: form })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+            throw { status: res.status, message: data?.detail || 'Upload failed' }
+          }
+          return res.json()
+        })
+    },
+    confirm: (payload) => request('POST', '/api/import/confirm', payload),
+    aiTopics: (paper_id) => request('POST', '/api/import/ai-topics', { paper_id }),
+  },
+
   auth: {
     me: () => request('GET', '/api/auth/me'),
     login: (email, password) => request('POST', '/api/auth/login', { email, password }),
