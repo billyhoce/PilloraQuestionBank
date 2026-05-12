@@ -7,7 +7,7 @@ from PIL import Image
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 
 _TARGET_WIDTH = 2480
-_MARGIN_PX = 180
+_MARGIN_PX = 90
 
 
 def _make_image(width: int, height: int, color=(200, 100, 50)) -> Image.Image:
@@ -20,7 +20,7 @@ def test_standardize_narrow_image_width_becomes_2480():
     assert result.width == _TARGET_WIDTH
 
 
-def test_standardize_adds_exactly_180px_left_margin():
+def test_standardize_adds_exactly_90px_left_margin():
     # Fill with a distinctive non-white color
     img = _make_image(_TARGET_WIDTH, 500, color=(200, 0, 0))
     result = standardize(img)

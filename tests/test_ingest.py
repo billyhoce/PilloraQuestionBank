@@ -43,12 +43,27 @@ def test_standardize_image_returns_webp_bytes():
     assert reopened.format == "WEBP"
 
 
-def test_pdf_to_images_calls_pdf2image_convert(minimal_pdf_bytes):
-    mock_img = Image.new("RGB", (2000, 3000), color=(255, 255, 255))
+def _make_fitz_doc(num_pages=1, width=200, height=300):
+    samples = bytes([255] * (width * height * 3))
+    mock_pix = MagicMock()
+    mock_pix.width = width
+    mock_pix.height = height
+    mock_pix.samples = samples
 
-    with patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_img]) as mock_convert:
+    mock_page = MagicMock()
+    mock_page.get_pixmap.return_value = mock_pix
+
+    mock_doc = MagicMock()
+    mock_doc.__iter__ = MagicMock(return_value=iter([mock_page] * num_pages))
+    return mock_doc
+
+
+def test_pdf_to_images_calls_fitz_open(minimal_pdf_bytes):
+    mock_doc = _make_fitz_doc(num_pages=1)
+
+    with patch("app.services.ingest.fitz.open", return_value=mock_doc) as mock_open:
         result = pdf_to_images(minimal_pdf_bytes)
-        mock_convert.assert_called_once()
+        mock_open.assert_called_once()
     assert len(result) == 1
     assert isinstance(result[0], Image.Image)
 
@@ -231,10 +246,8 @@ def test_upload_pdf_admin_only(public_client, minimal_pdf_bytes):
 
 
 def test_upload_pdf_returns_page_image_data(admin_client, mock_s3, minimal_pdf_bytes):
-    mock_page = Image.new("RGB", (2000, 3000), color=(255, 255, 255))
-
     with (
-        patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_page, mock_page]),
+        patch("app.services.ingest.fitz.open", return_value=_make_fitz_doc(num_pages=2)),
         patch("app.services.ingest.put_image"),
     ):
         resp = admin_client.post(
@@ -251,10 +264,8 @@ def test_upload_pdf_returns_page_image_data(admin_client, mock_s3, minimal_pdf_b
 
 
 def test_upload_pdf_includes_ai_filename_suggestion(admin_client, mock_s3, minimal_pdf_bytes, db_session):
-    mock_page = Image.new("RGB", (2000, 3000))
-
     with (
-        patch("app.services.ingest.pdf2image.convert_from_bytes", return_value=[mock_page]),
+        patch("app.services.ingest.fitz.open", return_value=_make_fitz_doc(num_pages=1)),
         patch("app.services.ingest.put_image"),
         patch(
             "app.services.ingest.extract_metadata",
