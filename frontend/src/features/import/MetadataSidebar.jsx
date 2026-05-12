@@ -18,7 +18,7 @@ function SelectField({ label, value, onChange, options }) {
   )
 }
 
-export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext }) {
+export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -80,6 +80,13 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
         className="mt-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
       >
         Next →
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="text-xs text-red-600 hover:text-red-700 text-center"
+      >
+        Cancel Import
       </button>
     </div>
   )

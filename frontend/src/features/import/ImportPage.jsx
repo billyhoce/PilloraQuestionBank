@@ -6,6 +6,25 @@ import MetadataSidebar from './MetadataSidebar'
 import ConfirmSummary from './ConfirmSummary'
 import TopicReview from './TopicReview'
 
+const STORAGE_KEY = 'pillora_import_session'
+
+function loadSession() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function saveSession(data) {
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data)) } catch {}
+}
+
+function clearSession() {
+  sessionStorage.removeItem(STORAGE_KEY)
+}
+
 function computeQuestions(pages, dividerIdx, marksMap) {
   const qPages = dividerIdx !== null ? pages.slice(0, dividerIdx) : pages
   const aPages = dividerIdx !== null ? pages.slice(dividerIdx) : []
@@ -48,18 +67,26 @@ const emptyMetadata = {
 }
 
 export default function ImportPage() {
-  const [step, setStep] = useState('upload')
-  const [pages, setPages] = useState([])
-  const [dividerIdx, setDividerIdx] = useState(null)
-  const [metadata, setMetadata] = useState(emptyMetadata)
-  const [marksMap, setMarksMap] = useState({})
-  const [paperId, setPaperId] = useState(null)
+  const [step, setStep] = useState(() => loadSession()?.step ?? 'upload')
+  const [pages, setPages] = useState(() => loadSession()?.pages ?? [])
+  const [dividerIdx, setDividerIdx] = useState(() => loadSession()?.dividerIdx ?? null)
+  const [metadata, setMetadata] = useState(() => loadSession()?.metadata ?? emptyMetadata)
+  const [marksMap, setMarksMap] = useState(() => loadSession()?.marksMap ?? {})
+  const [paperId, setPaperId] = useState(() => loadSession()?.paperId ?? null)
   const [refs, setRefs] = useState(null)
 
   const [uploadLoading, setUploadLoading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [confirmError, setConfirmError] = useState(null)
+
+  useEffect(() => {
+    if (step === 'upload') {
+      clearSession()
+    } else {
+      saveSession({ step, pages, dividerIdx, metadata, marksMap, paperId })
+    }
+  }, [step, pages, dividerIdx, metadata, marksMap, paperId])
 
   useEffect(() => {
     Promise.all([
@@ -140,13 +167,20 @@ export default function ImportPage() {
     }
   }
 
-  function handleDone() {
+  function resetImport() {
+    clearSession()
     setStep('upload')
     setPages([])
     setDividerIdx(null)
     setMetadata(emptyMetadata)
     setMarksMap({})
     setPaperId(null)
+  }
+
+  function handleDone() { resetImport() }
+
+  function handleCancel() {
+    if (window.confirm('Cancel this import? All progress will be lost.')) resetImport()
   }
 
   if (step === 'upload') {
@@ -174,6 +208,7 @@ export default function ImportPage() {
           questionCount={countGroups(qPages)}
           answerCount={countGroups(aPages)}
           onNext={() => setStep('confirm_summary')}
+          onCancel={handleCancel}
         />
       </div>
     )
@@ -189,6 +224,7 @@ export default function ImportPage() {
         onMarksChange={(qNum, val) => setMarksMap((prev) => ({ ...prev, [qNum]: val }))}
         onConfirm={handleConfirm}
         onBack={() => setStep('review')}
+        onCancel={handleCancel}
         loading={confirmLoading}
         error={confirmError}
       />

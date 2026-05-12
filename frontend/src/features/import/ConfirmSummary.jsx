@@ -14,7 +14,7 @@ function lookupName(refs, listKey, id) {
 }
 
 export default function ConfirmSummary({
-  questions, metadata, refs, marksMap, onMarksChange, onConfirm, onBack, loading, error,
+  questions, metadata, refs, marksMap, onMarksChange, onConfirm, onBack, onCancel, loading, error,
 }) {
   return (
     <div className="max-w-3xl mx-auto">
@@ -64,7 +64,7 @@ export default function ConfirmSummary({
         <MetaLine label="Paper" value={metadata.paper_number} />
       </div>
 
-      <div className="flex justify-between">
+      <div className="flex justify-between items-center">
         <button
           type="button"
           onClick={onBack}
@@ -73,15 +73,25 @@ export default function ConfirmSummary({
         >
           ← Back
         </button>
-        <button
-          type="button"
-          onClick={onConfirm}
-          disabled={loading}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium flex items-center gap-2"
-        >
-          {loading && <Spinner size="sm" />}
-          Confirm &amp; Import
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
+          >
+            Cancel Import
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium flex items-center gap-2"
+          >
+            {loading && <Spinner size="sm" />}
+            Confirm &amp; Import
+          </button>
+        </div>
       </div>
     </div>
   )
