@@ -2,19 +2,20 @@ import { useRef, useState } from 'react'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
 
-export default function UploadDropZone({ onUpload, loading, error }) {
+export default function UploadDropZone({ onUpload, loading, error, loadingMessage }) {
   const inputRef = useRef(null)
   const [dragging, setDragging] = useState(false)
 
-  function handleFile(file) {
-    if (!file || file.type !== 'application/pdf') return
-    onUpload(file)
+  function handleFiles(fileList) {
+    const pdfs = Array.from(fileList).filter(f => f.type === 'application/pdf')
+    if (pdfs.length === 0) return
+    onUpload(pdfs)
   }
 
   function onDrop(e) {
     e.preventDefault()
     setDragging(false)
-    handleFile(e.dataTransfer.files[0])
+    handleFiles(e.dataTransfer.files)
   }
 
   return (
@@ -32,13 +33,14 @@ export default function UploadDropZone({ onUpload, loading, error }) {
           ref={inputRef}
           type="file"
           accept=".pdf,application/pdf"
+          multiple
           className="hidden"
-          onChange={(e) => handleFile(e.target.files[0])}
+          onChange={(e) => { handleFiles(e.target.files); e.target.value = '' }}
         />
         {loading ? (
           <>
             <Spinner size="lg" />
-            <p className="text-sm text-gray-600">Converting PDF pages…</p>
+            <p className="text-sm text-gray-600">{loadingMessage || 'Converting PDF pages…'}</p>
           </>
         ) : (
           <>
@@ -48,7 +50,7 @@ export default function UploadDropZone({ onUpload, loading, error }) {
                   d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </div>
-            <p className="text-base font-medium text-gray-700">Drag &amp; drop a PDF here</p>
+            <p className="text-base font-medium text-gray-700">Drag &amp; drop PDF(s) here</p>
             <p className="text-sm text-gray-400">or click to browse</p>
           </>
         )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import UploadDropZone from './UploadDropZone'
 import PageGrid from './PageGrid'
@@ -75,8 +75,13 @@ export default function ImportPage() {
   const [paperId, setPaperId] = useState(() => loadSession()?.paperId ?? null)
   const [refs, setRefs] = useState(null)
 
+  const appendInputRef = useRef(null)
+
   const [uploadLoading, setUploadLoading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState('')
   const [uploadError, setUploadError] = useState(null)
+  const [appendLoading, setAppendLoading] = useState(false)
+  const [appendError, setAppendError] = useState(null)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [confirmError, setConfirmError] = useState(null)
 
@@ -106,15 +111,22 @@ export default function ImportPage() {
     })
   }, [])
 
-  async function handleUpload(file) {
+  async function handleUpload(files) {
     setUploadLoading(true)
     setUploadError(null)
     try {
-      const result = await api.import.uploadPdf(file)
-      setPages(result.pages.map((p) => ({ ...p, mergeWithPrev: false })))
+      let allPages = []
+      let firstMeta = null
+      for (let i = 0; i < files.length; i++) {
+        setUploadProgress(files.length > 1 ? `Uploading PDF ${i + 1} of ${files.length}…` : 'Converting PDF pages…')
+        const result = await api.import.uploadPdf(files[i])
+        allPages = [...allPages, ...result.pages.map((p) => ({ ...p, mergeWithPrev: false }))]
+        if (firstMeta === null && result.suggested_metadata) firstMeta = result.suggested_metadata
+      }
+      setPages(allPages)
       setDividerIdx(null)
-      if (result.suggested_metadata) {
-        const s = result.suggested_metadata
+      if (firstMeta) {
+        const s = firstMeta
         setMetadata((prev) => ({
           ...prev,
           ...(s.subject_id != null && { subject_id: s.subject_id }),
@@ -131,6 +143,23 @@ export default function ImportPage() {
       setUploadError(e.message)
     } finally {
       setUploadLoading(false)
+      setUploadProgress('')
+    }
+  }
+
+  async function handleAppend(files) {
+    setAppendLoading(true)
+    setAppendError(null)
+    try {
+      for (const file of files) {
+        const result = await api.import.uploadPdf(file)
+        const newPages = result.pages.map((p) => ({ ...p, mergeWithPrev: false }))
+        setPages((prev) => [...prev, ...newPages])
+      }
+    } catch (e) {
+      setAppendError(e.message)
+    } finally {
+      setAppendLoading(false)
     }
   }
 
@@ -184,7 +213,7 @@ export default function ImportPage() {
   }
 
   if (step === 'upload') {
-    return <UploadDropZone onUpload={handleUpload} loading={uploadLoading} error={uploadError} />
+    return <UploadDropZone onUpload={handleUpload} loading={uploadLoading} error={uploadError} loadingMessage={uploadProgress} />
   }
 
   if (step === 'review') {
@@ -193,6 +222,25 @@ export default function ImportPage() {
     return (
       <div className="flex items-start gap-0">
         <div className="flex-1 min-w-0">
+          <div className="px-4 pt-3 pb-0 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => appendInputRef.current?.click()}
+              disabled={appendLoading}
+              className="text-sm px-3 py-1 rounded border border-gray-300 hover:border-blue-400 disabled:opacity-50"
+            >
+              {appendLoading ? 'Appending…' : '+ Append PDF'}
+            </button>
+            <input
+              ref={appendInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              multiple
+              className="hidden"
+              onChange={(e) => { handleAppend(Array.from(e.target.files)); e.target.value = '' }}
+            />
+            {appendError && <span className="text-red-500 text-sm">{appendError}</span>}
+          </div>
           <PageGrid
             pages={pages}
             dividerIdx={dividerIdx}
