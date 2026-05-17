@@ -73,6 +73,7 @@ export default function ImportPage() {
   const [metadata, setMetadata] = useState(() => loadSession()?.metadata ?? emptyMetadata)
   const [marksMap, setMarksMap] = useState(() => loadSession()?.marksMap ?? {})
   const [paperId, setPaperId] = useState(() => loadSession()?.paperId ?? null)
+  const [confirmedQuestions, setConfirmedQuestions] = useState(() => loadSession()?.confirmedQuestions ?? [])
   const [refs, setRefs] = useState(null)
 
   const appendInputRef = useRef(null)
@@ -89,9 +90,9 @@ export default function ImportPage() {
     if (step === 'upload') {
       clearSession()
     } else {
-      saveSession({ step, pages, dividerIdx, metadata, marksMap, paperId })
+      saveSession({ step, pages, dividerIdx, metadata, marksMap, paperId, confirmedQuestions })
     }
-  }, [step, pages, dividerIdx, metadata, marksMap, paperId])
+  }, [step, pages, dividerIdx, metadata, marksMap, paperId, confirmedQuestions])
 
   useEffect(() => {
     Promise.all([
@@ -188,6 +189,7 @@ export default function ImportPage() {
         questions,
       })
       setPaperId(result.paper_id)
+      setConfirmedQuestions(result.questions || [])
       setStep('ai_topics')
     } catch (e) {
       setConfirmError(e.message)
@@ -204,12 +206,23 @@ export default function ImportPage() {
     setMetadata(emptyMetadata)
     setMarksMap({})
     setPaperId(null)
+    setConfirmedQuestions([])
   }
 
   function handleDone() { resetImport() }
 
   function handleCancel() {
     if (window.confirm('Cancel this import? All progress will be lost.')) resetImport()
+  }
+
+  async function handleCancelTopicReview() {
+    if (!window.confirm('Cancel this import? The paper and all uploaded pages will be deleted.')) return
+    try {
+      if (paperId != null) await api.import.deletePaper(paperId)
+    } catch (e) {
+      // best-effort; reset regardless so the user isn't stuck
+    }
+    resetImport()
   }
 
   if (step === 'upload') {
@@ -280,7 +293,16 @@ export default function ImportPage() {
   }
 
   if (step === 'ai_topics') {
-    return <TopicReview paperId={paperId} onDone={handleDone} />
+    return (
+      <TopicReview
+        paperId={paperId}
+        questions={confirmedQuestions}
+        subjectId={metadata.subject_id}
+        streamId={metadata.stream_id}
+        onDone={handleDone}
+        onCancel={handleCancelTopicReview}
+      />
+    )
   }
 
   return null

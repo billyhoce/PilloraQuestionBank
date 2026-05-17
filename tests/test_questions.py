@@ -132,11 +132,12 @@ def test_list_questions_filter_by_year(public_client, db_session, reference_data
 
 
 def test_list_questions_filter_by_topic_id(public_client, db_session, reference_data, admin_user):
+    """topic_id filter joins through subtopic → topic, so a question labeled only with a subtopic still matches its parent topic."""
     paper = _add_paper(db_session, reference_data, admin_user)
     q_with_topic = _add_question(db_session, paper, number=1)
     q_no_topic = _add_question(db_session, paper, number=2)
 
-    qt = QuestionTopic(question_id=q_with_topic.id, topic_id=reference_data["topic"].id)
+    qt = QuestionTopic(question_id=q_with_topic.id, subtopic_id=reference_data["subtopic"].id)
     db_session.add(qt)
     db_session.flush()
 
@@ -148,16 +149,17 @@ def test_list_questions_filter_by_topic_id(public_client, db_session, reference_
 
 
 def test_list_questions_filter_by_subtopic_id(public_client, db_session, reference_data, admin_user):
+    from app.models.orm import Subtopic
     paper = _add_paper(db_session, reference_data, admin_user)
     q_with_sub = _add_question(db_session, paper, number=1)
-    q_without_sub = _add_question(db_session, paper, number=2)
+    q_other_sub = _add_question(db_session, paper, number=2)
 
-    qt1 = QuestionTopic(
-        question_id=q_with_sub.id,
-        topic_id=reference_data["topic"].id,
-        subtopic_id=reference_data["subtopic"].id,
-    )
-    qt2 = QuestionTopic(question_id=q_without_sub.id, topic_id=reference_data["topic"].id)
+    other_sub = Subtopic(topic_id=reference_data["topic"].id, name="Other")
+    db_session.add(other_sub)
+    db_session.flush()
+
+    qt1 = QuestionTopic(question_id=q_with_sub.id, subtopic_id=reference_data["subtopic"].id)
+    qt2 = QuestionTopic(question_id=q_other_sub.id, subtopic_id=other_sub.id)
     db_session.add_all([qt1, qt2])
     db_session.flush()
 
@@ -165,7 +167,7 @@ def test_list_questions_filter_by_subtopic_id(public_client, db_session, referen
     assert resp.status_code == 200
     ids = [q["id"] for q in resp.json()["items"]]
     assert q_with_sub.id in ids
-    assert q_without_sub.id not in ids
+    assert q_other_sub.id not in ids
 
 
 def test_list_questions_multi_filter_conjunction(public_client, db_session, reference_data, admin_user):
@@ -251,7 +253,6 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
     q = _add_question(db_session, paper)
     qt = QuestionTopic(
         question_id=q.id,
-        topic_id=reference_data["topic"].id,
         subtopic_id=reference_data["subtopic"].id,
     )
     db_session.add(qt)

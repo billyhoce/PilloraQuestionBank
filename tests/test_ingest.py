@@ -289,7 +289,7 @@ def test_upload_pdf_non_pdf_returns_422(admin_client):
     assert resp.status_code == 422
 
 
-def test_confirm_route_creates_paper_returns_paper_id(admin_client, mock_s3, reference_data, admin_user):
+def test_confirm_route_creates_paper_returns_paper_id_and_questions(admin_client, mock_s3, reference_data, admin_user):
     rd = reference_data
     temp_key = "tmp/route-test/page_0.webp"
     mock_s3.put_object(Bucket="test-bucket", Key=temp_key, Body=b"fake")
@@ -312,49 +312,215 @@ def test_confirm_route_creates_paper_returns_paper_id(admin_client, mock_s3, ref
     }
     resp = admin_client.post("/api/import/confirm", json=payload)
     assert resp.status_code == 201
-    assert "paper_id" in resp.json()
+    body = resp.json()
+    assert "paper_id" in body
+    assert "questions" in body
+    assert len(body["questions"]) == 1
+    q = body["questions"][0]
+    assert q["question_number"] == 1
+    assert q["marks"] == 5
+    assert "id" in q
+    assert len(q["pages"]) == 1
+    assert "url" in q["pages"][0]
 
 
 def test_ai_topics_admin_only(public_client, sample_paper):
-    resp = public_client.post("/api/import/ai-topics", json={"paper_id": sample_paper.id})
+    q = sample_paper.questions[0]
+    resp = public_client.post("/api/import/ai-topics", json={"question_id": q.id})
     assert resp.status_code == 403
 
 
-def test_ai_topics_calls_labeler_per_question(admin_client, mock_s3, sample_paper, db_session):
+def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    q = sample_paper.questions[0]
+    rd = reference_data
+    suggestion = [{"subtopic_id": rd["subtopic"].id}]
     with (
-        patch("app.routes.ingest.label_question", return_value=None) as mock_label,
-        patch("app.routes.ingest.get_presigned_url", return_value="https://fake.url"),
+        patch("app.routes.ingest.label_question", return_value=suggestion) as mock_label,
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
-        resp = admin_client.post("/api/import/ai-topics", json={"paper_id": sample_paper.id})
+        resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
     assert resp.status_code == 200
-    # 3 questions in sample_paper
-    assert mock_label.call_count == 3
+    body = resp.json()
+    assert body["suggestions"] == suggestion
+    mock_label.assert_called_once()
 
 
-def test_ai_topics_persists_question_topics(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_missing_question_returns_404(admin_client, mock_s3):
+    resp = admin_client.post("/api/import/ai-topics", json={"question_id": 99999})
+    assert resp.status_code == 404
+
+
+def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    q = sample_paper.questions[0]
+    rd = reference_data
+    suggestion = [{"subtopic_id": rd["subtopic"].id}]
     with (
-        patch(
-            "app.routes.ingest.label_question",
-            side_effect=lambda question, topics, image_bytes_list, db: _insert_topic(
-                question, reference_data, db
-            ),
-        ),
+        patch("app.routes.ingest.label_question", return_value=suggestion),
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
-        resp = admin_client.post("/api/import/ai-topics", json={"paper_id": sample_paper.id})
+        admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
-    assert resp.status_code == 200
-    count = db_session.query(QuestionTopic).count()
-    assert count == 3  # one topic per question
+    assert db_session.query(QuestionTopic).count() == 0
 
 
-def _insert_topic(question, reference_data, db: Session):
-    qt = QuestionTopic(
-        question_id=question.id,
-        topic_id=reference_data["topic"].id,
-        subtopic_id=None,
+def test_ai_topics_excludes_topics_with_no_subtopics(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    """Topics without any subtopic must not be sent to the labeler (they are unselectable)."""
+    from app.models.orm import Topic
+    rd = reference_data
+    bare = Topic(subject_id=rd["subject"].id, stream_id=rd["stream"].id, name="Bare Topic", topic_number=999)
+    db_session.add(bare)
+    db_session.flush()
+
+    q = sample_paper.questions[0]
+    captured = {}
+
+    def fake_label(question, topics, image_bytes_list):
+        captured["topics"] = topics
+        return []
+
+    with (
+        patch("app.routes.ingest.label_question", side_effect=fake_label),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
+    ):
+        admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
+
+    sent_ids = {t["id"] for t in captured["topics"]}
+    assert bare.id not in sent_ids
+    assert rd["topic"].id in sent_ids
+
+
+# ---------------------------------------------------------------------------
+# /save-topics route
+# ---------------------------------------------------------------------------
+
+
+def test_save_topics_admin_only(public_client, sample_paper):
+    resp = public_client.post(
+        "/api/import/save-topics",
+        json={"paper_id": sample_paper.id, "question_topics": []},
     )
-    db.add(qt)
-    db.flush()
+    assert resp.status_code == 403
+
+
+def test_save_topics_persists_question_topics(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {
+                "question_id": q.id,
+                "topics": [{"subtopic_id": rd["subtopic"].id}],
+            }
+            for q in sample_paper.questions
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 201
+    assert db_session.query(QuestionTopic).count() == 3
+
+
+def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {"question_id": 99999, "topics": [{"subtopic_id": rd["subtopic"].id}]}
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 422
+    assert db_session.query(QuestionTopic).count() == 0
+
+
+def test_save_topics_rejects_invalid_subtopic_id(admin_client, sample_paper, db_session):
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {"question_id": sample_paper.questions[0].id, "topics": [{"subtopic_id": 99999}]}
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 422
+    assert db_session.query(QuestionTopic).count() == 0
+
+
+def test_save_topics_replaces_existing_rows(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
+    q = sample_paper.questions[0]
+    db_session.add(QuestionTopic(question_id=q.id, subtopic_id=rd["subtopic"].id))
+    db_session.flush()
+    assert db_session.query(QuestionTopic).count() == 1
+
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {"question_id": q.id, "topics": [{"subtopic_id": rd["subtopic"].id}]}
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 201
+    rows = db_session.query(QuestionTopic).all()
+    assert len(rows) == 1
+    assert rows[0].subtopic_id == rd["subtopic"].id
+
+
+def test_save_topics_allows_multiple_subtopics_under_same_topic(admin_client, sample_paper, db_session, reference_data):
+    """A single question can have multiple subtopics belonging to the same parent topic."""
+    from app.models.orm import Subtopic
+    rd = reference_data
+    sub2 = Subtopic(topic_id=rd["topic"].id, name="Quadratic Equations")
+    db_session.add(sub2)
+    db_session.flush()
+    sub2_id = sub2.id
+
+    q = sample_paper.questions[0]
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {
+                "question_id": q.id,
+                "topics": [
+                    {"subtopic_id": rd["subtopic"].id},
+                    {"subtopic_id": sub2_id},
+                ],
+            }
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 201
+    rows = db_session.query(QuestionTopic).filter(QuestionTopic.question_id == q.id).all()
+    assert {r.subtopic_id for r in rows} == {rd["subtopic"].id, sub2_id}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /papers/{id}
+# ---------------------------------------------------------------------------
+
+
+def test_delete_paper_admin_only(public_client, sample_paper):
+    resp = public_client.delete(f"/api/import/papers/{sample_paper.id}")
+    assert resp.status_code == 403
+
+
+def test_delete_paper_removes_rows_and_s3(admin_client, sample_paper, db_session):
+    paper_id = sample_paper.id
+    page_keys = [p.image_key for q in sample_paper.questions for p in q.pages]
+
+    with patch("app.routes.ingest.delete_object") as mock_del:
+        resp = admin_client.delete(f"/api/import/papers/{paper_id}")
+
+    assert resp.status_code == 204
+    assert db_session.query(Paper).filter(Paper.id == paper_id).count() == 0
+    assert db_session.query(Question).filter(Question.paper_id == paper_id).count() == 0
+    called_keys = {call.args[0] for call in mock_del.call_args_list}
+    for k in page_keys:
+        assert k in called_keys
+
+
+def test_delete_paper_missing_returns_204(admin_client):
+    resp = admin_client.delete("/api/import/papers/99999")
+    assert resp.status_code == 204

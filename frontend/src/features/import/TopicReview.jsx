@@ -1,62 +1,249 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
+import TopicCombobox from './TopicCombobox'
 
-export default function TopicReview({ paperId, onDone }) {
-  const [status, setStatus] = useState('loading')
-  const [error, setError] = useState(null)
+const REQUEST_INTERVAL_MS = 1300
 
-  const run = useCallback(() => {
-    setStatus('loading')
-    setError(null)
-    api.import.aiTopics(paperId)
-      .then(() => setStatus('success'))
-      .catch((e) => { setStatus('error'); setError(e.message) })
-  }, [paperId])
+function createRateLimitedQueue(intervalMs) {
+  let lastStart = 0
+  return (fn) => {
+    const now = Date.now()
+    const wait = Math.max(0, lastStart + intervalMs - now)
+    lastStart = now + wait
+    return new Promise((resolve) => setTimeout(resolve, wait)).then(fn)
+  }
+}
 
-  useEffect(() => { run() }, [run])
+function buildTopicLookup(topics) {
+  const subtopicById = new Map()
+  for (const t of topics) {
+    for (const s of t.subtopics || []) {
+      subtopicById.set(s.id, { name: s.name, topic_name: t.name })
+    }
+  }
+  return { subtopicById }
+}
 
-  if (status === 'loading') {
+export default function TopicReview({ paperId, questions, subjectId, streamId, onDone, onCancel }) {
+  const [topics, setTopics] = useState(null)
+  const [topicsError, setTopicsError] = useState(null)
+  const [questionState, setQuestionState] = useState(() =>
+    Object.fromEntries(questions.map(q => [q.id, { status: 'loading', selected: [], error: null }]))
+  )
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
+
+  const lookup = useMemo(() => topics ? buildTopicLookup(topics) : null, [topics])
+  const enqueue = useMemo(() => createRateLimitedQueue(REQUEST_INTERVAL_MS), [])
+
+  const labelQuestion = useCallback(async (qid) => {
+    setQuestionState(prev => ({ ...prev, [qid]: { ...prev[qid], status: 'loading', error: null } }))
+    try {
+      const result = await enqueue(() => api.import.aiTopicsForQuestion(qid))
+      setQuestionState(prev => ({
+        ...prev,
+        [qid]: { status: 'ready', selected: result.suggestions || [], error: null },
+      }))
+    } catch (e) {
+      setQuestionState(prev => ({
+        ...prev,
+        [qid]: { ...prev[qid], status: 'error', error: e.message || 'Labeling failed' },
+      }))
+    }
+  }, [enqueue])
+
+  useEffect(() => {
+    api.topics.list(subjectId, streamId)
+      .then(setTopics)
+      .catch((e) => setTopicsError(e.message || 'Failed to load topics'))
+  }, [subjectId, streamId])
+
+  useEffect(() => {
+    questions.forEach(q => { labelQuestion(q.id) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function addTopic(qid, sel) {
+    setQuestionState(prev => {
+      const cur = prev[qid]
+      if (cur.selected.some(s => s.subtopic_id === sel.subtopic_id)) return prev
+      return { ...prev, [qid]: { ...cur, selected: [...cur.selected, sel] } }
+    })
+  }
+
+  function removeTopic(qid, idx) {
+    setQuestionState(prev => {
+      const cur = prev[qid]
+      return { ...prev, [qid]: { ...cur, selected: cur.selected.filter((_, i) => i !== idx) } }
+    })
+  }
+
+  const anyLoading = Object.values(questionState).some(s => s.status === 'loading')
+
+  async function handleSave() {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const question_topics = questions.map(q => ({
+        question_id: q.id,
+        topics: questionState[q.id]?.selected ?? [],
+      }))
+      await api.import.saveTopics(paperId, question_topics)
+      onDone()
+    } catch (e) {
+      setSaveError(e.message || 'Failed to save topics')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (topicsError) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-        <Spinner size="lg" />
-        <p className="text-sm text-gray-600">AI is labeling topics…</p>
-        <p className="text-xs text-gray-400">This may take 10–30 seconds</p>
+      <div className="p-6">
+        <ErrorBanner message={topicsError} />
       </div>
     )
   }
 
-  if (status === 'error') {
+  if (!topics) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-        <ErrorBanner message={error} />
-        <button
-          type="button"
-          onClick={run}
-          className="border border-gray-300 rounded px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-        >
-          Retry
-        </button>
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
+        <Spinner size="lg" />
+        <p className="text-sm text-gray-600">Loading topics…</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-      <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-        <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-        </svg>
+    <div className="p-4 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-lg font-semibold text-gray-900">Review AI topic suggestions</h1>
+        <p className="text-xs text-gray-500">
+          {anyLoading ? 'Some questions still labeling…' : 'All questions labeled'}
+        </p>
       </div>
-      <p className="text-lg font-semibold text-gray-900">Topics labeled successfully!</p>
-      <button
-        type="button"
-        onClick={onDone}
-        className="bg-blue-600 hover:bg-blue-700 text-white rounded px-6 py-2 text-sm font-medium"
-      >
-        Done
-      </button>
+
+      <div className="space-y-6">
+        {questions.map(q => {
+          const state = questionState[q.id] || { status: 'loading', selected: [], error: null }
+          const questionPages = (q.pages || []).filter(p => p.page_type === 'question')
+          return (
+            <div key={q.id} className="border border-gray-200 rounded-lg p-4 bg-white">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-gray-900">Q{q.question_number}</span>
+                  {q.marks != null && (
+                    <span className="text-xs text-gray-500">[{q.marks} marks]</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {state.status === 'loading' && (
+                    <span className="flex items-center gap-1 text-xs text-gray-500">
+                      <Spinner size="sm" /> Labeling…
+                    </span>
+                  )}
+                  {state.status === 'ready' && (
+                    <span className="text-xs text-green-700">Suggested</span>
+                  )}
+                  {state.status === 'error' && (
+                    <span className="text-xs text-red-600">{state.error}</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => labelQuestion(q.id)}
+                    disabled={state.status === 'loading'}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 hover:border-blue-400 disabled:opacity-50"
+                  >
+                    {state.status === 'error' ? 'Retry' : 'Re-run AI'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2 max-h-96 overflow-y-auto bg-gray-50 rounded p-2">
+                  {questionPages.length === 0 && (
+                    <p className="text-xs text-gray-500">No question images</p>
+                  )}
+                  {questionPages.map((p, i) => (
+                    <img
+                      key={i}
+                      src={p.url}
+                      alt={`Q${q.question_number} page ${i + 1}`}
+                      className="w-full h-auto border border-gray-200 rounded"
+                    />
+                  ))}
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Topics</p>
+                    <div className="flex flex-wrap gap-2 min-h-[28px]">
+                      {state.selected.length === 0 && state.status !== 'loading' && (
+                        <span className="text-xs text-gray-400 italic">No topics selected</span>
+                      )}
+                      {state.selected.map((sel, i) => {
+                        const s = lookup.subtopicById.get(sel.subtopic_id)
+                        const label = s ? `${s.topic_name} » ${s.name}` : `Subtopic ${sel.subtopic_id}`
+                        return (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-800 text-xs rounded-full px-2 py-0.5"
+                          >
+                            {label}
+                            <button
+                              type="button"
+                              onClick={() => removeTopic(q.id, i)}
+                              className="text-blue-600 hover:text-blue-900"
+                              aria-label="Remove"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Add topic</p>
+                    <TopicCombobox
+                      topics={topics}
+                      selected={state.selected}
+                      onAdd={(sel) => addTopic(q.id, sel)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {saveError && (
+        <div className="mt-4">
+          <ErrorBanner message={saveError} />
+        </div>
+      )}
+
+      <div className="mt-6 flex items-center justify-between sticky bottom-0 bg-white py-3 border-t border-gray-200">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="text-sm px-4 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          Cancel import
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || anyLoading}
+          className="bg-blue-600 hover:bg-blue-700 text-white rounded px-6 py-2 text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Confirm & Save Topics'}
+        </button>
+      </div>
     </div>
   )
 }

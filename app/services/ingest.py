@@ -8,7 +8,7 @@ from PIL import Image
 from app.ai.filename_extractor import extract_metadata
 from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
-from app.storage.s3_client import copy_object, get_presigned_url, put_image
+from app.storage.s3_client import copy_object, delete_object, get_presigned_url, put_image
 
 
 def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
@@ -58,21 +58,18 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         pages_to_move: list[tuple[str, str]] = []
         for q_data in payload["questions"]:
             question = Question(
-                paper_id=paper.id,
                 question_number=q_data["question_number"],
                 marks=q_data.get("marks"),
                 created_at=datetime.utcnow(),
             )
-            db.add(question)
-            db.flush()
+            paper.questions.append(question)
 
             for p_data in q_data["pages"]:
                 canonical_key = (
                     f"papers/{paper.id}/q{q_data['question_number']}"
                     f"/{p_data['page_type']}_{p_data['page_order']}.webp"
                 )
-                db.add(QuestionPage(
-                    question_id=question.id,
+                question.pages.append(QuestionPage(
                     page_order=p_data["page_order"],
                     image_key=canonical_key,
                     page_type=p_data["page_type"],
@@ -81,6 +78,8 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
                 ))
                 pages_to_move.append((p_data["temp_key"], canonical_key))
 
+        db.flush()
+
         for temp_key, canonical_key in pages_to_move:
             copy_object(temp_key, canonical_key)
 
@@ -88,3 +87,23 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
     except Exception:
         db.rollback()
         raise
+
+
+def delete_paper(paper_id: int, db: Any) -> list[str]:
+    """Delete a paper and its DB cascades; return S3 image keys that the caller
+    should clean up after the surrounding transaction commits."""
+    paper = (
+        db.query(Paper)
+        .filter(Paper.id == paper_id)
+        .first()
+    )
+    if paper is None:
+        return []
+
+    image_keys: list[str] = [
+        page.image_key for question in paper.questions for page in question.pages
+    ]
+
+    db.delete(paper)
+    db.flush()
+    return image_keys

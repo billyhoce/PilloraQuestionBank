@@ -16,7 +16,7 @@ class PaperInfoSchema(BaseModel):
 
 class QuestionTopicChip(BaseModel):
     topic_name: str
-    subtopic_name: Optional[str] = None
+    subtopic_name: str
 
 
 class QuestionListItem(BaseModel):

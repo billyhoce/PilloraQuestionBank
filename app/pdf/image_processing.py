@@ -22,3 +22,22 @@ def to_webp_bytes(img: Image.Image, quality: int = 85) -> bytes:
 
 def get_dimensions(img: Image.Image) -> tuple[int, int]:
     return img.size
+
+
+_AI_MAX_LONG_SIDE = 768
+_AI_WEBP_QUALITY = 80
+
+
+def downscale_for_ai(image_bytes: bytes) -> bytes:
+    """Resize a stored WebP page to a small long-side for AI input.
+    The on-disk / S3 copy is unaffected — this is only for the model call."""
+    img = Image.open(io.BytesIO(image_bytes))
+    img.load()
+    w, h = img.size
+    long_side = max(w, h)
+    if long_side > _AI_MAX_LONG_SIDE:
+        scale = _AI_MAX_LONG_SIDE / long_side
+        img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=_AI_WEBP_QUALITY)
+    return buf.getvalue()

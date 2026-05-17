@@ -9,6 +9,7 @@ from app.models.orm import (
     Question,
     QuestionPage,
     QuestionTopic,
+    Subtopic,
     User,
 )
 from app.routes.auth import get_current_user
@@ -34,7 +35,7 @@ def _apply_filters(q, subject_id, stream_id, level_id, year, school_id, exam_typ
     if topic_id is not None or subtopic_id is not None:
         q = q.join(QuestionTopic, QuestionTopic.question_id == Question.id)
         if topic_id is not None:
-            q = q.filter(QuestionTopic.topic_id == topic_id)
+            q = q.join(Subtopic, Subtopic.id == QuestionTopic.subtopic_id).filter(Subtopic.topic_id == topic_id)
         if subtopic_id is not None:
             q = q.filter(QuestionTopic.subtopic_id == subtopic_id)
     return q
@@ -74,8 +75,7 @@ _PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.exam_type),
 )
 _TOPICS_EAGER = selectinload(Question.topics).options(
-    joinedload(QuestionTopic.topic),
-    joinedload(QuestionTopic.subtopic),
+    joinedload(QuestionTopic.subtopic).joinedload(Subtopic.topic),
 )
 
 
@@ -115,7 +115,7 @@ def list_questions(
             "marks": q.marks,
             "paper_info": _paper_info(q.paper),
             "topics": [
-                {"topic_name": qt.topic.name, "subtopic_name": qt.subtopic.name if qt.subtopic else None}
+                {"topic_name": qt.subtopic.topic.name, "subtopic_name": qt.subtopic.name}
                 for qt in q.topics
             ],
             "first_page_url": _first_page_url(q),
@@ -159,7 +159,7 @@ def get_question(
         "question_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "question"],
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
         "topics": [
-            {"topic_name": qt.topic.name, "subtopic_name": qt.subtopic.name if qt.subtopic else None}
+            {"topic_name": qt.subtopic.topic.name, "subtopic_name": qt.subtopic.name}
             for qt in question.topics
         ],
     }

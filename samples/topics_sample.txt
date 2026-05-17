@@ -1,0 +1,14 @@
+1
+Primes, HCF, LCM
+Able to Prime factorise
+Find HCF, LCM by prime factorisation
+Find perfect square/cube/square root/cube root by prime factorisation
+2
+Numbers Basics
+Negative numbers, integers, rational numbers, real numbers, and their four operations
+Perform calculations with calculator
+Represent and order numbers on the number line
+Approximate and estimate (including rounding off numbers to a required number of decimal places or significant figures and estimating the results of computation)
+3
+Standard form
+Use of standard form A × 10n, where n is an integer, and 1 ⩽ A < 10

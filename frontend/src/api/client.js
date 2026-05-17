@@ -65,7 +65,12 @@ export const api = {
         })
     },
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
-    aiTopics: (paper_id) => request('POST', '/api/import/ai-topics', { paper_id }),
+    aiTopicsForQuestion: (question_id) =>
+      request('POST', '/api/import/ai-topics', { question_id }),
+    saveTopics: (paper_id, question_topics) =>
+      request('POST', '/api/import/save-topics', { paper_id, question_topics }),
+    deletePaper: (paper_id) =>
+      request('DELETE', `/api/import/papers/${paper_id}`),
   },
 
   auth: {

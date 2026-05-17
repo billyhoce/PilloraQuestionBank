@@ -378,7 +378,7 @@ def list_topics(subject_id: Optional[int] = None, stream_id: Optional[int] = Non
         q = q.filter(Topic.subject_id == subject_id)
     if stream_id is not None:
         q = q.filter(Topic.stream_id == stream_id)
-    return {"data": q.all()}
+    return {"data": q.order_by(Topic.topic_number).all()}
 
 
 @router.get("/topics/{topic_id}", response_model=TopicResponse)

@@ -1,7 +1,6 @@
 """Tests for the Claude topic-labeling AI module."""
+from datetime import datetime
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.ai.topic_labeler import (
     build_system_prompt,
@@ -12,12 +11,6 @@ from app.ai.topic_labeler import (
 # ---------------------------------------------------------------------------
 # Prompt construction
 # ---------------------------------------------------------------------------
-
-
-def test_build_system_prompt_includes_subject_and_stream():
-    prompt = build_system_prompt(subject="Math", stream="G3", topics=[])
-    assert "Math" in prompt
-    assert "G3" in prompt
 
 
 def test_build_system_prompt_includes_all_topic_names():
@@ -46,8 +39,14 @@ def test_build_system_prompt_includes_subtopics():
     assert "Quadratic equations" in prompt
 
 
-def test_build_system_prompt_includes_topic_ids():
-    topics = [{"id": 42, "name": "Trigonometry", "subtopics": []}]
+def test_build_system_prompt_includes_subtopic_ids():
+    topics = [
+        {
+            "id": 1,
+            "name": "Algebra",
+            "subtopics": [{"id": 42, "name": "Linear equations"}],
+        }
+    ]
     prompt = build_system_prompt(subject="Math", stream="G3", topics=topics)
     assert "42" in prompt
 
@@ -57,19 +56,15 @@ def test_build_system_prompt_includes_topic_ids():
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_response(topics_input: list):
+def _make_mock_response(subtopic_ids: list):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock()]
-    mock_resp.content[0].input = {"topics": topics_input}
+    mock_resp.content[0].input = {"subtopic_ids": subtopic_ids}
     return mock_resp
-
-
-_VALID_TOPICS = [{"topic_id": 1, "subtopic_id": 11}]
 
 
 def _make_paper_and_question(db_session, reference_data, admin_user):
     from app.models.orm import Question, Paper
-    from datetime import datetime
 
     rd = reference_data
     paper = Paper(
@@ -95,7 +90,7 @@ def _make_paper_and_question(db_session, reference_data, admin_user):
 def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_TOPICS)
+    mock_client.messages.create.return_value = _make_mock_response([])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
@@ -106,7 +101,6 @@ def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_sessio
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
     mock_client.messages.create.assert_called_once()
@@ -116,17 +110,16 @@ def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_sessio
 def test_label_question_uses_sonnet_model(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_TOPICS)
+    mock_client.messages.create.return_value = _make_mock_response([])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
-    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear"}]}]
     label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
     call_kwargs = mock_client.messages.create.call_args
@@ -139,17 +132,16 @@ def test_label_question_uses_sonnet_model(mock_anthropic_cls, db_session, refere
 def test_label_question_sends_image_in_user_message(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_TOPICS)
+    mock_client.messages.create.return_value = _make_mock_response([])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
-    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear"}]}]
     label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -167,17 +159,16 @@ def test_label_question_sends_image_in_user_message(mock_anthropic_cls, db_sessi
 def test_label_question_system_has_cache_control_ephemeral(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_TOPICS)
+    mock_client.messages.create.return_value = _make_mock_response([])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
-    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear"}]}]
     label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -194,54 +185,47 @@ def test_label_question_system_has_cache_control_ephemeral(mock_anthropic_cls, d
 def test_label_question_uses_tool_choice(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(_VALID_TOPICS)
+    mock_client.messages.create.return_value = _make_mock_response([])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
-    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear"}]}]
     label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     tool_choice = call_kwargs.get("tool_choice", {})
     assert tool_choice.get("type") == "tool"
-    assert tool_choice.get("name") == "label_topics"
+    assert tool_choice.get("name") == "label_subtopics"
     tools = call_kwargs.get("tools", [])
-    assert any(t.get("name") == "label_topics" for t in tools)
+    assert any(t.get("name") == "label_subtopics" for t in tools)
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_filters_out_hallucinated_topic_ids(mock_anthropic_cls, db_session, reference_data, admin_user):
+def test_label_question_filters_out_hallucinated_subtopic_ids(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(
-        [{"topic_id": 999, "subtopic_id": None}]
-    )
-
-    from app.models.orm import QuestionTopic
+    mock_client.messages.create.return_value = _make_mock_response([99999])
 
     rd = reference_data
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
-    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": []}]
-    label_question(
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear"}]}]
+    result = label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
-    count = db_session.query(QuestionTopic).filter_by(question_id=question.id).count()
-    assert count == 0, "Hallucinated topic_id 999 should not be persisted"
+    assert result == [], "Hallucinated subtopic_id 99999 should be filtered out"
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_persists_valid_topic(mock_anthropic_cls, db_session, reference_data, admin_user):
+def test_label_question_returns_valid_subtopic(mock_anthropic_cls, db_session, reference_data, admin_user):
     mock_client = MagicMock()
     mock_anthropic_cls.return_value = mock_client
 
@@ -249,17 +233,32 @@ def test_label_question_persists_valid_topic(mock_anthropic_cls, db_session, ref
     _, question = _make_paper_and_question(db_session, reference_data, admin_user)
 
     topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear Equations"}]}]
-    mock_client.messages.create.return_value = _make_mock_response(
-        [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
-    )
+    mock_client.messages.create.return_value = _make_mock_response([rd["subtopic"].id])
 
-    label_question(
+    result = label_question(
         question=question,
         topics=topics,
         image_bytes_list=[b"fake-image-bytes"],
-        db=db_session,
     )
 
-    from app.models.orm import QuestionTopic
-    count = db_session.query(QuestionTopic).filter_by(question_id=question.id).count()
-    assert count == 1
+    assert result == [{"subtopic_id": rd["subtopic"].id}]
+
+
+@patch("app.ai.topic_labeler.anthropic.Anthropic")
+def test_label_question_dedupes_repeated_subtopic_ids(mock_anthropic_cls, db_session, reference_data, admin_user):
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+
+    rd = reference_data
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
+
+    topics = [{"id": rd["topic"].id, "name": "Algebra", "subtopics": [{"id": rd["subtopic"].id, "name": "Linear Equations"}]}]
+    mock_client.messages.create.return_value = _make_mock_response([rd["subtopic"].id, rd["subtopic"].id])
+
+    result = label_question(
+        question=question,
+        topics=topics,
+        image_bytes_list=[b"fake-image-bytes"],
+    )
+
+    assert result == [{"subtopic_id": rd["subtopic"].id}]

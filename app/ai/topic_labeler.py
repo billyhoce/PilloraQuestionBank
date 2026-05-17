@@ -3,27 +3,18 @@ import json
 
 import anthropic
 
-from app.models.orm import QuestionTopic
-
-LABEL_TOPICS_TOOL = {
-    "name": "label_topics",
-    "description": "Record which topics and subtopics are covered by the question.",
+LABEL_SUBTOPICS_TOOL = {
+    "name": "label_subtopics",
+    "description": "Record which subtopics are covered by the question.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "topics": {
+            "subtopic_ids": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "topic_id": {"type": "integer"},
-                        "subtopic_id": {"type": ["integer", "null"]},
-                    },
-                    "required": ["topic_id", "subtopic_id"],
-                },
+                "items": {"type": "integer"},
             },
         },
-        "required": ["topics"],
+        "required": ["subtopic_ids"],
     },
 }
 
@@ -31,8 +22,13 @@ LABEL_TOPICS_TOOL = {
 def build_system_prompt(subject: str, stream: str, topics: list[dict]) -> str:
     topics_json = json.dumps(topics, indent=2)
     return (
-        f"You are an expert in {subject} ({stream} stream) Singapore secondary school exams.\n"
-        f"Available topics and subtopics:\n{topics_json}"
+        f"You are an expert in categorizing exam questions into relevant subtopics.\n"
+        f"Available topics and their subtopics:\n{topics_json}\n"
+        f"Pick the subtopic IDs that best describe what the question is testing. "
+        f"You may pick multiple subtopics, including more than one under the same parent topic. "
+        f"Only return subtopic IDs that appear in the list above. "
+        f"If you are unsure, lean towards picking fewer subtopics rather than more, but pick at least one if you can. "
+        f"Most of the time, each question will only require one subtopic, only occasionally requiring two or three."
     )
 
 
@@ -40,11 +36,9 @@ def label_question(
     question,
     topics: list[dict],
     image_bytes_list: list[bytes],
-    db,
-) -> None:
+) -> list[dict]:
     subject = question.paper.subject.name
     stream = question.paper.stream.name
-    valid_topic_ids = {t["id"] for t in topics}
     valid_subtopic_ids = {s["id"] for t in topics for s in t.get("subtopics", [])}
     sys_prompt = build_system_prompt(subject, stream, topics)
 
@@ -59,7 +53,7 @@ def label_question(
         }
         for b in image_bytes_list
     ]
-    user_content = image_blocks + [{"type": "text", "text": "Identify the topics covered in this question."}]
+    user_content = image_blocks + [{"type": "text", "text": "Identify the subtopics covered in this question."}]
 
     client = anthropic.Anthropic()
     resp = client.messages.create(
@@ -67,20 +61,15 @@ def label_question(
         max_tokens=512,
         system=[{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_content}],
-        tools=[LABEL_TOPICS_TOOL],
-        tool_choice={"type": "tool", "name": "label_topics"},
+        tools=[LABEL_SUBTOPICS_TOOL],
+        tool_choice={"type": "tool", "name": "label_subtopics"},
     )
 
-    items = resp.content[0].input.get("topics", [])
-    items = [
-        item for item in items
-        if item.get("topic_id") in valid_topic_ids
-        and (item.get("subtopic_id") is None or item.get("subtopic_id") in valid_subtopic_ids)
-    ]
-    for item in items:
-        db.add(QuestionTopic(
-            question_id=question.id,
-            topic_id=item["topic_id"],
-            subtopic_id=item.get("subtopic_id"),
-        ))
-    db.flush()
+    items = resp.content[0].input.get("subtopic_ids", [])
+    seen: set[int] = set()
+    out: list[dict] = []
+    for sid in items:
+        if sid in valid_subtopic_ids and sid not in seen:
+            seen.add(sid)
+            out.append({"subtopic_id": sid})
+    return out
