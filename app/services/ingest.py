@@ -6,6 +6,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
+from app.logger import Timer, log
 from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_object, delete_object, get_presigned_url, put_image
@@ -21,21 +22,44 @@ def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
 
 
 def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
-    images = pdf_to_images(pdf_bytes)
-    upload_id = str(uuid.uuid4())
-    pages = []
-    for i, img in enumerate(images):
-        std = standardize(img)
-        webp = to_webp_bytes(std)
-        w, h = get_dimensions(std)
-        key = f"tmp/{upload_id}/page_{i}.webp"
-        put_image(key, webp)
-        pages.append({
-            "temp_key": key,
-            "url": get_presigned_url(key, expires_in=7200),
-            "dimensions": {"width": w, "height": h},
-        })
-    suggested = extract_metadata(filename, db)
+    with Timer() as t_total:
+        with Timer() as t_raster:
+            images = pdf_to_images(pdf_bytes)
+        log.info(f"{'upload_pages':<22}| rasterize | {t_raster.s}  ({len(images)} pages)")
+
+        upload_id = str(uuid.uuid4())
+        pages = []
+        t_proc = t_s3 = 0.0
+
+        for i, img in enumerate(images):
+            with Timer() as _t:
+                std = standardize(img)
+                webp = to_webp_bytes(std)
+                w, h = get_dimensions(std)
+            t_proc += _t.elapsed
+
+            key = f"tmp/{upload_id}/page_{i}.webp"
+
+            with Timer() as _t:
+                put_image(key, webp)
+                url = get_presigned_url(key, expires_in=7200)
+            t_s3 += _t.elapsed
+
+            pages.append({
+                "temp_key": key,
+                "url": url,
+                "dimensions": {"width": w, "height": h},
+            })
+
+        n = len(images)
+        log.info(f"{'upload_pages':<22}| img_proc  | {t_proc:.3f}s  ({n} pages)")
+        log.info(f"{'upload_pages':<22}| s3_upload | {t_s3:.3f}s  ({n} pages)")
+
+        with Timer() as t_meta:
+            suggested = extract_metadata(filename, db)
+        log.info(f"{'upload_pages':<22}| ai_extract| {t_meta.s}")
+
+    log.info(f"{'upload_pages':<22}| TOTAL     | {t_total.s}")
     return {"pages": pages, "suggested_metadata": suggested}
 
 

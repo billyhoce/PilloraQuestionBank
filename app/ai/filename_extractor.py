@@ -1,5 +1,6 @@
 import anthropic
 
+from app.logger import Timer, log, log_tokens
 from app.models.orm import ExamType, Level, School, Subject
 
 _EMPTY: dict = {
@@ -129,23 +130,29 @@ def resolve_metadata(extracted: dict, ref_data: dict) -> dict:
 
 
 def extract_metadata(filename: str, db) -> dict:
-    try:
-        ref_data = _fetch_reference_data(db)
-        client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=256,
-            system=build_system_prompt(ref_data),
-            tools=[_EXTRACTION_TOOL],
-            tool_choice={"type": "tool", "name": "extract_paper_metadata"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": f'Extract metadata from this exam paper filename: "{filename}"',
-                }
-            ],
-        )
-        extracted = resp.content[0].input  # dict — no JSON parsing needed
-        return resolve_metadata(extracted, ref_data)
-    except Exception:
-        return dict(_EMPTY)
+    with Timer() as t_total:
+        try:
+            ref_data = _fetch_reference_data(db)
+            client = anthropic.Anthropic()
+            with Timer() as t_call:
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=256,
+                    system=build_system_prompt(ref_data),
+                    tools=[_EXTRACTION_TOOL],
+                    tool_choice={"type": "tool", "name": "extract_paper_metadata"},
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f'Extract metadata from this exam paper filename: "{filename}"',
+                        }
+                    ],
+                )
+            log.info(f"{'extract_metadata':<22}| haiku     | {t_call.s}")
+            log_tokens("extract_metadata", "claude-haiku-4-5-20251001", resp.usage)
+            extracted = resp.content[0].input  # dict — no JSON parsing needed
+            result = resolve_metadata(extracted, ref_data)
+        except Exception:
+            result = dict(_EMPTY)
+    log.info(f"{'extract_metadata':<22}| TOTAL     | {t_total.s}")
+    return result

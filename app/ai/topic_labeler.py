@@ -3,6 +3,8 @@ import json
 
 import anthropic
 
+from app.logger import Timer, log, log_tokens
+
 LABEL_SUBTOPICS_TOOL = {
     "name": "label_subtopics",
     "description": "Record which subtopics are covered by the question.",
@@ -56,14 +58,17 @@ def label_question(
     user_content = image_blocks + [{"type": "text", "text": "Identify the subtopics covered in this question."}]
 
     client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=512,
-        system=[{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user_content}],
-        tools=[LABEL_SUBTOPICS_TOOL],
-        tool_choice={"type": "tool", "name": "label_subtopics"},
-    )
+    with Timer() as t_call:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            system=[{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_content}],
+            tools=[LABEL_SUBTOPICS_TOOL],
+            tool_choice={"type": "tool", "name": "label_subtopics"},
+        )
+    log.info(f"{'label_question':<22}| sonnet    | {t_call.s}")
+    log_tokens("label_question", "claude-sonnet-4-6", resp.usage)
 
     items = resp.content[0].input.get("subtopic_ids", [])
     seen: set[int] = set()

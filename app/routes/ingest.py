@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.ai.topic_labeler import label_question
 from app.db import get_db
+from app.logger import Timer, log
 from app.models.orm import Paper, Question, QuestionTopic, Subtopic, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
@@ -72,8 +73,11 @@ async def upload_pdf(
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
-    pdf_bytes = await file.read()
-    return upload_pages(pdf_bytes, file.filename or "", db)
+    with Timer() as t:
+        pdf_bytes = await file.read()
+        result = upload_pages(pdf_bytes, file.filename or "", db)
+    log.info(f"{'upload_pdf':<22}| TOTAL     | {t.s}")
+    return result
 
 
 def _serialize_paper_questions(paper: Paper) -> list[dict]:
@@ -122,40 +126,68 @@ def ai_topics(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    question = (
-        db.query(Question)
-        .options(
-            selectinload(Question.pages),
-            joinedload(Question.paper).joinedload(Paper.subject),
-            joinedload(Question.paper).joinedload(Paper.stream),
-        )
-        .filter(Question.id == payload.question_id)
-        .first()
-    )
-    if question is None:
-        raise HTTPException(status_code=404, detail="Question not found")
+    with Timer() as t_total:
+        with Timer() as t_db:
+            question = (
+                db.query(Question)
+                .options(
+                    selectinload(Question.pages),
+                    joinedload(Question.paper).joinedload(Paper.subject),
+                    joinedload(Question.paper).joinedload(Paper.stream),
+                )
+                .filter(Question.id == payload.question_id)
+                .first()
+            )
+        log.info(f"{'ai_topics':<22}| db_query  | {t_db.s}")
 
-    paper = question.paper
-    topics_orm = (
-        db.query(Topic)
-        .options(selectinload(Topic.subtopics))
-        .filter(Topic.subject_id == paper.subject_id, Topic.stream_id == paper.stream_id)
-        .order_by(Topic.topic_number)
-        .all()
-    )
-    topics = [
-        {
-            "id": t.id,
-            "name": t.name,
-            "subtopics": [{"id": s.id, "name": s.name} for s in t.subtopics],
-        }
-        for t in topics_orm
-        if t.subtopics
-    ]
+        if question is None:
+            raise HTTPException(status_code=404, detail="Question not found")
 
-    question_pages = [p for p in question.pages if p.page_type == "question"]
-    image_bytes_list = [downscale_for_ai(get_image_bytes(p.image_key)) for p in question_pages]
-    suggestions = label_question(question, topics, image_bytes_list)
+        paper = question.paper
+        with Timer() as t_topics:
+            topics_orm = (
+                db.query(Topic)
+                .options(selectinload(Topic.subtopics))
+                .filter(Topic.subject_id == paper.subject_id, Topic.stream_id == paper.stream_id)
+                .order_by(Topic.topic_number)
+                .all()
+            )
+        log.info(f"{'ai_topics':<22}| db_topics | {t_topics.s}")
+
+        topics = [
+            {
+                "id": t.id,
+                "name": t.name,
+                "subtopics": [{"id": s.id, "name": s.name} for s in t.subtopics],
+            }
+            for t in topics_orm
+            if t.subtopics
+        ]
+
+        question_pages = [p for p in question.pages if p.page_type == "question"]
+        n = len(question_pages)
+
+        t_s3 = 0.0
+        raw_list = []
+        for p in question_pages:
+            with Timer() as _t:
+                raw_list.append(get_image_bytes(p.image_key))
+            t_s3 += _t.elapsed
+        log.info(f"{'ai_topics':<22}| s3_fetch  | {t_s3:.3f}s  ({n} pages)")
+
+        t_ds = 0.0
+        image_bytes_list = []
+        for raw in raw_list:
+            with Timer() as _t:
+                image_bytes_list.append(downscale_for_ai(raw))
+            t_ds += _t.elapsed
+        log.info(f"{'ai_topics':<22}| downscale | {t_ds:.3f}s  ({n} pages)")
+
+        with Timer() as t_label:
+            suggestions = label_question(question, topics, image_bytes_list)
+        log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+
+    log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
     return {"suggestions": suggestions}
 
 
