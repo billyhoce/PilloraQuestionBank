@@ -8,6 +8,7 @@ from app.db import get_db
 from app.models.orm import (
     ExamType,
     Level,
+    Paper,
     School,
     SchoolLevel,
     Stream,
@@ -487,3 +488,26 @@ def delete_subtopic(subtopic_id: int, db: Session = Depends(get_db), _: User = D
     if obj is None:
         _not_found("Subtopic")
     _delete_with_fk_guard(db, obj, "subtopic")
+
+
+# ---------------------------------------------------------------------------
+# Paper years (distinct years across papers, optionally filtered)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/papers/years")
+def list_paper_years(
+    subject_id: Optional[int] = None,
+    stream_id: Optional[int] = None,
+    level_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Paper.year).distinct()
+    if subject_id is not None:
+        q = q.filter(Paper.subject_id == subject_id)
+    if stream_id is not None:
+        q = q.filter(Paper.stream_id == stream_id)
+    if level_id is not None:
+        q = q.filter(Paper.level_id == level_id)
+    years = [row[0] for row in q.order_by(Paper.year.desc()).all()]
+    return {"data": years}

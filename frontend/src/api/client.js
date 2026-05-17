@@ -141,4 +141,39 @@ export const api = {
     update: (id, topic_id, name) => request('PUT', `/api/subtopics/${id}`, { topic_id, name }),
     delete: (id) => request('DELETE', `/api/subtopics/${id}`),
   },
+
+  questions: {
+    list: (filters = {}, signal) => {
+      const params = new URLSearchParams()
+      const append = (k, v) => {
+        if (v === undefined || v === null || v === '') return
+        params.append(k, v)
+      }
+      append('subject_id', filters.subject_id)
+      append('stream_id', filters.stream_id)
+      append('level_id', filters.level_id)
+      append('school_id', filters.school_id)
+      append('exam_type_id', filters.exam_type_id)
+      append('year', filters.year)
+      append('subtopic_keyword', filters.subtopic_keyword)
+      if (filters.exclusive) params.append('exclusive', 'true')
+      for (const id of filters.topic_ids || []) params.append('topic_ids', id)
+      append('page', filters.page ?? 1)
+      append('page_size', filters.page_size ?? 50)
+      const qs = params.toString()
+      return request('GET', `/api/questions${qs ? `?${qs}` : ''}`, undefined, signal)
+    },
+    get: (id, signal) => request('GET', `/api/questions/${id}`, undefined, signal),
+  },
+
+  papers: {
+    years: ({ subject_id, stream_id, level_id } = {}) => {
+      const params = new URLSearchParams()
+      if (subject_id) params.append('subject_id', subject_id)
+      if (stream_id) params.append('stream_id', stream_id)
+      if (level_id) params.append('level_id', level_id)
+      const qs = params.toString()
+      return request('GET', `/api/papers/years${qs ? `?${qs}` : ''}`).then(r => r.data)
+    },
+  },
 }

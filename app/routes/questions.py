@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db import get_db
@@ -10,16 +10,25 @@ from app.models.orm import (
     QuestionPage,
     QuestionTopic,
     Subtopic,
-    User,
 )
-from app.routes.auth import get_current_user
 from app.schemas.questions import QuestionDetailResponse, QuestionListResponse
 from app.storage.s3_client import get_presigned_url
 
 router = APIRouter(prefix="/api", tags=["questions"])
 
 
-def _apply_filters(q, subject_id, stream_id, level_id, year, school_id, exam_type_id, topic_id, subtopic_id):
+def _apply_filters(
+    q,
+    subject_id,
+    stream_id,
+    level_id,
+    year,
+    school_id,
+    exam_type_id,
+    topic_ids,
+    exclusive,
+    subtopic_keyword,
+):
     if subject_id is not None:
         q = q.filter(Paper.subject_id == subject_id)
     if stream_id is not None:
@@ -32,12 +41,29 @@ def _apply_filters(q, subject_id, stream_id, level_id, year, school_id, exam_typ
         q = q.filter(Paper.school_id == school_id)
     if exam_type_id is not None:
         q = q.filter(Paper.exam_type_id == exam_type_id)
-    if topic_id is not None or subtopic_id is not None:
-        q = q.join(QuestionTopic, QuestionTopic.question_id == Question.id)
-        if topic_id is not None:
-            q = q.join(Subtopic, Subtopic.id == QuestionTopic.subtopic_id).filter(Subtopic.topic_id == topic_id)
-        if subtopic_id is not None:
-            q = q.filter(QuestionTopic.subtopic_id == subtopic_id)
+
+    if topic_ids:
+        q = q.filter(
+            Question.topics.any(
+                QuestionTopic.subtopic.has(Subtopic.topic_id.in_(topic_ids))
+            )
+        )
+        if exclusive:
+            q = q.filter(
+                ~Question.topics.any(
+                    QuestionTopic.subtopic.has(Subtopic.topic_id.notin_(topic_ids))
+                )
+            )
+
+    if subtopic_keyword:
+        kw = subtopic_keyword.strip()
+        if kw:
+            q = q.filter(
+                Question.topics.any(
+                    QuestionTopic.subtopic.has(Subtopic.name.ilike(f"%{kw}%"))
+                )
+            )
+
     return q
 
 
@@ -87,20 +113,30 @@ def list_questions(
     year: Optional[int] = None,
     school_id: Optional[int] = None,
     exam_type_id: Optional[int] = None,
-    topic_id: Optional[int] = None,
-    subtopic_id: Optional[int] = None,
+    topic_ids: List[int] = Query(default=[]),
+    exclusive: bool = False,
+    subtopic_keyword: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
 ):
-    filter_args = (subject_id, stream_id, level_id, year, school_id, exam_type_id, topic_id, subtopic_id)
+    filter_args = (
+        subject_id,
+        stream_id,
+        level_id,
+        year,
+        school_id,
+        exam_type_id,
+        topic_ids,
+        exclusive,
+        subtopic_keyword,
+    )
 
     base = db.query(Question).join(Question.paper)
-    total = _apply_filters(base.distinct(), *filter_args).count()
+    total = _apply_filters(base, *filter_args).count()
 
     questions = (
-        _apply_filters(base.distinct(), *filter_args)
+        _apply_filters(base, *filter_args)
         .options(_PAPER_EAGER, selectinload(Question.pages), _TOPICS_EAGER)
         .order_by(Question.id)
         .offset((page - 1) * page_size)
@@ -130,7 +166,6 @@ def list_questions(
 def get_question(
     question_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
 ):
     question = (
         db.query(Question)
