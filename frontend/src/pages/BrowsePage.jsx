@@ -155,7 +155,7 @@ export default function BrowsePage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+      <main className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />
@@ -173,7 +173,7 @@ export default function BrowsePage() {
         {loading ? (
           <div className="flex items-center justify-center py-16"><Spinner size="lg" /></div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {items.map(item => (
               <QuestionCard key={item.id} item={item} onClick={() => setSelectedItem(item)} />
             ))}

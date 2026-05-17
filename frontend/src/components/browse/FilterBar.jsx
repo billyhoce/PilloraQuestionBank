@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client'
 import TopicMultiSelect from './TopicMultiSelect'
 
@@ -34,6 +34,7 @@ export default function FilterBar({ filters, onFilterChange }) {
   const [subjects, setSubjects] = useState([])
   const [schools, setSchools] = useState([])
   const [examTypes, setExamTypes] = useState([])
+  const [schoolLevels, setSchoolLevels] = useState([])
   const [topics, setTopics] = useState([])
   const [years, setYears] = useState([])
   const [kwInput, setKwInput] = useState(filters.subtopic_keyword || '')
@@ -45,14 +46,27 @@ export default function FilterBar({ filters, onFilterChange }) {
       api.subjects.list(),
       api.schools.list(),
       api.examTypes.list(),
-    ]).then(([lv, st, su, sc, et]) => {
+      api.schoolLevels.list(),
+    ]).then(([lv, st, su, sc, et, sl]) => {
       setLevels(lv || [])
       setStreams(st || [])
       setSubjects(su || [])
       setSchools(sc || [])
       setExamTypes(et || [])
+      setSchoolLevels(sl || [])
     }).catch(() => {})
   }, [])
+
+  const schoolLevelById = useMemo(() => {
+    const map = {}
+    for (const sl of schoolLevels) map[sl.id] = sl.name
+    return map
+  }, [schoolLevels])
+
+  function levelLabel(level) {
+    const slName = schoolLevelById[level.school_level_id]
+    return slName ? `${slName} ${level.name}` : level.name
+  }
 
   useEffect(() => {
     if (filters.subject_id && filters.stream_id) {
@@ -119,7 +133,7 @@ export default function FilterBar({ filters, onFilterChange }) {
     : streams
 
   return (
-    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1">
+    <div className="bg-gray-50 border-2 border-gray-300 rounded-lg p-4 space-y-1">
       <Row label="Level">
         <div className="flex items-center flex-wrap gap-2">
           <Chip active={!filters.level_id} onClick={() => onFilterChange({ level_id: '' })}>All</Chip>
@@ -129,7 +143,7 @@ export default function FilterBar({ filters, onFilterChange }) {
               active={String(filters.level_id) === String(l.id)}
               onClick={() => pickLevel(l)}
             >
-              {l.name}
+              {levelLabel(l)}
             </Chip>
           ))}
         </div>

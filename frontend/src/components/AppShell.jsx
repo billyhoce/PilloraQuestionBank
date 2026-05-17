@@ -2,6 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 const navLinks = [
+  { to: '/', label: 'Question Bank' },
   { to: '/admin/reference', label: 'Reference' },
   { to: '/admin/import', label: 'Import' },
 ]

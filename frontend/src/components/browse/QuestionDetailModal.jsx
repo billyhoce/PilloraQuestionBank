@@ -44,7 +44,9 @@ export default function QuestionDetailModal({ item, onClose }) {
           <div className="min-w-0">
             <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
             {subtopicNames.length > 0 ? (
-              <div className="text-xs text-gray-500 mt-1">{subtopicNames.join(', ')}</div>
+              <ul className="text-xs text-gray-500 mt-1 space-y-0.5">
+                {subtopicNames.map(name => <li key={name}>{name}</li>)}
+              </ul>
             ) : null}
           </div>
           <button

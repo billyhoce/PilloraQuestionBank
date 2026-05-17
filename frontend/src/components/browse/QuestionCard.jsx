@@ -8,15 +8,15 @@ export default function QuestionCard({ item, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="group text-left bg-white border border-gray-200 rounded-lg overflow-hidden hover:border-blue-500 hover:shadow-md transition-all flex flex-col"
+      className="group text-left bg-white border-2 border-gray-300 rounded-lg overflow-hidden hover:border-blue-500 hover:shadow-md transition-all flex flex-col"
     >
-      <div className="aspect-[3/4] bg-gray-100 overflow-hidden">
+      <div className="aspect-[5/2] bg-white overflow-hidden">
         {first_page_url ? (
           <img
             src={first_page_url}
             alt={title}
             loading="lazy"
-            className="w-full h-full object-cover object-top"
+            className="block w-full h-auto"
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">No preview</div>
