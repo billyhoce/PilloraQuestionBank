@@ -83,3 +83,13 @@ class SubtopicResponse(BaseModel):
     topic_id: int
     name: str
     model_config = _orm
+
+
+class TopicWithSubtopicsResponse(BaseModel):
+    id: int
+    subject_id: int
+    stream_id: int
+    name: str
+    topic_number: int
+    subtopics: list[SubtopicResponse] = []
+    model_config = _orm

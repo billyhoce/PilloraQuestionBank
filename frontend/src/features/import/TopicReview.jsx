@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
@@ -34,19 +34,22 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const [expandedImage, setExpandedImage] = useState(null)
 
   const lookup = useMemo(() => topics ? buildTopicLookup(topics) : null, [topics])
   const enqueue = useMemo(() => createRateLimitedQueue(REQUEST_INTERVAL_MS), [])
+  const abortRef = useRef(null)
 
   const labelQuestion = useCallback(async (qid) => {
     setQuestionState(prev => ({ ...prev, [qid]: { ...prev[qid], status: 'loading', error: null } }))
     try {
-      const result = await enqueue(() => api.import.aiTopicsForQuestion(qid))
+      const result = await enqueue(() => api.import.aiTopicsForQuestion(qid, abortRef.current?.signal))
       setQuestionState(prev => ({
         ...prev,
         [qid]: { status: 'ready', selected: result.suggestions || [], error: null },
       }))
     } catch (e) {
+      if (e.name === 'AbortError') return
       setQuestionState(prev => ({
         ...prev,
         [qid]: { ...prev[qid], status: 'error', error: e.message || 'Labeling failed' },
@@ -61,7 +64,11 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   }, [subjectId, streamId])
 
   useEffect(() => {
+    abortRef.current = new AbortController()
     questions.forEach(q => { labelQuestion(q.id) })
+    return () => {
+      abortRef.current?.abort()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -162,7 +169,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2 max-h-96 overflow-y-auto bg-gray-50 rounded p-2">
+                <div className="flex flex-col gap-2 max-h-screen overflow-y-auto bg-gray-50 rounded p-2">
                   {questionPages.length === 0 && (
                     <p className="text-xs text-gray-500">No question images</p>
                   )}
@@ -171,7 +178,8 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
                       key={i}
                       src={p.url}
                       alt={`Q${q.question_number} page ${i + 1}`}
-                      className="w-full h-auto border border-gray-200 rounded"
+                      className="w-full h-auto border border-gray-200 rounded cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setExpandedImage(p.url)}
                     />
                   ))}
                 </div>
@@ -179,31 +187,33 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
                 <div className="flex flex-col gap-3">
                   <div>
                     <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Topics</p>
-                    <div className="flex flex-wrap gap-2 min-h-[28px]">
-                      {state.selected.length === 0 && state.status !== 'loading' && (
-                        <span className="text-xs text-gray-400 italic">No topics selected</span>
-                      )}
-                      {state.selected.map((sel, i) => {
-                        const s = lookup.subtopicById.get(sel.subtopic_id)
-                        const label = s ? `${s.topic_name} » ${s.name}` : `Subtopic ${sel.subtopic_id}`
-                        return (
-                          <span
-                            key={i}
-                            className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-800 text-xs rounded-full px-2 py-0.5"
+                    {state.selected.length === 0 && state.status !== 'loading' && (
+                      <p className="text-sm text-gray-400 italic">No topics selected</p>
+                    )}
+                    {state.selected.map((sel, i) => {
+                      const s = lookup.subtopicById.get(sel.subtopic_id)
+                      return (
+                        <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
+                          <p className="text-sm text-gray-700 flex-grow">
+                            {s ? (
+                              <>
+                                <strong>{s.topic_name}</strong> » {s.name}
+                              </>
+                            ) : (
+                              `Subtopic ${sel.subtopic_id}`
+                            )}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => removeTopic(q.id, i)}
+                            className="text-gray-400 hover:text-red-600 text-lg flex-shrink-0 mt-0.5"
+                            aria-label="Remove"
                           >
-                            {label}
-                            <button
-                              type="button"
-                              onClick={() => removeTopic(q.id, i)}
-                              className="text-blue-600 hover:text-blue-900"
-                              aria-label="Remove"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        )
-                      })}
-                    </div>
+                            ×
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Add topic</p>
@@ -223,6 +233,27 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
       {saveError && (
         <div className="mt-4">
           <ErrorBanner message={saveError} />
+        </div>
+      )}
+
+      {expandedImage && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
+          onClick={() => setExpandedImage(null)}
+        >
+          <div className="max-w-4xl max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={expandedImage}
+              alt="Expanded"
+              className="w-full h-auto"
+            />
+          </div>
+          <button
+            className="fixed top-4 right-4 text-white text-2xl bg-black bg-opacity-50 hover:bg-opacity-75 rounded-full w-10 h-10 flex items-center justify-center transition-all"
+            onClick={() => setExpandedImage(null)}
+          >
+            ×
+          </button>
         </div>
       )}
 

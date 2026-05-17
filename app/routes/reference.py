@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
 from app.models.orm import (
@@ -31,6 +31,7 @@ from app.schemas.reference import (
     SubtopicResponse,
     TopicRequest,
     TopicResponse,
+    TopicWithSubtopicsResponse,
 )
 
 router = APIRouter(prefix="/api", tags=["reference"])
@@ -373,12 +374,13 @@ def delete_exam_type(exam_type_id: int, db: Session = Depends(get_db), _: User =
 
 @router.get("/topics")
 def list_topics(subject_id: Optional[int] = None, stream_id: Optional[int] = None, db: Session = Depends(get_db)):
-    q = db.query(Topic)
+    q = db.query(Topic).options(joinedload(Topic.subtopics))
     if subject_id is not None:
         q = q.filter(Topic.subject_id == subject_id)
     if stream_id is not None:
         q = q.filter(Topic.stream_id == stream_id)
-    return {"data": q.order_by(Topic.topic_number).all()}
+    topics = q.order_by(Topic.topic_number).all()
+    return {"data": [TopicWithSubtopicsResponse.model_validate(t) for t in topics]}
 
 
 @router.get("/topics/{topic_id}", response_model=TopicResponse)

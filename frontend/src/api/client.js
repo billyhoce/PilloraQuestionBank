@@ -16,7 +16,7 @@ function friendlyMessage(status, isDelete, detail) {
   return detail || 'An unexpected error occurred.'
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, signal) {
   const isDelete = method === 'DELETE'
   const opts = {
     method,
@@ -24,6 +24,7 @@ async function request(method, path, body) {
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
+  if (signal !== undefined) opts.signal = signal
 
   const res = await fetch(path, opts)
 
@@ -65,8 +66,8 @@ export const api = {
         })
     },
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
-    aiTopicsForQuestion: (question_id) =>
-      request('POST', '/api/import/ai-topics', { question_id }),
+    aiTopicsForQuestion: (question_id, signal) =>
+      request('POST', '/api/import/ai-topics', { question_id }, signal),
     saveTopics: (paper_id, question_topics) =>
       request('POST', '/api/import/save-topics', { paper_id, question_topics }),
     deletePaper: (paper_id) =>
