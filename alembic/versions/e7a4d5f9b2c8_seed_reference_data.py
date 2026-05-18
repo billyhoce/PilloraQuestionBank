@@ -304,6 +304,13 @@ TOPICS: list[dict] = [
     },
     {
         "number": 18,
+        "name": "Circles",
+        "subtopics": [
+            "Properties of circles",
+        ],
+    },
+    {
+        "number": 19,
         "name": "Construction",
         "subtopics": [
             "Construct Triangle/Quadrilaterals",
@@ -311,25 +318,7 @@ TOPICS: list[dict] = [
         ],
     },
     {
-        "number": 19,
-        "name": "Congruence and Similarity",
-        "subtopics": [
-            "Properties of similar triangles and polygons: corresponding angles are equal, corresponding sides are proportional",
-            "Understand Enlargement and reduction of a plane figure",
-            "scale drawwings (drawing same shape with lengths changed by the same ratio)",
-            "Determine whether two triangles are congruent or similar using Congruence/Similarity Tests",
-            "Ratio of similar figures/solids (area, volume)",
-        ],
-    },
-    {
         "number": 20,
-        "name": "Circles",
-        "subtopics": [
-            "Properties of circles",
-        ],
-    },
-    {
-        "number": 21,
         "name": "Pythagoras' Theorem and Trigonometry",
         "subtopics": [
             "Pythagoras' Theorem",
@@ -339,6 +328,17 @@ TOPICS: list[dict] = [
             "Use the formula for the area of a triangle",
             "Use sine rule and cosine rule for any triangle",
             "Solve problems in two and three dimensions including those involving angles of elevation and depression and bearings",
+        ],
+    },
+    {
+        "number": 21,
+        "name": "Congruence and Similarity",
+        "subtopics": [
+            "Properties of similar triangles and polygons: corresponding angles are equal, corresponding sides are proportional",
+            "Understand Enlargement and reduction of a plane figure",
+            "scale drawwings (drawing same shape with lengths changed by the same ratio)",
+            "Determine whether two triangles are congruent or similar using Congruence/Similarity Tests",
+            "Ratio of similar figures/solids (area, volume)",
         ],
     },
     {
