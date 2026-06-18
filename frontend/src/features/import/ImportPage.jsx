@@ -83,6 +83,7 @@ export default function ImportPage() {
   const [uploadError, setUploadError] = useState(null)
   const [appendLoading, setAppendLoading] = useState(false)
   const [appendError, setAppendError] = useState(null)
+  const [appendDragging, setAppendDragging] = useState(false)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [confirmError, setConfirmError] = useState(null)
 
@@ -164,6 +165,22 @@ export default function ImportPage() {
     }
   }
 
+  function handleAppendDragOver(e) {
+    e.preventDefault()
+    setAppendDragging(true)
+  }
+
+  function handleAppendDragLeave() {
+    setAppendDragging(false)
+  }
+
+  function handleAppendDrop(e) {
+    e.preventDefault()
+    setAppendDragging(false)
+    const pdfs = Array.from(e.dataTransfer.files).filter((f) => f.type === 'application/pdf')
+    if (pdfs.length > 0) handleAppend(pdfs)
+  }
+
   function handleToggleMerge(idx) {
     setPages((prev) => prev.map((p, i) => (i === idx ? { ...p, mergeWithPrev: !p.mergeWithPrev } : p)))
   }
@@ -234,7 +251,12 @@ export default function ImportPage() {
     const aPages = dividerIdx !== null ? pages.slice(dividerIdx) : []
     return (
       <div className="flex items-start gap-0">
-        <div className="flex-1 min-w-0">
+        <div
+          className={`flex-1 min-w-0 ${appendDragging ? 'ring-2 ring-blue-400 ring-dashed rounded' : ''}`}
+          onDragOver={handleAppendDragOver}
+          onDragLeave={handleAppendDragLeave}
+          onDrop={handleAppendDrop}
+        >
           <div className="px-4 pt-3 pb-0 flex items-center gap-3">
             <button
               type="button"

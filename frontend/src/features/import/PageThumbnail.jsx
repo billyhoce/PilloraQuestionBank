@@ -1,7 +1,7 @@
 export default function PageThumbnail({ page, label, canMerge, onToggleMerge, onOpenLightbox }) {
   return (
     <div
-      className={`flex-shrink-0 w-44 flex flex-col rounded border-2 bg-white overflow-hidden ${
+      className={`w-full flex flex-col rounded border-2 bg-white overflow-hidden ${
         page.mergeWithPrev ? 'border-blue-400' : 'border-gray-200'
       }`}
     >
