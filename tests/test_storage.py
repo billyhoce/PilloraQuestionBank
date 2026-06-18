@@ -4,7 +4,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from app.storage.s3_client import (
-    copy_object,
+    copy_only,
     delete_object,
     get_presigned_url,
     put_image,
@@ -41,18 +41,17 @@ def test_get_presigned_url_contains_expiry_param(mock_s3):
     assert "X-Amz-Expires" in url or "Expires" in url
 
 
-def test_copy_object_moves_temp_to_canonical(mock_s3):
+def test_copy_only_copies_leaving_source(mock_s3):
     src = "tmp/upload-123/page_0.webp"
     dst = "papers/5/q1/question_0.webp"
     mock_s3.put_object(Bucket=_BUCKET, Key=src, Body=_DATA)
 
-    copy_object(src, dst)
+    copy_only(src, dst)
 
     # Destination exists
     mock_s3.head_object(Bucket=_BUCKET, Key=dst)
-    # Source should be deleted by copy_object (move semantics)
-    with pytest.raises(ClientError):
-        mock_s3.head_object(Bucket=_BUCKET, Key=src)
+    # Source is left in place (copy, not move)
+    mock_s3.head_object(Bucket=_BUCKET, Key=src)
 
 
 def test_delete_object_removes_key(mock_s3):

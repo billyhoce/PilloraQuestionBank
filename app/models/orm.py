@@ -71,7 +71,7 @@ class Topic(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     subject_id: Mapped[int] = mapped_column(ForeignKey("subject.id", ondelete="RESTRICT"), nullable=False)
     stream_id: Mapped[int] = mapped_column(ForeignKey("stream.id", ondelete="RESTRICT"), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
     topic_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
     subject: Mapped[Subject] = relationship()
@@ -85,7 +85,7 @@ class Subtopic(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topic.id", ondelete="CASCADE"), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
 
     topic: Mapped[Topic] = relationship(back_populates="subtopics")
 
@@ -120,6 +120,12 @@ class Paper(Base):
     )
 
     questions: Mapped[list["Question"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+
+    subject:   Mapped["Subject"]   = relationship()
+    stream:    Mapped["Stream"]    = relationship()
+    level:     Mapped["Level"]     = relationship()
+    school:    Mapped["School"]    = relationship()
+    exam_type: Mapped["ExamType"]  = relationship()
 
 
 class Question(Base):
@@ -163,13 +169,9 @@ class QuestionTopic(Base):
     question_id: Mapped[int] = mapped_column(
         ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
     )
-    topic_id: Mapped[int] = mapped_column(
-        ForeignKey("topic.id", ondelete="RESTRICT"), primary_key=True
-    )
-    subtopic_id: Mapped[int | None] = mapped_column(
-        ForeignKey("subtopic.id", ondelete="SET NULL"), nullable=True
+    subtopic_id: Mapped[int] = mapped_column(
+        ForeignKey("subtopic.id", ondelete="CASCADE"), primary_key=True
     )
 
     question: Mapped[Question] = relationship(back_populates="topics")
-    topic: Mapped[Topic] = relationship()
-    subtopic: Mapped[Subtopic | None] = relationship()
+    subtopic: Mapped[Subtopic] = relationship()

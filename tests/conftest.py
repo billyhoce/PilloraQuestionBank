@@ -1,14 +1,14 @@
 import io
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Must be before any app imports — db.py reads DATABASE_URL at import time
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# Force SQLite regardless of .env — unit tests must never hit real Postgres
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
-os.environ.setdefault("S3_BUCKET", "test-bucket")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 from datetime import datetime
 
@@ -62,9 +62,16 @@ def db_engine():
 
     @event.listens_for(engine, "connect")
     def enable_fk(dbapi_conn, _record):
+        # Disable pysqlite's implicit BEGIN so SAVEPOINT-based test isolation
+        # works; SQLAlchemy emits BEGIN itself via the "begin" handler below.
+        dbapi_conn.isolation_level = None
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+
+    @event.listens_for(engine, "begin")
+    def do_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 
     Base.metadata.create_all(engine)
     yield engine
@@ -73,11 +80,23 @@ def db_engine():
 
 @pytest.fixture
 def db_session(db_engine):
-    """Function-scoped session; every test is rolled back on teardown."""
-    with Session(db_engine) as session:
-        session.begin()
+    """Function-scoped session; every test is rolled back on teardown.
+
+    The session is bound to a single connection wrapped in an outer
+    transaction, with ``join_transaction_mode="create_savepoint"`` so that
+    ``commit()`` calls made by the code under test land on a SAVEPOINT instead
+    of the real transaction. Teardown rolls the outer transaction back, keeping
+    every test isolated even though production code paths now commit.
+    """
+    connection = db_engine.connect()
+    trans = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
-        session.rollback()
+    finally:
+        session.close()
+        trans.rollback()
+        connection.close()
 
 
 @pytest.fixture
@@ -145,10 +164,21 @@ def public_client(client, public_user):
 @pytest.fixture
 def mock_s3():
     """Mocked AWS S3 with a pre-created test bucket."""
-    with mock_aws():
-        s3 = boto3.client("s3", region_name="us-east-1")
-        s3.create_bucket(Bucket=_S3_BUCKET)
-        yield s3
+    old_endpoint = os.environ.pop("S3_ENDPOINT_URL", None)
+    old_bucket = os.environ.get("S3_BUCKET")
+    os.environ["S3_BUCKET"] = _S3_BUCKET
+    try:
+        with mock_aws():
+            s3 = boto3.client("s3", region_name="us-east-1")
+            s3.create_bucket(Bucket=_S3_BUCKET)
+            yield s3
+    finally:
+        if old_endpoint is not None:
+            os.environ["S3_ENDPOINT_URL"] = old_endpoint
+        if old_bucket is not None:
+            os.environ["S3_BUCKET"] = old_bucket
+        else:
+            os.environ.pop("S3_BUCKET", None)
 
 
 # ---------------------------------------------------------------------------

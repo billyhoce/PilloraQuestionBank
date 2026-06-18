@@ -2,12 +2,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
 from app.models.orm import (
     ExamType,
     Level,
+    Paper,
     School,
     SchoolLevel,
     Stream,
@@ -31,6 +32,7 @@ from app.schemas.reference import (
     SubtopicResponse,
     TopicRequest,
     TopicResponse,
+    TopicWithSubtopicsResponse,
 )
 
 router = APIRouter(prefix="/api", tags=["reference"])
@@ -373,12 +375,13 @@ def delete_exam_type(exam_type_id: int, db: Session = Depends(get_db), _: User =
 
 @router.get("/topics")
 def list_topics(subject_id: Optional[int] = None, stream_id: Optional[int] = None, db: Session = Depends(get_db)):
-    q = db.query(Topic)
+    q = db.query(Topic).options(joinedload(Topic.subtopics))
     if subject_id is not None:
         q = q.filter(Topic.subject_id == subject_id)
     if stream_id is not None:
         q = q.filter(Topic.stream_id == stream_id)
-    return {"data": q.all()}
+    topics = q.order_by(Topic.topic_number).all()
+    return {"data": [TopicWithSubtopicsResponse.model_validate(t) for t in topics]}
 
 
 @router.get("/topics/{topic_id}", response_model=TopicResponse)
@@ -485,3 +488,26 @@ def delete_subtopic(subtopic_id: int, db: Session = Depends(get_db), _: User = D
     if obj is None:
         _not_found("Subtopic")
     _delete_with_fk_guard(db, obj, "subtopic")
+
+
+# ---------------------------------------------------------------------------
+# Paper years (distinct years across papers, optionally filtered)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/papers/years")
+def list_paper_years(
+    subject_id: Optional[int] = None,
+    stream_id: Optional[int] = None,
+    level_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Paper.year).distinct()
+    if subject_id is not None:
+        q = q.filter(Paper.subject_id == subject_id)
+    if stream_id is not None:
+        q = q.filter(Paper.stream_id == stream_id)
+    if level_id is not None:
+        q = q.filter(Paper.level_id == level_id)
+    years = [row[0] for row in q.order_by(Paper.year.desc()).all()]
+    return {"data": years}

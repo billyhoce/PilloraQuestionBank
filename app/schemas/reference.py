@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _orm = {"from_attributes": True}
 
@@ -82,4 +82,14 @@ class SubtopicResponse(BaseModel):
     id: int
     topic_id: int
     name: str
+    model_config = _orm
+
+
+class TopicWithSubtopicsResponse(BaseModel):
+    id: int
+    subject_id: int
+    stream_id: int
+    name: str
+    topic_number: int
+    subtopics: list[SubtopicResponse] = Field(default_factory=list)
     model_config = _orm

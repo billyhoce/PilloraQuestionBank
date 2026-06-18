@@ -56,13 +56,13 @@ def _add_page(db_session, question, page_type="question") -> QuestionPage:
 
 
 # ---------------------------------------------------------------------------
-# Auth guard
+# Public access (no auth required)
 # ---------------------------------------------------------------------------
 
 
-def test_list_questions_requires_auth(client):
+def test_list_questions_is_public(client):
     resp = client.get("/api/questions")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -131,41 +131,111 @@ def test_list_questions_filter_by_year(public_client, db_session, reference_data
     assert resp.json()["total"] == 1
 
 
-def test_list_questions_filter_by_topic_id(public_client, db_session, reference_data, admin_user):
+def test_list_questions_filter_by_topic_ids(public_client, db_session, reference_data, admin_user):
+    """topic_ids filter matches any question whose subtopic belongs to one of the listed topics."""
     paper = _add_paper(db_session, reference_data, admin_user)
     q_with_topic = _add_question(db_session, paper, number=1)
     q_no_topic = _add_question(db_session, paper, number=2)
 
-    qt = QuestionTopic(question_id=q_with_topic.id, topic_id=reference_data["topic"].id)
+    qt = QuestionTopic(question_id=q_with_topic.id, subtopic_id=reference_data["subtopic"].id)
     db_session.add(qt)
     db_session.flush()
 
-    resp = public_client.get(f"/api/questions?topic_id={reference_data['topic'].id}")
+    resp = public_client.get(f"/api/questions?topic_ids={reference_data['topic'].id}")
     assert resp.status_code == 200
     ids = [q["id"] for q in resp.json()["items"]]
     assert q_with_topic.id in ids
     assert q_no_topic.id not in ids
 
 
-def test_list_questions_filter_by_subtopic_id(public_client, db_session, reference_data, admin_user):
-    paper = _add_paper(db_session, reference_data, admin_user)
-    q_with_sub = _add_question(db_session, paper, number=1)
-    q_without_sub = _add_question(db_session, paper, number=2)
+def test_list_questions_filter_by_topic_ids_inclusive_union(public_client, db_session, reference_data, admin_user):
+    """Multiple topic_ids should be OR-combined (inclusive) by default."""
+    from app.models.orm import Topic, Subtopic
+    rd = reference_data
+    paper = _add_paper(db_session, rd, admin_user)
 
-    qt1 = QuestionTopic(
-        question_id=q_with_sub.id,
-        topic_id=reference_data["topic"].id,
-        subtopic_id=reference_data["subtopic"].id,
-    )
-    qt2 = QuestionTopic(question_id=q_without_sub.id, topic_id=reference_data["topic"].id)
-    db_session.add_all([qt1, qt2])
+    topic_b = Topic(subject_id=rd["subject"].id, stream_id=rd["stream"].id, name="Geometry", topic_number=2)
+    db_session.add(topic_b)
+    db_session.flush()
+    sub_b = Subtopic(topic_id=topic_b.id, name="Circles")
+    db_session.add(sub_b)
     db_session.flush()
 
-    resp = public_client.get(f"/api/questions?subtopic_id={reference_data['subtopic'].id}")
+    q_a = _add_question(db_session, paper, number=1)
+    q_b = _add_question(db_session, paper, number=2)
+    q_none = _add_question(db_session, paper, number=3)
+    db_session.add_all([
+        QuestionTopic(question_id=q_a.id, subtopic_id=rd["subtopic"].id),
+        QuestionTopic(question_id=q_b.id, subtopic_id=sub_b.id),
+    ])
+    db_session.flush()
+
+    resp = public_client.get(
+        f"/api/questions?topic_ids={rd['topic'].id}&topic_ids={topic_b.id}"
+    )
     assert resp.status_code == 200
     ids = [q["id"] for q in resp.json()["items"]]
-    assert q_with_sub.id in ids
-    assert q_without_sub.id not in ids
+    assert q_a.id in ids
+    assert q_b.id in ids
+    assert q_none.id not in ids
+
+
+def test_list_questions_exclusive_topic_filter(public_client, db_session, reference_data, admin_user):
+    """exclusive=true keeps only questions whose topic set is a subset of the selection."""
+    from app.models.orm import Topic, Subtopic
+    rd = reference_data
+    paper = _add_paper(db_session, rd, admin_user)
+
+    topic_b = Topic(subject_id=rd["subject"].id, stream_id=rd["stream"].id, name="Geometry", topic_number=2)
+    db_session.add(topic_b)
+    db_session.flush()
+    sub_b = Subtopic(topic_id=topic_b.id, name="Circles")
+    db_session.add(sub_b)
+    db_session.flush()
+
+    q_only_a = _add_question(db_session, paper, number=1)
+    q_a_and_b = _add_question(db_session, paper, number=2)
+    db_session.add_all([
+        QuestionTopic(question_id=q_only_a.id, subtopic_id=rd["subtopic"].id),
+        QuestionTopic(question_id=q_a_and_b.id, subtopic_id=rd["subtopic"].id),
+        QuestionTopic(question_id=q_a_and_b.id, subtopic_id=sub_b.id),
+    ])
+    db_session.flush()
+
+    # Inclusive (default): both questions match topic A
+    resp = public_client.get(f"/api/questions?topic_ids={rd['topic'].id}")
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_only_a.id in ids
+    assert q_a_and_b.id in ids
+
+    # Exclusive: only the question whose topics are entirely within {A}
+    resp = public_client.get(f"/api/questions?topic_ids={rd['topic'].id}&exclusive=true")
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_only_a.id in ids
+    assert q_a_and_b.id not in ids
+
+
+def test_list_questions_subtopic_keyword(public_client, db_session, reference_data, admin_user):
+    from app.models.orm import Subtopic
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q_match = _add_question(db_session, paper, number=1)
+    q_other = _add_question(db_session, paper, number=2)
+
+    other_sub = Subtopic(topic_id=reference_data["topic"].id, name="Quadratic Equations")
+    db_session.add(other_sub)
+    db_session.flush()
+
+    db_session.add_all([
+        QuestionTopic(question_id=q_match.id, subtopic_id=reference_data["subtopic"].id),
+        QuestionTopic(question_id=q_other.id, subtopic_id=other_sub.id),
+    ])
+    db_session.flush()
+
+    resp = public_client.get("/api/questions?subtopic_keyword=linear")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_match.id in ids
+    assert q_other.id not in ids
 
 
 def test_list_questions_multi_filter_conjunction(public_client, db_session, reference_data, admin_user):
@@ -251,7 +321,6 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
     q = _add_question(db_session, paper)
     qt = QuestionTopic(
         question_id=q.id,
-        topic_id=reference_data["topic"].id,
         subtopic_id=reference_data["subtopic"].id,
     )
     db_session.add(qt)

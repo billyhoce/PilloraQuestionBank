@@ -8,6 +8,7 @@ function friendlyMessage(status, isDelete, detail) {
   if (status === 401) return 'Your session has expired. Please log in again.'
   if (status === 403) return 'Admin access required.'
   if (status === 409) {
+    if (detail) return detail
     if (isDelete) return 'Cannot delete — this item is still in use by other data.'
     return 'This name already exists.'
   }
@@ -16,7 +17,7 @@ function friendlyMessage(status, isDelete, detail) {
   return detail || 'An unexpected error occurred.'
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, signal) {
   const isDelete = method === 'DELETE'
   const opts = {
     method,
@@ -24,6 +25,7 @@ async function request(method, path, body) {
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
+  if (signal !== undefined) opts.signal = signal
 
   const res = await fetch(path, opts)
 
@@ -50,6 +52,29 @@ async function request(method, path, body) {
 }
 
 export const api = {
+  import: {
+    uploadPdf: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return fetch('/api/import/upload-pdf', { method: 'POST', credentials: 'include', body: form })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+            throw { status: res.status, message: data?.detail || 'Upload failed' }
+          }
+          return res.json()
+        })
+    },
+    confirm: (payload) => request('POST', '/api/import/confirm', payload),
+    aiTopicsForQuestion: (question_id, signal) =>
+      request('POST', '/api/import/ai-topics', { question_id }, signal),
+    saveTopics: (paper_id, question_topics) =>
+      request('POST', '/api/import/save-topics', { paper_id, question_topics }),
+    deletePaper: (paper_id) =>
+      request('DELETE', `/api/import/papers/${paper_id}`),
+  },
+
   auth: {
     me: () => request('GET', '/api/auth/me'),
     login: (email, password) => request('POST', '/api/auth/login', { email, password }),
@@ -116,5 +141,77 @@ export const api = {
     create: (topic_id, name) => request('POST', '/api/subtopics', { topic_id, name }),
     update: (id, topic_id, name) => request('PUT', `/api/subtopics/${id}`, { topic_id, name }),
     delete: (id) => request('DELETE', `/api/subtopics/${id}`),
+  },
+
+  questions: {
+    list: (filters = {}, signal) => {
+      const params = new URLSearchParams()
+      const append = (k, v) => {
+        if (v === undefined || v === null || v === '') return
+        params.append(k, v)
+      }
+      append('subject_id', filters.subject_id)
+      append('stream_id', filters.stream_id)
+      append('level_id', filters.level_id)
+      append('school_id', filters.school_id)
+      append('exam_type_id', filters.exam_type_id)
+      append('year', filters.year)
+      append('subtopic_keyword', filters.subtopic_keyword)
+      if (filters.exclusive) params.append('exclusive', 'true')
+      for (const id of filters.topic_ids || []) params.append('topic_ids', id)
+      append('page', filters.page ?? 1)
+      append('page_size', filters.page_size ?? 50)
+      const qs = params.toString()
+      return request('GET', `/api/questions${qs ? `?${qs}` : ''}`, undefined, signal)
+    },
+    get: (id, signal) => request('GET', `/api/questions/${id}`, undefined, signal),
+  },
+
+  papers: {
+    years: ({ subject_id, stream_id, level_id } = {}) => {
+      const params = new URLSearchParams()
+      if (subject_id) params.append('subject_id', subject_id)
+      if (stream_id) params.append('stream_id', stream_id)
+      if (level_id) params.append('level_id', level_id)
+      const qs = params.toString()
+      return request('GET', `/api/papers/years${qs ? `?${qs}` : ''}`).then(r => r.data)
+    },
+
+    list: (filters = {}) => {
+      const params = new URLSearchParams()
+      const append = (k, v) => {
+        if (v === undefined || v === null || v === '') return
+        params.append(k, v)
+      }
+      append('subject_id', filters.subject_id)
+      append('stream_id', filters.stream_id)
+      append('level_id', filters.level_id)
+      append('school_id', filters.school_id)
+      append('exam_type_id', filters.exam_type_id)
+      append('year', filters.year)
+      append('page', filters.page ?? 1)
+      append('page_size', filters.page_size ?? 50)
+      const qs = params.toString()
+      return request('GET', `/api/papers${qs ? `?${qs}` : ''}`)
+    },
+    get: (id) => request('GET', `/api/papers/${id}`),
+    update: (id, metadata) => request('PUT', `/api/papers/${id}`, metadata),
+    remove: (id) => request('DELETE', `/api/papers/${id}`),
+    addQuestion: (paperId, payload) => request('POST', `/api/papers/${paperId}/questions`, payload),
+    updateQuestion: (questionId, payload) => request('PUT', `/api/questions/${questionId}`, payload),
+    deleteQuestion: (questionId) => request('DELETE', `/api/questions/${questionId}`),
+    uploadImage: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return fetch('/api/papers/upload-image', { method: 'POST', credentials: 'include', body: form })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+            throw { status: res.status, message: data?.detail || 'Image upload failed' }
+          }
+          return res.json()
+        })
+    },
   },
 }

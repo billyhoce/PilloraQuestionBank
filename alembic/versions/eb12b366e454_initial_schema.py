@@ -93,7 +93,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('subject_id', sa.Integer(), nullable=False),
     sa.Column('stream_id', sa.Integer(), nullable=False),
-    sa.Column('name', sa.String(length=128), nullable=False),
+    sa.Column('name', sa.String(length=512), nullable=False),
     sa.Column('topic_number', sa.Integer(), nullable=False),
     sa.ForeignKeyConstraint(['stream_id'], ['stream.id'], ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['subject_id'], ['subject.id'], ondelete='RESTRICT'),
@@ -112,7 +112,7 @@ def upgrade() -> None:
     op.create_table('subtopic',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('topic_id', sa.Integer(), nullable=False),
-    sa.Column('name', sa.String(length=128), nullable=False),
+    sa.Column('name', sa.String(length=512), nullable=False),
     sa.ForeignKeyConstraint(['topic_id'], ['topic.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('topic_id', 'name', name='uq_subtopic_topic_name')
@@ -133,12 +133,10 @@ def upgrade() -> None:
     )
     op.create_table('question_topic',
     sa.Column('question_id', sa.Integer(), nullable=False),
-    sa.Column('topic_id', sa.Integer(), nullable=False),
-    sa.Column('subtopic_id', sa.Integer(), nullable=True),
+    sa.Column('subtopic_id', sa.Integer(), nullable=False),
     sa.ForeignKeyConstraint(['question_id'], ['question.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['subtopic_id'], ['subtopic.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['topic_id'], ['topic.id'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('question_id', 'topic_id')
+    sa.ForeignKeyConstraint(['subtopic_id'], ['subtopic.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('question_id', 'subtopic_id')
     )
     # ### end Alembic commands ###
 
