@@ -7,6 +7,8 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import ReferencePage from './pages/admin/ReferencePage'
 import ImportPage from './pages/admin/ImportPage'
+import PapersPage from './pages/admin/PapersPage'
+import PaperEditorPage from './pages/admin/PaperEditorPage'
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
             <Route element={<AppShell />}>
               <Route path="/admin/reference" element={<ReferencePage />} />
               <Route path="/admin/import" element={<ImportPage />} />
+              <Route path="/admin/papers" element={<PapersPage />} />
+              <Route path="/admin/papers/:id" element={<PaperEditorPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

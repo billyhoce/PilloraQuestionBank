@@ -5,6 +5,7 @@ const navLinks = [
   { to: '/', label: 'Question Bank' },
   { to: '/admin/reference', label: 'Reference' },
   { to: '/admin/import', label: 'Import' },
+  { to: '/admin/papers', label: 'Papers' },
 ]
 
 export default function AppShell() {
@@ -23,19 +24,24 @@ export default function AppShell() {
         <div className="flex items-center gap-6">
           <span className="text-lg font-semibold text-gray-900">Pillora Admin</span>
           <nav className="flex items-center gap-1">
-            {navLinks.map(({ to, label }) => (
-              <Link
-                key={to}
-                to={to}
-                className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                  location.pathname === to
-                    ? 'bg-gray-100 text-gray-900 font-medium'
-                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-                }`}
-              >
-                {label}
-              </Link>
-            ))}
+            {navLinks.map(({ to, label }) => {
+              const active =
+                location.pathname === to ||
+                (to !== '/' && location.pathname.startsWith(`${to}/`))
+              return (
+                <Link
+                  key={to}
+                  to={to}
+                  className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                    active
+                      ? 'bg-gray-100 text-gray-900 font-medium'
+                      : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  {label}
+                </Link>
+              )
+            })}
           </nav>
         </div>
         <div className="flex items-center gap-4">
