@@ -1,5 +1,6 @@
 from typing import Optional
 
+import anthropic
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -183,9 +184,22 @@ def ai_topics(
             t_ds += _t.elapsed
         log.info(f"{'ai_topics':<22}| downscale | {t_ds:.3f}s  ({n} pages)")
 
-        with Timer() as t_label:
-            suggestions = label_question(question, topics, image_bytes_list)
-        log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+        try:
+            with Timer() as t_label:
+                suggestions = label_question(question, topics, image_bytes_list)
+            log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+        except anthropic.RateLimitError as e:
+            log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
+            raise HTTPException(
+                status_code=429,
+                detail="AI topic labeling is rate limited — please retry in a moment.",
+            )
+        except anthropic.APIError as e:
+            log.error(f"{'ai_topics':<22}| api_error | question_id={payload.question_id} {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="AI topic labeling is temporarily unavailable — please retry.",
+            )
 
     log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
     return {"suggestions": suggestions}

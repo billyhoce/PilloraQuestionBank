@@ -60,6 +60,10 @@ def _make_mock_response(subtopic_ids: list):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock()]
     mock_resp.content[0].input = {"subtopic_ids": subtopic_ids}
+    mock_resp.usage.input_tokens = 100
+    mock_resp.usage.output_tokens = 20
+    mock_resp.usage.cache_creation_input_tokens = 0
+    mock_resp.usage.cache_read_input_tokens = 0
     return mock_resp
 
 

@@ -3,6 +3,8 @@ import io
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 from PIL import Image
 from sqlalchemy.orm import Session
@@ -391,6 +393,45 @@ def test_ai_topics_excludes_topics_with_no_subtopics(admin_client, mock_s3, samp
     sent_ids = {t["id"] for t in captured["topics"]}
     assert bare.id not in sent_ids
     assert rd["topic"].id in sent_ids
+
+
+def _rate_limit_error():
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(429, request=request)
+    return anthropic.RateLimitError("rate limited", response=response, body=None)
+
+
+def _api_connection_error():
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.APIConnectionError(request=request)
+
+
+def test_ai_topics_rate_limit_returns_429(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    q = sample_paper.questions[0]
+    with (
+        patch("app.routes.ingest.label_question", side_effect=_rate_limit_error()),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
+        patch("app.routes.ingest.log") as mock_log,
+    ):
+        resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
+
+    assert resp.status_code == 429
+    assert mock_log.error.called
+
+
+def test_ai_topics_api_error_returns_503(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    q = sample_paper.questions[0]
+    with (
+        patch("app.routes.ingest.label_question", side_effect=_api_connection_error()),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
+        patch("app.routes.ingest.log") as mock_log,
+    ):
+        resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
+
+    assert resp.status_code == 503
+    assert mock_log.error.called
 
 
 # ---------------------------------------------------------------------------
