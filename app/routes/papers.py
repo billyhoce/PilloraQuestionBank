@@ -23,6 +23,7 @@ from app.routes.questions import _paper_info
 from app.services.ingest import delete_paper
 from app.services.paper_admin import (
     apply_page_changes,
+    commit_with_page_moves,
     create_question,
     delete_question,
     update_paper,
@@ -306,6 +307,9 @@ def delete_paper_route(
     db: Session = Depends(get_db),
 ):
     image_keys = delete_paper(paper_id, db)
+    # Commit the DB deletion before performing irreversible S3 deletions, so a
+    # failed commit can't leave paper rows pointing at already-deleted images.
+    db.commit()
     for key in image_keys:
         try:
             delete_object(key)
@@ -332,7 +336,7 @@ def add_question_route(
     _ensure_unique_question_number(db, paper.id, payload.question_number)
     _validate_pages(payload.pages, allow_existing=False)
 
-    question = create_question(
+    question, new_pairs = create_question(
         paper,
         {
             "question_number": payload.question_number,
@@ -343,6 +347,7 @@ def add_question_route(
     )
     _set_topics(db, question.id, payload.subtopic_ids, paper.subject_id, paper.stream_id)
     db.flush()
+    commit_with_page_moves(db, new_pairs)
     return _serialize_question(_reload_question(question.id, db))
 
 
@@ -371,17 +376,12 @@ def update_question_route(
     question.question_number = payload.question_number
     question.marks = payload.marks
 
-    removed_keys = apply_page_changes(
+    removed_keys, new_pairs = apply_page_changes(
         paper.id, question, [p.model_dump() for p in payload.pages], db
     )
     _set_topics(db, question.id, payload.subtopic_ids, paper.subject_id, paper.stream_id)
     db.flush()
-
-    for key in removed_keys:
-        try:
-            delete_object(key)
-        except Exception:
-            pass
+    commit_with_page_moves(db, new_pairs, removed_keys)
 
     return _serialize_question(_reload_question(question.id, db))
 
@@ -395,6 +395,9 @@ def delete_question_route(
     image_keys = delete_question(question_id, db)
     if image_keys is None:
         raise HTTPException(status_code=404, detail="Question not found")
+    # Commit the DB deletion before performing irreversible S3 deletions, so a
+    # failed commit can't leave question rows pointing at already-deleted images.
+    db.commit()
     for key in image_keys:
         try:
             delete_object(key)

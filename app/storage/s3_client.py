@@ -24,15 +24,14 @@ def get_presigned_url(key: str, expires_in: int = 3600) -> str:
     )
 
 
-def copy_object(src_key: str, dst_key: str) -> None:
+def copy_only(src_key: str, dst_key: str) -> None:
+    """Server-side copy that leaves the source object in place."""
     bucket = os.environ["S3_BUCKET"]
-    client = _get_client()
-    client.copy_object(
+    _get_client().copy_object(
         Bucket=bucket,
         CopySource={"Bucket": bucket, "Key": src_key},
         Key=dst_key,
     )
-    client.delete_object(Bucket=bucket, Key=src_key)
 
 
 def delete_object(key: str) -> None:

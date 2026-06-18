@@ -257,6 +257,9 @@ def delete_paper_route(
     db: Session = Depends(get_db),
 ):
     image_keys = delete_paper(paper_id, db)
+    # Commit the DB deletion before performing irreversible S3 deletions, so a
+    # failed commit can't leave paper rows pointing at already-deleted images.
+    db.commit()
     for key in image_keys:
         try:
             delete_object(key)

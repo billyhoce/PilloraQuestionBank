@@ -6,7 +6,7 @@ import boto3
 import pytest
 from botocore.exceptions import ClientError
 
-from app.storage.s3_client import _get_client, copy_object, delete_object, get_image_bytes, put_image
+from app.storage.s3_client import _get_client, copy_only, delete_object, get_image_bytes, put_image
 
 
 @pytest.fixture
@@ -32,19 +32,18 @@ def test_put_and_get(s3_prefix):
     assert get_image_bytes(key) == data
 
 
-def test_copy_object_moves_key(s3_prefix):
-    """copy_object moves src to dst and deletes src."""
+def test_copy_only_copies_key(s3_prefix):
+    """copy_only copies src to dst and leaves src in place."""
     src = f"{s3_prefix}/src.webp"
     dst = f"{s3_prefix}/dst.webp"
     bucket = os.environ["S3_BUCKET"]
 
     put_image(src, b"data")
-    copy_object(src, dst)
+    copy_only(src, dst)
 
     client = _get_client()
     client.head_object(Bucket=bucket, Key=dst)
-    with pytest.raises(ClientError):
-        client.head_object(Bucket=bucket, Key=src)
+    client.head_object(Bucket=bucket, Key=src)
 
 
 def test_delete_object(s3_prefix):

@@ -57,6 +57,10 @@ def _make_fitz_doc(num_pages=1, width=200, height=300):
 
     mock_doc = MagicMock()
     mock_doc.__iter__ = MagicMock(return_value=iter([mock_page] * num_pages))
+    # pdf_to_images uses `with fitz.open(...) as doc`; real Documents return
+    # themselves from __enter__.
+    mock_doc.__enter__ = MagicMock(return_value=mock_doc)
+    mock_doc.__exit__ = MagicMock(return_value=False)
     return mock_doc
 
 
@@ -187,6 +191,9 @@ def test_confirm_moves_images_to_canonical_s3_key(db_session, mock_s3, reference
     expected_key = f"papers/{paper.id}/q1/question_0.webp"
     # Canonical key must exist
     mock_s3.head_object(Bucket="test-bucket", Key=expected_key)
+    # Temp source is deleted once the DB commit makes the canonical copy durable.
+    with pytest.raises(mock_s3.exceptions.ClientError):
+        mock_s3.head_object(Bucket="test-bucket", Key=temp_key)
 
 
 def test_confirm_stores_width_and_height_on_question_page(db_session, mock_s3, reference_data, admin_user):
@@ -227,11 +234,58 @@ def test_confirm_rollback_on_s3_failure(db_session, mock_s3, reference_data, adm
         ],
     )
 
-    with patch("app.services.ingest.copy_object", side_effect=Exception("S3 error")):
+    with patch("app.services.ingest.copy_only", side_effect=Exception("S3 error")):
         with pytest.raises(Exception):
             confirm_import(payload=payload, created_by=admin_user, db=db_session)
 
     assert db_session.query(Paper).count() == 0
+    # The temp source must survive a failed import so it can be retried.
+    mock_s3.head_object(Bucket="test-bucket", Key=temp_key)
+
+
+def test_confirm_cleans_up_canonical_copies_on_partial_failure(db_session, mock_s3, reference_data, admin_user):
+    from app.storage.s3_client import copy_only as real_copy_only
+
+    temp0 = "tmp/upload-multi/page_0.webp"
+    temp1 = "tmp/upload-multi/page_1.webp"
+    mock_s3.put_object(Bucket="test-bucket", Key=temp0, Body=b"fake0")
+    mock_s3.put_object(Bucket="test-bucket", Key=temp1, Body=b"fake1")
+
+    payload = _make_confirm_payload(
+        reference_data,
+        admin_user,
+        questions=[
+            {
+                "question_number": 1,
+                "marks": 5,
+                "pages": [
+                    {"temp_key": temp0, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800},
+                    {"temp_key": temp1, "page_type": "answer", "page_order": 0, "width_px": 2480, "height_px": 400},
+                ],
+            }
+        ],
+    )
+
+    calls = {"n": 0}
+
+    def flaky_copy(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            real_copy_only(src, dst)  # first copy really lands in S3
+        else:
+            raise Exception("S3 error")  # second fails mid-way
+
+    with patch("app.services.ingest.copy_only", side_effect=flaky_copy):
+        with pytest.raises(Exception):
+            confirm_import(payload=payload, created_by=admin_user, db=db_session)
+
+    assert db_session.query(Paper).count() == 0
+    # Both temp sources survive, so the import stays retryable.
+    mock_s3.head_object(Bucket="test-bucket", Key=temp0)
+    mock_s3.head_object(Bucket="test-bucket", Key=temp1)
+    # The canonical copy written before the failure must be cleaned up (no orphan).
+    listing = mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])
+    assert [o["Key"] for o in listing if o["Key"].startswith("papers/")] == []
 
 
 # ---------------------------------------------------------------------------

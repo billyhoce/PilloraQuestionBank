@@ -9,15 +9,15 @@ from app.ai.filename_extractor import extract_metadata
 from app.logger import Timer, log
 from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
-from app.storage.s3_client import copy_object, delete_object, get_presigned_url, put_image
+from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
 
 def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     images = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=300)
-        images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            pix = page.get_pixmap(dpi=300)
+            images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
     return images
 
 
@@ -103,14 +103,40 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
                 pages_to_move.append((p_data["temp_key"], canonical_key))
 
         db.flush()
-
-        for temp_key, canonical_key in pages_to_move:
-            copy_object(temp_key, canonical_key)
-
-        return paper
     except Exception:
         db.rollback()
         raise
+
+    # Copy temp uploads to their canonical keys WITHOUT deleting the sources,
+    # then commit, then delete the sources. This keeps the S3 move transactional
+    # with the DB write:
+    #   - If a copy fails partway, or the commit fails, the temp sources are
+    #     still intact (so the import is retryable) and we delete any canonical
+    #     objects already written so they don't leak.
+    #   - Source deletion happens only after the DB is durable, so a failure
+    #     there can at worst orphan a temp object, never a committed paper.
+    copied_keys: list[str] = []
+    try:
+        for temp_key, canonical_key in pages_to_move:
+            copy_only(temp_key, canonical_key)
+            copied_keys.append(canonical_key)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for key in copied_keys:
+            try:
+                delete_object(key)
+            except Exception:
+                pass
+        raise
+
+    for temp_key, _ in pages_to_move:
+        try:
+            delete_object(temp_key)
+        except Exception:
+            pass
+
+    return paper
 
 
 def delete_paper(paper_id: int, db: Any) -> list[str]:

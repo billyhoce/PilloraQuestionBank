@@ -174,8 +174,8 @@ ReportLab is already in `requirements.txt`, in preference over FPDF2, for the pe
 - AWS SDK for Python — `boto3`. Implemented in `app/storage/s3_client.py`:
   - `put_image(key, bytes)` — used during import (`s3.put_object(..., ContentType="image/webp")`).
   - `get_presigned_url(key, expires_in)` — used whenever images are returned to the frontend.
-  - `copy_object(src_key, dst_key)` — server-side copy + delete, used to move temp upload images to their canonical key on confirm.
-  - `delete_object(key)` — used when a paper is deleted.
+  - `copy_only(src_key, dst_key)` — server-side copy that leaves the source in place. Import/edit flows copy temp uploads to their canonical key, commit the DB, and only then delete the temp sources, so a failed copy or commit leaves the temp uploads intact (retryable) and never orphans canonical objects.
+  - `delete_object(key)` — used when a paper/question/page is deleted; callers commit the DB deletion **before** removing objects, since S3 deletes are irreversible.
   - `get_image_bytes(key)` — fetches raw bytes for server-side use (AI topic labeling).
 - All keys follow the pattern documented in [DATA_MODEL.md](./DATA_MODEL.md#image-storage-conventions).
 - **Local dev:** `boto3` is pointed at an S3-compatible endpoint via the `S3_ENDPOINT_URL` env var (empty/unset in production) — same code path, no special-casing.

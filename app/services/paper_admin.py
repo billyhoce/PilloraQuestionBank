@@ -15,7 +15,7 @@ from PIL import Image
 
 from app.models.orm import Paper, Question, QuestionPage, QuestionTopic
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
-from app.storage.s3_client import copy_object, get_presigned_url, put_image
+from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
 # Temporary range used while shuffling page_order values around so the
 # unique(question_id, page_type, page_order) constraint is never violated
@@ -48,6 +48,45 @@ def _canonical_key(paper_id: int, question_number: int, page_type: str) -> str:
         f"papers/{paper_id}/q{question_number}"
         f"/{page_type}_{uuid.uuid4().hex[:8]}.webp"
     )
+
+
+def _delete_quietly(keys: Any) -> None:
+    """Best-effort delete of S3 objects; never raises."""
+    for key in keys:
+        try:
+            delete_object(key)
+        except Exception:
+            pass
+
+
+def commit_with_page_moves(
+    db: Any, new_pairs: list[tuple[str, str]], removed_keys: list[str] = []
+) -> None:
+    """Make a question-page edit durable, keeping S3 transactional with the DB.
+
+    ``new_pairs`` are ``(temp_key, canonical_key)`` for freshly uploaded pages
+    whose DB rows already reference ``canonical_key``. ``removed_keys`` are the
+    S3 keys of pages the edit deletes.
+
+    Copies temp → canonical (sources left in place), commits, then settles S3.
+    If a copy or the commit fails, the DB is rolled back and any canonical copy
+    already written is removed, so the temp sources stay intact and the edit is
+    retryable. Irreversible deletions (temp sources, removed pages) happen only
+    after the DB is durable.
+    """
+    copied: list[str] = []
+    try:
+        for temp_key, canonical_key in new_pairs:
+            copy_only(temp_key, canonical_key)
+            copied.append(canonical_key)
+        db.commit()
+    except Exception:
+        db.rollback()
+        _delete_quietly(copied)
+        raise
+
+    _delete_quietly(temp_key for temp_key, _ in new_pairs)
+    _delete_quietly(removed_keys)
 
 
 def update_paper(paper_id: int, data: dict, db: Any) -> Optional[Paper]:
@@ -86,10 +125,15 @@ def update_paper(paper_id: int, data: dict, db: Any) -> Optional[Paper]:
     return paper
 
 
-def create_question(paper: Paper, data: dict, db: Any) -> Question:
+def create_question(
+    paper: Paper, data: dict, db: Any
+) -> tuple[Question, list[tuple[str, str]]]:
     """Create a new question on a paper. Every page in ``data['pages']`` is a
-    freshly uploaded image referenced by ``temp_key``; images are moved from
-    their temp key to a canonical key."""
+    freshly uploaded image referenced by ``temp_key``.
+
+    Writes the DB rows (pointing at canonical keys) but does not touch S3;
+    returns the question and the ``(temp_key, canonical_key)`` pairs for the
+    caller to move via :func:`commit_with_page_moves`."""
     question = Question(
         paper_id=paper.id,
         question_number=data["question_number"],
@@ -98,12 +142,12 @@ def create_question(paper: Paper, data: dict, db: Any) -> Question:
     db.add(question)
     db.flush()
 
+    new_pairs: list[tuple[str, str]] = []
     counters: dict[str, int] = {}
     for p in data["pages"]:
         ptype = p["page_type"]
         counters[ptype] = counters.get(ptype, 0) + 1
         canonical = _canonical_key(paper.id, question.question_number, ptype)
-        copy_object(p["temp_key"], canonical)
         db.add(QuestionPage(
             question_id=question.id,
             page_order=counters[ptype],
@@ -112,14 +156,15 @@ def create_question(paper: Paper, data: dict, db: Any) -> Question:
             width_px=p["width_px"],
             height_px=p["height_px"],
         ))
+        new_pairs.append((p["temp_key"], canonical))
 
     db.flush()
-    return question
+    return question, new_pairs
 
 
 def apply_page_changes(
     paper_id: int, question: Question, desired: list[dict], db: Any
-) -> list[str]:
+) -> tuple[list[str], list[tuple[str, str]]]:
     """Reconcile a question's pages against the desired ordered list.
 
     Each desired page is either an existing page ``{id, page_type, page_order}``
@@ -128,7 +173,10 @@ def apply_page_changes(
     reorder without ever colliding on the unique (question_id, page_type,
     page_order) constraint.
 
-    Returns the S3 keys of removed pages for the caller to delete after commit.
+    Writes only the DB rows; returns ``(removed_keys, new_pairs)`` where
+    ``removed_keys`` are the S3 keys of removed pages and ``new_pairs`` are the
+    ``(temp_key, canonical_key)`` pairs of added pages, for the caller to settle
+    via :func:`commit_with_page_moves`.
     """
     existing = {p.id: p for p in question.pages}
     desired_ids = {d["id"] for d in desired if d.get("id") is not None}
@@ -157,10 +205,10 @@ def apply_page_changes(
         finals.append((d, counters[ptype]))
 
     # 3. Insert new pages directly at their final order (slots are free).
+    new_pairs: list[tuple[str, str]] = []
     for d, order in finals:
         if d.get("id") is None:
             canonical = _canonical_key(paper_id, question.question_number, d["page_type"])
-            copy_object(d["temp_key"], canonical)
             db.add(QuestionPage(
                 question_id=question.id,
                 page_order=order,
@@ -169,6 +217,7 @@ def apply_page_changes(
                 width_px=d["width_px"],
                 height_px=d["height_px"],
             ))
+            new_pairs.append((d["temp_key"], canonical))
     db.flush()
 
     # 4. Move survivors from the high range down to their final order. Each
@@ -180,7 +229,7 @@ def apply_page_changes(
             page.page_order = order
     db.flush()
 
-    return removed_keys
+    return removed_keys, new_pairs
 
 
 def delete_question(question_id: int, db: Any) -> Optional[list[str]]:

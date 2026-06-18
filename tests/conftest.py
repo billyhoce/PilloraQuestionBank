@@ -62,9 +62,16 @@ def db_engine():
 
     @event.listens_for(engine, "connect")
     def enable_fk(dbapi_conn, _record):
+        # Disable pysqlite's implicit BEGIN so SAVEPOINT-based test isolation
+        # works; SQLAlchemy emits BEGIN itself via the "begin" handler below.
+        dbapi_conn.isolation_level = None
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+
+    @event.listens_for(engine, "begin")
+    def do_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 
     Base.metadata.create_all(engine)
     yield engine
@@ -73,11 +80,23 @@ def db_engine():
 
 @pytest.fixture
 def db_session(db_engine):
-    """Function-scoped session; every test is rolled back on teardown."""
-    with Session(db_engine) as session:
-        session.begin()
+    """Function-scoped session; every test is rolled back on teardown.
+
+    The session is bound to a single connection wrapped in an outer
+    transaction, with ``join_transaction_mode="create_savepoint"`` so that
+    ``commit()`` calls made by the code under test land on a SAVEPOINT instead
+    of the real transaction. Teardown rolls the outer transaction back, keeping
+    every test isolated even though production code paths now commit.
+    """
+    connection = db_engine.connect()
+    trans = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    try:
         yield session
-        session.rollback()
+    finally:
+        session.close()
+        trans.rollback()
+        connection.close()
 
 
 @pytest.fixture
