@@ -45,7 +45,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 cd backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-cp .env.example .env                                  # fill in DATABASE_URL, AWS_*, S3_BUCKET, ANTHROPIC_API_KEY, JWT_SECRET
+cp .env.example .env                                  # fill in DATABASE_URL, AWS_*, S3_BUCKET, ANTHROPIC_API_KEY, JWT_SECRET_KEY
 alembic upgrade head                                  # apply migrations to dev DB
 python -m app.seed                                    # seed reference data (subjects, levels, ...)
 
@@ -67,7 +67,7 @@ cd frontend
 npm run dev                                           # Vite on :5173, proxies /api → :8000
 ```
 
-Visit `http://localhost:5173`. Vite's proxy is configured in `vite.config.ts` to forward `/api/*` to `http://localhost:8000`, so no CORS pain in dev.
+Visit `http://localhost:5173`. Vite's proxy is configured in `vite.config.js` to forward `/api/*` to `http://localhost:8000`, so no CORS pain in dev.
 
 ### Database Migrations
 
@@ -87,10 +87,10 @@ Migrations are auto-applied on deploy (see CD section).
 | Layer | Tool | Run |
 |---|---|---|
 | Backend unit + API | `pytest` + `httpx.AsyncClient` | `cd backend && pytest` |
-| Frontend unit | `vitest` + React Testing Library | `cd frontend && npm test` |
-| End-to-end (optional) | Playwright | `cd frontend && npm run e2e` |
-| Lint (Python) | `ruff` | `ruff check backend/` |
-| Lint (JS/TS) | `eslint` + `tsc --noEmit` | `npm run lint && npm run typecheck` |
+| Frontend unit | Not configured yet | — |
+| End-to-end (optional) | Not configured yet | — |
+| Lint (Python) | Not configured yet | — |
+| Lint (JS/TS) | `eslint` | `cd frontend && npm run lint` |
 
 **Worth investing in:**
 - PDF generation tests (golden-file: render a known selection, byte-compare or visual-diff the PDF).
@@ -118,9 +118,8 @@ GitHub Actions workflow at `.github/workflows/ci.yml`. Two parallel jobs:
 
 **Frontend job**
 1. `npm ci`
-2. `npm run lint && npm run typecheck`
-3. `npm test`
-4. `npm run build` (catches build-only errors)
+2. `npm run lint`
+3. `npm run build` (catches build-only errors)
 
 Target: PR feedback in <3 minutes. If it grows beyond 5 minutes, prune slow tests or parallelize.
 
@@ -163,7 +162,7 @@ Skip a dedicated staging environment for v1 — at this scale, a thorough PR rev
 - **CI:** GitHub Actions secrets (Settings → Secrets and variables → Actions).
 - **Production:** environment file loaded by the systemd unit (e.g. `/etc/pilloraqb/env`, mode `0600`, owned by the service user). Referenced via `EnvironmentFile=` in the unit.
 
-Never commit secrets. Rotate the Anthropic key and `JWT_SECRET` if a leak is even suspected.
+Never commit secrets. Rotate the Anthropic key and `JWT_SECRET_KEY` if a leak is even suspected.
 
 ### Observability (lightweight)
 

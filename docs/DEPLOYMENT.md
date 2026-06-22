@@ -48,7 +48,7 @@ A VM disk crash on Oracle Cloud's free tier would lose all data. Supabase provid
    - Create an IAM user scoped to `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on this bucket only. Note the access key + secret.
 4. **VM setup** — install:
    - Python 3.11+
-   - Poppler (for PDF→image conversion)
+   - (No Poppler needed; PDF rendering uses PyMuPDF in app dependencies)
    - Nginx
    - Certbot (Let's Encrypt)
 5. **Backend** — deploy FastAPI app via systemd service (or Docker). Listen on `127.0.0.1:8000`.
@@ -60,10 +60,9 @@ A VM disk crash on Oracle Cloud's free tier would lose all data. Supabase provid
 9. **DNS** — point your domain's A record to the VM's public IP.
 10. **Environment variables** — set on the VM (in the systemd unit or `.env` loaded by it):
     - `DATABASE_URL` — Supabase Postgres connection string
-    - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET` — AWS S3 credentials and target bucket
+    - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `S3_BUCKET` — AWS S3 credentials and target bucket
     - `ANTHROPIC_API_KEY` — Anthropic Claude API key
-    - `JWT_SECRET` — long random string for signing tokens
-    - `CORS_ORIGIN` — your production domain
+    - `JWT_SECRET_KEY` — long random string for signing tokens
 11. **Database** — run migrations to create tables. Seed initial reference data (subjects, streams, levels, exam types, and an initial set of topics/subtopics).
 
 ## Configuration Reference
@@ -71,11 +70,10 @@ A VM disk crash on Oracle Cloud's free tier would lose all data. Supabase provid
 | Env var | Used by | Purpose |
 |---|---|---|
 | `DATABASE_URL` | Backend | Postgres connection (Supabase) |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET` | Backend | AWS S3 (boto3) config |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `S3_BUCKET` | Backend | AWS S3 (boto3) config |
 | `S3_ENDPOINT_URL` (optional) | Backend | Override for local dev against MinIO; leave unset in production |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
-| `JWT_SECRET` | Backend | Signs auth tokens |
-| `CORS_ORIGIN` | Backend | CORS allow-list (production domain only) |
+| `JWT_SECRET_KEY` | Backend | Signs auth tokens |
 
 ## Backup Strategy
 
