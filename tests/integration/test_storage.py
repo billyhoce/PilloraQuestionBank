@@ -1,4 +1,4 @@
-"""Integration tests — real Cloudflare R2 calls (S3-compatible API)."""
+"""Integration tests — real AWS S3 calls."""
 import os
 import uuid
 

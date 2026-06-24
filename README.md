@@ -19,7 +19,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 │   ├── services/       # business logic (auth, ingest, generate)
 │   ├── models/         # SQLAlchemy ORM
 │   ├── schemas/        # Pydantic request/response models
-│   ├── storage/        # S3-compatible client (boto3) — Cloudflare R2 in prod, MinIO locally
+│   ├── storage/        # S3 client (boto3)
 │   ├── pdf/            # PyMuPDF rasterization + PDF layout engine
 │   ├── ai/             # Anthropic Claude clients (filename + topic labeling)
 │   └── main.py         # app factory + /api/health
@@ -43,7 +43,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 - Node.js 20+ (with `npm`)
 - Docker (only if you want local MinIO instead of a dev S3 bucket)
 - A **dev Supabase project** (free; separate from prod) — copy its connection string
-- A **dev Cloudflare R2 bucket** (separate from prod) — or run [MinIO](https://min.io) locally via `docker compose up` as an S3-compatible stand-in (set `S3_ENDPOINT_URL=http://localhost:9000`)
+- A **dev AWS S3 bucket** (separate from prod) — or run [MinIO](https://min.io) locally via `docker compose up` as an S3-compatible stand-in (set `S3_ENDPOINT_URL=http://localhost:9000`)
 - An **Anthropic API key** for AI features
 
 ### Local Setup
@@ -96,7 +96,7 @@ Migrations are auto-applied on deploy (see [CD](#cd-on-push-to-main)), after a s
 | Layer | Tool | Run |
 |---|---|---|
 | Backend unit + API | `pytest` (SQLite in-memory + `moto` for S3 — fully offline) | `pytest tests/ --ignore=tests/integration` |
-| Backend integration | `pytest` hitting live Anthropic + R2 | `pytest tests/integration` (needs real creds; **excluded from CI**) |
+| Backend integration | `pytest` hitting live Anthropic + S3 | `pytest tests/integration` (needs real creds; **excluded from CI**) |
 | Frontend lint | ESLint | `cd frontend && npm run lint` |
 | Frontend build | Vite | `cd frontend && npm run build` |
 
@@ -151,7 +151,7 @@ We deploy a Docker image to a single VM via SSH + `docker compose` rather than r
 | Env | DB | Object Store | URL |
 |---|---|---|---|
 | Local | Dev Supabase project | MinIO (Docker) or dev S3 bucket | `http://localhost:5173` |
-| Production | Supabase production project | Cloudflare R2 prod bucket | `https://questionbank.pillora.com.sg` (Cloudflare → Oracle VM) |
+| Production | Supabase production project | AWS S3 prod bucket | `https://questionbank.pillora.com.sg` (Cloudflare → Oracle VM) |
 
 The app is served on its own subdomain; `www.pillora.com.sg` stays on Wix and is untouched. Skip a dedicated staging environment for v1 — at this scale, a thorough PR review + green CI + fast rollback is enough.
 

@@ -8,7 +8,7 @@
 |---|---|---|---|
 | Database | Supabase managed PostgreSQL | Free | 500 MB. **No managed backups/PITR on the free tier** — see [Backup Strategy](#backup-strategy) |
 | App server | Oracle Cloud Free Tier — 1 Ampere ARM VM (`VM.Standard.A1.Flex`) | Always-free | 1 OCPU, 6 GB RAM, **arm64/aarch64**. Runs the Dockerized FastAPI backend + host Nginx |
-| Object storage | Cloudflare R2 (S3-compatible API) | Free (likely $0 indefinitely) | 10 GB storage + 1M Class A / 10M Class B ops free per month; **zero egress fees** |
+| Object storage | AWS S3 | Paid (small) | ~$0.023/GB/month after 5 GB / 12-month free tier expires |
 | Container registry | GitHub Container Registry (GHCR) | Free | Stores the `pillora-api` image (`linux/arm64`) built by CI |
 | Edge / CDN / TLS | Cloudflare (proxied DNS) | Free | Browser TLS, DDoS protection, caching, hides the origin IP |
 | Domain | `questionbank.pillora.com.sg` (zone DNS on Cloudflare) | — | Proxied A record → Oracle VM. `www.pillora.com.sg` stays DNS-only → Wix (untouched) |
@@ -17,9 +17,9 @@
 
 **DB size estimate:** metadata only, no images. Expected <50 MB even after years of use. Comfortably inside the 500 MB free tier.
 
-**Object-storage cost:** Cloudflare R2's free tier (10 GB storage, 1M Class A ops, 10M Class B ops per month) comfortably covers this project's growth (~2 GB/year, ~9,600 images/year) for years, and R2 charges **no egress fees** at all — unlike S3, which only gives 100 GB/month free egress before billing $0.09/GB. Realistic cost at this scale: **$0/month**, indefinitely.
+**Object-storage cost:** AWS S3 free tier covers 5 GB for the first 12 months only. After that, expect ~$0.023/GB/month for storage plus modest request and egress costs. At ~2 GB/year growth, year-2 storage cost is roughly $0.05/month, scaling to ~$0.50/month by year 5 — still trivial.
 
-**Region:** R2 buckets take an optional best-effort **location hint** (e.g. APAC) rather than a strict AWS-style region — set it close to Singapore when creating the bucket to bias initial placement. There's no hard region pinning like S3's, but Cloudflare's network already keeps latency low for the Oracle VM ↔ R2 round-trips during paper generation.
+**Region:** pick an AWS region close to Singapore (e.g. `ap-southeast-1`) to keep latency low for users and for the Oracle VM ↔ S3 round-trips during paper generation.
 
 ### Why DB is NOT on the VM
 
@@ -39,7 +39,7 @@ Oracle Cloud VM
    └─ Docker
         └─ pillora-api  — FastAPI/uvicorn on 127.0.0.1:8000
               ├──► Supabase Postgres   — metadata
-              ├──► Cloudflare R2       — images (+ DB backups)
+              ├──► AWS S3              — images (+ DB backups)
               └──► Anthropic Claude    — AI labeling
 
 CI/CD:  GitHub push to main → Actions (test → build image → push GHCR → SSH deploy)
@@ -52,8 +52,7 @@ The frontend is built in CI and served as static files by Nginx; it calls the AP
 | Option | Why rejected |
 |---|---|
 | **AWS EC2 for the VM** | Only 12 months free, then paid. Oracle's always-free VMs are better long-term. |
-| **AWS S3 for object storage** (original choice) | Switched to Cloudflare R2: R2's free tier likely covers this project's storage/requests indefinitely, it charges no egress fees (S3 only gives 100 GB/month free), and it's S3-API-compatible — boto3, presigned URLs, and MinIO local-dev all work unchanged. |
-| **Oracle Cloud Object Storage** | Always-free 10 GB, but S3-compatible tooling, MinIO local-dev compatibility, and presigned-URL ergonomics (shared by both S3 and R2) won out. |
+| **Oracle Cloud Object Storage** | Always-free 10 GB, but S3's tooling, MinIO local-dev compatibility, and presigned-URL ergonomics won out. |
 | **DB on the Oracle VM** | VM disk failure = data loss. Supabase is free and managed. |
 | **Supabase Pro ($25/mo) for PITR** | Better RPO, but not needed at this scale; weekly `pg_dump` → S3 meets the durability requirement for free. |
 | **Bare systemd backend** | Docker gives reproducible builds and clean image-tag rollbacks; chosen over venv-on-VM. |
@@ -88,7 +87,7 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
    ```
    *(No Poppler — PDF→image uses PyMuPDF, which bundles its own libraries.)*
 
-   **AWS CLI v2** (used against Cloudflare R2's S3-compatible endpoint, not real AWS; not via `apt` — Ubuntu dropped the `awscli` package due to an upstream botocore dependency conflict; v2 is also the only AWS-supported version):
+   **AWS CLI v2** (not via `apt` — Ubuntu dropped the `awscli` package due to an upstream botocore dependency conflict; v2 is also the only AWS-supported version):
    ```bash
    curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
    unzip awscliv2.zip
@@ -113,11 +112,11 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
    ```bash
    sudo mkdir -p /var/www/pillora && sudo chown -R "$USER":"$USER" /var/www/pillora
    ```
-6. **Cloudflare R2** — create two buckets (R2 dashboard → Create bucket), with an APAC location hint:
-   - `question-bank-prod` (images) and `question-bank-db-backups` (DB dumps).
-   - Buckets are **private by default** — there's no "block public access" toggle to flip like S3; the app uses presigned URLs regardless.
-   - **Enable bucket versioning** on both (bucket → Settings). On each, add a lifecycle rule to permanently delete **noncurrent** versions after 30 days.
-   - Create one **R2 API token** (R2 → Manage API tokens → Create API token) scoped to **Object Read & Write** on `question-bank-prod` and `question-bank-db-backups` only. This gives an Access Key ID + Secret Access Key, and your account dashboard gives the **Account ID** used to build the endpoint URL `https://<account-id>.r2.cloudflarestorage.com`. Put the keys, bucket names, and endpoint URL in `/opt/pillora/.env`.
+6. **AWS S3** — create two buckets in `ap-southeast-1`:
+   - `pillora-prod` (images) and `pillora-prod-backups` (DB dumps).
+   - **Block all public access** on both (app uses presigned URLs).
+   - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
+   - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-prod`, plus `s3:PutObject` on `pillora-prod-backups`. Put its keys in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
    - Add a **proxied** (orange-cloud) A record: `questionbank` → the VM's public IP.
@@ -156,22 +155,21 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 |---|---|---|
 | `DATABASE_URL` | Backend, backups | Postgres connection (Supabase prod, session pooler :5432, `+psycopg` driver) |
 | `JWT_SECRET_KEY` | Backend | Signs auth tokens. Must be a long random string (`openssl rand -hex 32`) |
-| `S3_BUCKET` | Backend | Image bucket (`question-bank-prod`) on Cloudflare R2 |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Backend, backups | R2 API token credentials (S3-compatible; boto3 / awscli read these standard env var names) |
-| `AWS_DEFAULT_REGION` | Backend, backups | Always `auto` for R2 — it's the required SigV4 signing region, not a real AWS region |
-| `S3_ENDPOINT_URL` | Backend, backups | MinIO override for local dev; **R2 account endpoint in production** (`https://<account-id>.r2.cloudflarestorage.com`) — unlike AWS, R2 has no default endpoint, so this is **required** in prod |
-| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-db-backups`) on R2 |
+| `S3_BUCKET` | Backend | Image bucket (`pillora-prod`) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | Backend, backups | AWS S3 (boto3 / awscli) credentials and region |
+| `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
+| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`pillora-prod-backups`) |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
 
 ## Backup Strategy
 
 **The Supabase free tier has no managed backups and no point-in-time recovery.** Durability is provided by our own pipeline:
 
-- **PostgreSQL → R2 (`pg_dump`):** `deploy/scripts/backup_db.sh` streams `pg_dump | gzip` to `s3://<BACKUP_S3_BUCKET>/db/` via the R2 endpoint.
+- **PostgreSQL → S3 (`pg_dump`):** `deploy/scripts/backup_db.sh` streams `pg_dump | gzip` to `s3://<BACKUP_S3_BUCKET>/db/`.
   - **Weekly** via the `pillora-backup.timer` systemd timer.
   - **Before every migration:** the deploy workflow runs the same script *before* `alembic upgrade head`, so an automated deploy always creates a fresh recovery point and aborts if the dump fails.
   - The backups bucket has **versioning** on, so even an overwritten/deleted dump is recoverable.
-  - **Restore:** `aws s3 cp s3://<bucket>/db/<file>.sql.gz - --endpoint-url "$S3_ENDPOINT_URL" | gunzip | psql "<plain-postgresql-url>"` (strip the `+psycopg` driver suffix from `DATABASE_URL`).
-- **Images (Cloudflare R2):** R2 is designed for the same 99.999999999% (11-nines) annual durability class as S3. **Versioning** is enabled on the image bucket with a lifecycle rule expiring noncurrent versions after 30 days, protecting against accidental overwrites/deletes without inflating storage cost.
+  - **Restore:** `aws s3 cp s3://<bucket>/db/<file>.sql.gz - | gunzip | psql "<plain-postgresql-url>"` (strip the `+psycopg` driver suffix from `DATABASE_URL`).
+- **Images (AWS S3):** 11-nines durability by design. **Versioning** is enabled on the image bucket with a lifecycle rule expiring noncurrent versions after 30 days, protecting against accidental overwrites/deletes without inflating storage cost.
 
 **Recovery point objective (RPO):** up to 7 days for the database between weekly dumps (plus a guaranteed dump on every deploy). Acceptable for this workload; tighten by changing the timer's `OnCalendar` to `daily` if desired.

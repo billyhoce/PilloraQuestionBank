@@ -24,7 +24,7 @@ Auth is email/password with bcrypt hashing. Session-based or JWT. No OAuth in v1
 | Frontend | React (Vite) — SPA |
 | Backend API | Python 3.11+ / FastAPI |
 | Database | PostgreSQL on Supabase (managed, free tier) |
-| Object Store | Cloudflare R2 (S3-compatible API) |
+| Object Store | AWS S3 |
 | Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 1 OCPU / 6 GB RAM |
 | AI | Anthropic Claude API (Sonnet for vision, Haiku for text) |
 
@@ -41,7 +41,7 @@ Nginx (static + reverse proxy)  ── Oracle Cloud VM ──┐
     ▼                                                │
 FastAPI                                              │
     ├──► PostgreSQL (Supabase)        — metadata    │
-    ├──► Cloudflare R2                — images      │
+    ├──► AWS S3                       — images      │
     └──► Anthropic Claude API         — AI labeling │
 ─────────────────────────────────────────────────────┘
 ```

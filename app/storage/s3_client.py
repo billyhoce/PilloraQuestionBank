@@ -4,13 +4,7 @@ import boto3
 
 
 def _get_client():
-    # region_name defaults to "auto", which Cloudflare R2 requires for SigV4
-    # signing (R2 has no real AWS-style regions); MinIO ignores it.
-    return boto3.client(
-        "s3",
-        endpoint_url=os.environ.get("S3_ENDPOINT_URL"),
-        region_name=os.environ.get("AWS_DEFAULT_REGION", "auto"),
-    )
+    return boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT_URL"))
 
 
 def put_image(key: str, data: bytes) -> None:
