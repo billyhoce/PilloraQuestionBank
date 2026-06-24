@@ -1,0 +1,11 @@
+# Triggers pillora-backup.service weekly. Persistent=true runs a missed backup
+# on next boot if the VM was off at the scheduled time.
+[Unit]
+Description=Run PilloraQuestionBank Postgres backup weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

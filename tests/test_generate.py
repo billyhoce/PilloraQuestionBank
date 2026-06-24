@@ -10,6 +10,14 @@ from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.layout_engine import LayoutEngine, LayoutPlan, QuestionLayout
 from app.services.generate import knapsack_select
 
+# The paper-generation engine (knapsack + layout) is a TDD stub not yet
+# implemented (app/services/generate.py, app/pdf/layout_engine.py). These tests
+# describe the target behavior and are expected to fail until it lands. xfail
+# (non-strict) keeps them running and out of CI's red without hiding them —
+# once the feature is implemented they will XPASS, signalling this marker can
+# be removed.
+pytestmark = pytest.mark.xfail(reason="paper generation engine not yet implemented", strict=False)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

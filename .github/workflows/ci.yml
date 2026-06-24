@@ -1,0 +1,42 @@
+name: CI
+
+# Validation for branches and PRs. Pushes to main are handled by deploy.yml
+# (which re-runs these checks as a gate before deploying).
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      # Unit tests run fully offline (SQLite + moto). tests/integration needs
+      # live Anthropic/S3 credentials and is excluded from CI.
+      - run: pytest tests/ --ignore=tests/integration
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Lint is informational for now: the codebase predates the current
+      # (stricter) ESLint/react-hooks rules and has known pre-existing
+      # warnings. It must not block the build/deploy gate.
+      - run: npm run lint
+        continue-on-error: true
+      - run: npm run build

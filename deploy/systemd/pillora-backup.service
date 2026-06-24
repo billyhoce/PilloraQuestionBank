@@ -1,0 +1,13 @@
+# Weekly Postgres -> S3 backup for PilloraQuestionBank.
+# Install: copy this and pillora-backup.timer to /etc/systemd/system/,
+# place backup_db.sh at /opt/pillora/backup_db.sh (chmod +x), then:
+#   systemctl daemon-reload && systemctl enable --now pillora-backup.timer
+[Unit]
+Description=PilloraQuestionBank weekly Postgres backup to S3
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/pillora/.env
+ExecStart=/bin/bash /opt/pillora/backup_db.sh

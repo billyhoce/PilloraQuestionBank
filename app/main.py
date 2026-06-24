@@ -10,6 +10,13 @@ from app.routes.reference import router as reference_router
 
 app = FastAPI(title="PilloraQuestionBank")
 
+
+@app.get("/api/health")
+def health():
+    """Lightweight liveness check for deploys and Nginx upstream checks (no DB hit)."""
+    return {"status": "ok"}
+
+
 app.include_router(auth_router)
 app.include_router(reference_router)
 app.include_router(questions_router)
