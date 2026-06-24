@@ -1,0 +1,32 @@
+# Frontend is built and served separately by Nginx; never bake it into the API image.
+frontend/
+
+# Tests and local-only tooling.
+tests/
+pyproject.toml
+requirements-dev.txt
+
+# Local config / secrets — provided on the VM via /opt/pillora/.env.
+.env
+.env.example
+docker-compose.yml
+deploy/
+
+# VCS, docs, CI.
+.git/
+.github/
+docs/
+*.md
+
+# Python caches and virtualenvs.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Logs and editor config.
+logs/
+.vscode/
+.claude/

@@ -1,0 +1,144 @@
+name: Deploy
+
+# Push to main -> test, build & push the API image to GHCR, then deploy live
+# to the Oracle Cloud VM. Data durability is the priority: a fresh DB dump is
+# taken before migrations run, and any failed step aborts before the new
+# container serves traffic.
+on:
+  push:
+    branches: [main]
+
+# Never run two production deploys concurrently.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/billyhoce/pillora-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest tests/ --ignore=tests/integration
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Backend image -> GHCR ---
+      # The Oracle Cloud VM is Ampere ARM, so the image must be linux/arm64.
+      # QEMU lets the amd64 runner cross-build it; all deps ship aarch64 wheels
+      # so there's no native compilation under emulation (build stays fast).
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- Frontend build -> artifact ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      # Ship the new SPA build to a staging dir on the VM.
+      - name: Upload frontend build
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "dist"
+          target: "/tmp/pillora-dist"
+          strip_components: 1
+          rm: true
+
+      - name: Deploy on VM
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: IMAGE_TAG,GHCR_USER,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+
+            # Swap in the new static frontend (deploy user owns /var/www/pillora).
+            mkdir -p /var/www/pillora
+            rm -rf /var/www/pillora/*
+            cp -r /tmp/pillora-dist/. /var/www/pillora/
+            rm -rf /tmp/pillora-dist
+
+            # Sync compose file + backup script to the commit being deployed.
+            cd /opt/pillora/repo
+            git fetch --depth 1 origin main
+            git reset --hard origin/main
+            cp deploy/scripts/backup_db.sh /opt/pillora/backup_db.sh
+            chmod +x /opt/pillora/backup_db.sh
+
+            # Authenticate to GHCR with the still-valid workflow token, then pull.
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            cd /opt/pillora/repo/deploy
+            export IMAGE_TAG
+            docker compose -f docker-compose.prod.yml pull
+
+            # Durability: fresh dump BEFORE migrating. Failure here aborts the deploy.
+            bash /opt/pillora/backup_db.sh
+
+            # Apply migrations, then bring up the new container.
+            docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
+            docker compose -f docker-compose.prod.yml up -d
+
+            # Verify health (retry ~30s) before declaring success.
+            for i in $(seq 1 10); do
+              if curl -fsS http://127.0.0.1:8000/api/health; then echo "healthy"; exit 0; fi
+              sleep 3
+            done
+            echo "Health check failed after deploy" >&2
+            exit 1

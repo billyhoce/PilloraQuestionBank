@@ -1,0 +1,26 @@
+# Production compose file — runs on the Oracle Cloud VM.
+# Image is built and pushed to GHCR by .github/workflows/deploy.yml.
+# Secrets are provided via /opt/pillora/.env (chmod 600, not in git).
+#
+# Usage on the VM (run from this directory):
+#   IMAGE_TAG=<git-sha> docker compose -f docker-compose.prod.yml pull
+#   IMAGE_TAG=<git-sha> docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
+#   IMAGE_TAG=<git-sha> docker compose -f docker-compose.prod.yml up -d
+#
+# Rollback: re-run the above with IMAGE_TAG set to a previous git SHA.
+
+services:
+  api:
+    image: ghcr.io/billyhoce/pillora-api:${IMAGE_TAG:-latest}
+    env_file:
+      - /opt/pillora/.env
+    # Bind to loopback only — host Nginx terminates TLS and reverse-proxies /api.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

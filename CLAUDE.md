@@ -25,7 +25,7 @@ Auth is email/password with bcrypt hashing. Session-based or JWT. No OAuth in v1
 | Backend API | Python 3.11+ / FastAPI |
 | Database | PostgreSQL on Supabase (managed, free tier) |
 | Object Store | AWS S3 |
-| Hosting | Oracle Cloud Free Tier — 1 AMD VM, 1 GB RAM |
+| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 1 OCPU / 6 GB RAM |
 | AI | Anthropic Claude API (Sonnet for vision, Haiku for text) |
 
 Full rationale and alternatives are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
