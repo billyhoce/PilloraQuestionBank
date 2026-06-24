@@ -114,10 +114,10 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
    sudo mkdir -p /var/www/pillora && sudo chown -R "$USER":"$USER" /var/www/pillora
    ```
 6. **Cloudflare R2** — create two buckets (R2 dashboard → Create bucket), with an APAC location hint:
-   - `pillora-prod` (images) and `pillora-prod-backups` (DB dumps).
+   - `question-bank-prod` (images) and `question-bank-db-backups` (DB dumps).
    - Buckets are **private by default** — there's no "block public access" toggle to flip like S3; the app uses presigned URLs regardless.
    - **Enable bucket versioning** on both (bucket → Settings). On each, add a lifecycle rule to permanently delete **noncurrent** versions after 30 days.
-   - Create one **R2 API token** (R2 → Manage API tokens → Create API token) scoped to **Object Read & Write** on `pillora-prod` and `pillora-prod-backups` only. This gives an Access Key ID + Secret Access Key, and your account dashboard gives the **Account ID** used to build the endpoint URL `https://<account-id>.r2.cloudflarestorage.com`. Put the keys, bucket names, and endpoint URL in `/opt/pillora/.env`.
+   - Create one **R2 API token** (R2 → Manage API tokens → Create API token) scoped to **Object Read & Write** on `question-bank-prod` and `question-bank-db-backups` only. This gives an Access Key ID + Secret Access Key, and your account dashboard gives the **Account ID** used to build the endpoint URL `https://<account-id>.r2.cloudflarestorage.com`. Put the keys, bucket names, and endpoint URL in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
    - Add a **proxied** (orange-cloud) A record: `questionbank` → the VM's public IP.
@@ -156,11 +156,11 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 |---|---|---|
 | `DATABASE_URL` | Backend, backups | Postgres connection (Supabase prod, session pooler :5432, `+psycopg` driver) |
 | `JWT_SECRET_KEY` | Backend | Signs auth tokens. Must be a long random string (`openssl rand -hex 32`) |
-| `S3_BUCKET` | Backend | Image bucket (`pillora-prod`) on Cloudflare R2 |
+| `S3_BUCKET` | Backend | Image bucket (`question-bank-prod`) on Cloudflare R2 |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Backend, backups | R2 API token credentials (S3-compatible; boto3 / awscli read these standard env var names) |
 | `AWS_DEFAULT_REGION` | Backend, backups | Always `auto` for R2 — it's the required SigV4 signing region, not a real AWS region |
 | `S3_ENDPOINT_URL` | Backend, backups | MinIO override for local dev; **R2 account endpoint in production** (`https://<account-id>.r2.cloudflarestorage.com`) — unlike AWS, R2 has no default endpoint, so this is **required** in prod |
-| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`pillora-prod-backups`) on R2 |
+| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-db-backups`) on R2 |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
 
 ## Backup Strategy
