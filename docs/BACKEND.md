@@ -20,7 +20,7 @@ app/
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, ingest.py, generate.py (stub)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (stub)
-├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
+├── storage/        # s3_client.py — Cloudflare R2 / MinIO client (S3-compatible API) + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
 ├── logger.py       # file logger + Timer + token/cost logging helper
@@ -63,7 +63,7 @@ POST   /api/import/upload-pdf       -- upload a single PDF; returns page images 
 POST   /api/import/confirm          -- submit labeled paper + questions
 POST   /api/import/ai-topics        -- trigger AI subtopic suggestions for one question
 POST   /api/import/save-topics      -- persist user-reviewed subtopic selections for a paper's questions
-DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
+DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their R2 objects
 ```
 
 ### Questions — Public read (Implemented)
@@ -77,10 +77,10 @@ GET    /api/questions             -- filter params: subject_id, stream_id, level
                                   -- returns paginated question list with paper info, topic chips,
                                      and a presigned first-page image URL
 GET    /api/questions/:id         -- full question detail: question pages + answer pages
-                                     (each with a presigned S3 URL), topics
+                                     (each with a presigned R2 URL), topics
 ```
 
-There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned S3 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
+There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned R2 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
 
 ### Generation — Public (Not Implemented)
 
@@ -105,7 +105,7 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 2. **`POST /api/import/confirm`** (Implemented)
    - Accepts paper metadata + an ordered list of questions, each with its pages (`temp_key`, `page_type`, `page_order`, `width_px`, `height_px`).
    - Creates `Paper`, `Question`, and `QuestionPage` rows transactionally.
-   - Moves images from the temp key into the canonical object-store key pattern: `papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp` (S3 server-side copy + delete of the temp object).
+   - Moves images from the temp key into the canonical object-store key pattern: `papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp` (R2 server-side copy + delete of the temp object).
    - Persists `width_px` and `height_px` per page.
    - Returns the created paper id plus serialized questions/pages (each page including a fresh presigned URL).
 
@@ -120,7 +120,7 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
    - Replaces (delete + re-insert) `QuestionTopic` rows for the paper's questions.
 
 5. **`DELETE /api/import/papers/{paper_id}`** (Implemented)
-   - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionTopic` in the DB), then deletes the associated S3 objects after the DB transaction succeeds.
+   - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionTopic` in the DB), then deletes the associated R2 objects after the DB transaction succeeds.
 
 ## Paper Generation Engine (Not Implemented)
 
@@ -164,18 +164,18 @@ ReportLab is already in `requirements.txt`, in preference over FPDF2, for the pe
 - **Passwords:** bcrypt via `bcrypt.gensalt()` (default cost factor 12). Implemented.
 - **Auth tokens:** JWT (`python-jose`, HS256) in an `httpOnly`, `secure`, `samesite=lax` cookie named `access_token`, 7-day expiry. `JWT_SECRET_KEY` read from env (falls back to an insecure default — **must** be set in production). Implemented.
 - **Admin routes:** `require_admin` dependency (in `app/routes/auth.py`) checks `user.role == "admin"`, returns `403` otherwise. Applied to all `POST/PUT/DELETE` on reference data and all `/api/import/*` routes. Implemented.
-- **Image access:** images are never proxied through the backend — every question/page response embeds an S3 **presigned URL** (`get_presigned_url`), keeping VM bandwidth free for HTML/JSON. Implemented.
+- **Image access:** images are never proxied through the backend — every question/page response embeds an R2 **presigned URL** (`get_presigned_url`), keeping VM bandwidth free for HTML/JSON. Implemented.
 - **Input validation:** all API inputs are Pydantic models (`app/schemas/`), including password-strength validation on registration. Implemented.
 - **CORS:** **not implemented** — no `CORSMiddleware` is registered in `app/main.py`.
 - **Rate limiting:** **not implemented** — there is no limiter on `/api/auth/*` or anywhere else.
 
 ## Object Store Integration
 
-- AWS SDK for Python — `boto3`. Implemented in `app/storage/s3_client.py`:
+- `boto3` (AWS SDK for Python), pointed at Cloudflare R2's S3-compatible API. Implemented in `app/storage/s3_client.py`:
   - `put_image(key, bytes)` — used during import (`s3.put_object(..., ContentType="image/webp")`).
   - `get_presigned_url(key, expires_in)` — used whenever images are returned to the frontend.
   - `copy_only(src_key, dst_key)` — server-side copy that leaves the source in place. Import/edit flows copy temp uploads to their canonical key, commit the DB, and only then delete the temp sources, so a failed copy or commit leaves the temp uploads intact (retryable) and never orphans canonical objects.
-  - `delete_object(key)` — used when a paper/question/page is deleted; callers commit the DB deletion **before** removing objects, since S3 deletes are irreversible.
+  - `delete_object(key)` — used when a paper/question/page is deleted; callers commit the DB deletion **before** removing objects, since R2 deletes are irreversible.
   - `get_image_bytes(key)` — fetches raw bytes for server-side use (AI topic labeling).
 - All keys follow the pattern documented in [DATA_MODEL.md](./DATA_MODEL.md#image-storage-conventions).
-- **Local dev:** `boto3` is pointed at an S3-compatible endpoint via the `S3_ENDPOINT_URL` env var (empty/unset in production) — same code path, no special-casing.
+- **Local dev:** `boto3` is pointed at MinIO via `S3_ENDPOINT_URL=http://localhost:9000`; **production** points the same var at the R2 account endpoint instead — same code path, no special-casing. Unlike AWS S3, R2 has no "default" endpoint, so `S3_ENDPOINT_URL` is always set, in every environment.

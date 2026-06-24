@@ -72,7 +72,7 @@ User: {
 ## Image Storage Conventions
 
 - **Format:** WebP at quality 85 (best size/quality ratio for web; ~30–50% smaller than JPEG at same quality). Fall back to JPEG if WebP encoding is problematic.
-- **Storage backend:** AWS S3.
+- **Storage backend:** Cloudflare R2 (S3-compatible API).
 - **Object key pattern:**
   ```
   papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp
