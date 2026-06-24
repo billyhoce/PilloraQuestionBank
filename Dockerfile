@@ -1,6 +1,8 @@
 # Production image for the PilloraQuestionBank FastAPI backend.
-# All runtime deps ship as manylinux wheels (psycopg[binary], pymupdf, Pillow,
-# reportlab), so no apt packages (e.g. Poppler) are required.
+# Targets linux/arm64 (Oracle Cloud Ampere VM); python:3.11-slim is multi-arch.
+# All runtime deps ship as manylinux wheels for both x86_64 and aarch64
+# (psycopg[binary], pymupdf, Pillow, reportlab), so no apt packages (e.g.
+# Poppler) and no native compilation are required on either architecture.
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -24,5 +26,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Single worker: 1 GB RAM VM, 1-10 concurrent users, uptime is not a priority.
+# Single worker: only 1-10 concurrent users, uptime is not a priority.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

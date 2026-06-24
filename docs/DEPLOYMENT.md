@@ -7,9 +7,9 @@
 | Component | Service | Tier | Notes |
 |---|---|---|---|
 | Database | Supabase managed PostgreSQL | Free | 500 MB. **No managed backups/PITR on the free tier** — see [Backup Strategy](#backup-strategy) |
-| App server | Oracle Cloud Free Tier — 1 AMD VM | Always-free | 1 OCPU, 1 GB RAM. Runs the Dockerized FastAPI backend + host Nginx |
+| App server | Oracle Cloud Free Tier — 1 Ampere ARM VM (`VM.Standard.A1.Flex`) | Always-free | 1 OCPU, 6 GB RAM, **arm64/aarch64**. Runs the Dockerized FastAPI backend + host Nginx |
 | Object storage | AWS S3 | Paid (small) | ~$0.023/GB/month after 5 GB / 12-month free tier expires |
-| Container registry | GitHub Container Registry (GHCR) | Free | Stores the `pillora-api` image built by CI |
+| Container registry | GitHub Container Registry (GHCR) | Free | Stores the `pillora-api` image (`linux/arm64`) built by CI |
 | Edge / CDN / TLS | Cloudflare (proxied DNS) | Free | Browser TLS, DDoS protection, caching, hides the origin IP |
 | Domain | `questionbank.pillora.com.sg` (zone DNS on Cloudflare) | — | Proxied A record → Oracle VM. `www.pillora.com.sg` stays DNS-only → Wix (untouched) |
 | Origin TLS | Cloudflare Origin Certificate | Free | 15-year cert on Nginx; zone SSL/TLS mode Full (strict). No Certbot/ACME renewal |
@@ -65,7 +65,7 @@ Two GitHub Actions workflows:
 - **`.github/workflows/ci.yml`** — runs on PRs and non-`main` branches: backend unit tests (`pytest tests/ --ignore=tests/integration`, fully offline via SQLite + moto) and the frontend lint/build.
 - **`.github/workflows/deploy.yml`** — runs on **push to `main`**:
   1. **test** — same checks, as a deploy gate.
-  2. **build-and-push** — builds the `Dockerfile` and pushes `ghcr.io/billyhoce/pillora-api:<sha>` + `:latest`; builds the frontend and uploads `dist/` as an artifact.
+  2. **build-and-push** — cross-builds the `Dockerfile` for **`linux/arm64`** (via QEMU, to match the Ampere VM) and pushes `ghcr.io/billyhoce/pillora-api:<sha>` + `:latest`; builds the frontend and uploads `dist/` as an artifact.
   3. **deploy** — SCPs `dist/` to the VM and SSHes in to: sync the repo, `docker compose pull`, **take a pre-migration DB dump (aborts on failure)**, `alembic upgrade head`, `docker compose up -d`, and curl `/api/health` to confirm.
 
 **Required GitHub secrets:** `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (private key whose public half is in the VM user's `~/.ssh/authorized_keys`). GHCR push/pull uses the built-in `GITHUB_TOKEN` — no extra secret needed. **Production app secrets are never placed in GitHub** — they live only in `/opt/pillora/.env` on the VM, and migrations run there.
@@ -77,15 +77,24 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
 
 ## One-Time VM Provisioning
 
-1. **Provision the VM** — Oracle Cloud, 1 AMD VM (1 OCPU, 1 GB RAM, always-free), Ubuntu LTS. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.
+1. **Provision the VM** — Oracle Cloud, 1 Ampere ARM VM (`VM.Standard.A1.Flex`, up to 4 OCPU / 24 GB RAM, always-free), **Ubuntu 24.04 LTS (aarch64)**. The CI image is built for `linux/arm64` to match this shape. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.
 2. **Install host packages:**
    ```bash
    sudo apt update
    sudo apt install -y docker.io docker-compose-v2 nginx \
-                       postgresql-client awscli git curl
+                       postgresql-client git curl unzip
    sudo usermod -aG docker "$USER"   # log out/in for group to take effect
    ```
    *(No Poppler — PDF→image uses PyMuPDF, which bundles its own libraries.)*
+
+   **AWS CLI v2** (not via `apt` — Ubuntu dropped the `awscli` package due to an upstream botocore dependency conflict; v2 is also the only AWS-supported version):
+   ```bash
+   curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
+   unzip awscliv2.zip
+   sudo ./aws/install
+   rm -rf aws awscliv2.zip
+   ```
+   *(Use `awscli-exe-linux-x86_64.zip` instead if provisioning on an x86_64 VM.)*
 3. **Clone the repo** (used by the deploy job to sync the compose file + backup script):
    ```bash
    sudo mkdir -p /opt/pillora && sudo chown "$USER":"$USER" /opt/pillora
