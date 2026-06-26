@@ -21,7 +21,9 @@ COPY alembic ./alembic
 COPY alembic.ini ./
 
 # Run as an unprivileged user.
-RUN useradd --create-home --uid 1000 appuser
+RUN useradd --create-home --uid 1000 appuser && \
+    mkdir /app/logs && \
+    chown appuser:appuser /app/logs
 USER appuser
 
 EXPOSE 8000
