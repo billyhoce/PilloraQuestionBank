@@ -113,10 +113,10 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
    sudo mkdir -p /var/www/pillora && sudo chown -R "$USER":"$USER" /var/www/pillora
    ```
 6. **AWS S3** — create two buckets in `ap-southeast-1`:
-   - `pillora-prod` (images) and `pillora-prod-backups` (DB dumps).
+   - `pillora-question-bank-prod` (images) and `question-bank-backups` (DB dumps).
    - **Block all public access** on both (app uses presigned URLs).
    - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
-   - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-prod`, plus `s3:PutObject` on `pillora-prod-backups`. Put its keys in `/opt/pillora/.env`.
+   - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
    - Add a **proxied** (orange-cloud) A record: `questionbank` → the VM's public IP.
@@ -155,10 +155,10 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 |---|---|---|
 | `DATABASE_URL` | Backend, backups | Postgres connection (Supabase prod, session pooler :5432, `+psycopg` driver) |
 | `JWT_SECRET_KEY` | Backend | Signs auth tokens. Must be a long random string (`openssl rand -hex 32`) |
-| `S3_BUCKET` | Backend | Image bucket (`pillora-prod`) |
+| `S3_BUCKET` | Backend | Image bucket (`pillora-question-bank-prod`) |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | Backend, backups | AWS S3 (boto3 / awscli) credentials and region |
 | `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
-| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`pillora-prod-backups`) |
+| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-backups`) |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
 
 ## Backup Strategy
