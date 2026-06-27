@@ -168,15 +168,12 @@ class QuestionPage(Base):
 
 class QuestionTopic(Base):
     __tablename__ = "question_topic"
-    __table_args__ = (
-        UniqueConstraint("question_id", "topic_id", name="uq_question_topic_pair"),
-    )
 
     question_id: Mapped[int] = mapped_column(
         ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
     )
     topic_id: Mapped[int] = mapped_column(
-        ForeignKey("topic.id", ondelete="RESTRICT"), nullable=False
+        ForeignKey("topic.id", ondelete="RESTRICT"), primary_key=True
     )
 
     question: Mapped["Question"] = relationship(back_populates="topics")

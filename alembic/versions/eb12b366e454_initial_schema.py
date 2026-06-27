@@ -214,15 +214,14 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('question_id', 'page_type', 'page_order', name='uq_qpage_q_type_order')
     )
-    # question_topic: one required topic per question.
-    # UNIQUE(question_id, topic_id) allows question_subtopic to reference this pair.
+    # question_topic: 0+ topics per question.
+    # Composite PK (question_id, topic_id) allows question_subtopic to reference this pair.
     op.create_table('question_topic',
     sa.Column('question_id', sa.Integer(), nullable=False),
     sa.Column('topic_id', sa.Integer(), nullable=False),
     sa.ForeignKeyConstraint(['question_id'], ['question.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['topic_id'], ['topic.id'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('question_id'),
-    sa.UniqueConstraint('question_id', 'topic_id', name='uq_question_topic_pair'),
+    sa.PrimaryKeyConstraint('question_id', 'topic_id'),
     )
     # question_subtopic: 0+ subtopics per question.
     # Composite FK (question_id, topic_id) → question_topic enforces at DB level that

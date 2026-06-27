@@ -52,14 +52,23 @@ class SubtopicSuggestion(BaseModel):
     subtopic_id: int
 
 
+class AiTopicSelection(BaseModel):
+    topic_id: int
+    subtopic_id: Optional[int] = None
+
+
 class AiTopicsResponse(BaseModel):
-    suggestions: list[SubtopicSuggestion]
+    selections: list[AiTopicSelection] = []
+
+
+class TopicAssignment(BaseModel):
+    topic_id: int
+    subtopics: list[SubtopicSuggestion] = []
 
 
 class QuestionTopicsIn(BaseModel):
     question_id: int
-    topic_id: int
-    subtopics: list[SubtopicSuggestion] = []
+    topic_assignments: list[TopicAssignment]
 
 
 class SaveTopicsPayload(BaseModel):
@@ -163,7 +172,6 @@ def ai_topics(
                 "subtopics": [{"id": s.id, "name": s.name} for s in t.subtopics],
             }
             for t in topics_orm
-            if t.subtopics
         ]
 
         question_pages = [p for p in question.pages if p.page_type == "question"]
@@ -203,7 +211,7 @@ def ai_topics(
             )
 
     log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
-    return {"suggestions": suggestions}
+    return {"selections": suggestions}
 
 
 @router.post("/save-topics", status_code=201)
@@ -233,34 +241,38 @@ def save_topics(
     }
 
     # Delete existing assignments for all questions in this paper.
-    # Cascade on question_subtopic's composite FK removes those rows automatically
-    # when question_topic rows are deleted, but we also delete explicitly for clarity.
+    # Cascade on question_subtopic's composite FK removes subtopic rows automatically
+    # when question_topic rows are deleted, but we delete explicitly for clarity.
     db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
     db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
 
     for qt in payload.question_topics:
-        if qt.topic_id not in valid_topic_ids:
-            raise HTTPException(status_code=422, detail=f"Invalid topic_id {qt.topic_id}")
+        inserted_topic_ids: set[int] = set()
+        for assignment in qt.topic_assignments:
+            if assignment.topic_id not in valid_topic_ids:
+                raise HTTPException(status_code=422, detail=f"Invalid topic_id {assignment.topic_id}")
 
-        db.add(QuestionTopic(question_id=qt.question_id, topic_id=qt.topic_id))
-        db.flush()  # needed so the composite FK check passes on question_subtopic inserts
+            if assignment.topic_id not in inserted_topic_ids:
+                db.add(QuestionTopic(question_id=qt.question_id, topic_id=assignment.topic_id))
+                db.flush()  # composite FK check on question_subtopic inserts requires this row to exist
+                inserted_topic_ids.add(assignment.topic_id)
 
-        seen_subtopic_ids: set[int] = set()
-        for s in qt.subtopics:
-            subtopic = db.get(Subtopic, s.subtopic_id)
-            if subtopic is None or subtopic.topic_id != qt.topic_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {qt.topic_id}",
-                )
-            if s.subtopic_id in seen_subtopic_ids:
-                continue
-            seen_subtopic_ids.add(s.subtopic_id)
-            db.add(QuestionSubtopic(
-                question_id=qt.question_id,
-                subtopic_id=s.subtopic_id,
-                topic_id=qt.topic_id,
-            ))
+            seen_subtopic_ids: set[int] = set()
+            for s in assignment.subtopics:
+                subtopic = db.get(Subtopic, s.subtopic_id)
+                if subtopic is None or subtopic.topic_id != assignment.topic_id:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {assignment.topic_id}",
+                    )
+                if s.subtopic_id in seen_subtopic_ids:
+                    continue
+                seen_subtopic_ids.add(s.subtopic_id)
+                db.add(QuestionSubtopic(
+                    question_id=qt.question_id,
+                    subtopic_id=s.subtopic_id,
+                    topic_id=assignment.topic_id,
+                ))
 
     db.flush()
     return {"message": "Topics saved"}

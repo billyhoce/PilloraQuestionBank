@@ -90,13 +90,19 @@ def _first_page_url(question: Question) -> Optional[str]:
         return None
 
 
-def _topic_info(question: Question) -> Optional[dict]:
+def _topic_infos(question: Question) -> list[dict]:
     if not question.topics:
-        return None
-    return {
-        "topic_name": question.topics[0].topic.name,
-        "subtopic_names": [qs.subtopic.name for qs in question.question_subtopics],
-    }
+        return []
+    subtopics_by_topic: dict[int, list[str]] = {}
+    for qs in question.question_subtopics:
+        subtopics_by_topic.setdefault(qs.topic_id, []).append(qs.subtopic.name)
+    return [
+        {
+            "topic_name": qt.topic.name,
+            "subtopic_names": subtopics_by_topic.get(qt.topic_id, []),
+        }
+        for qt in question.topics
+    ]
 
 
 _PAPER_EAGER = selectinload(Question.paper).options(
@@ -159,7 +165,7 @@ def list_questions(
             "question_number": q.question_number,
             "marks": q.marks,
             "paper_info": _paper_info(q.paper),
-            "topic": _topic_info(q),
+            "topics": _topic_infos(q),
             "first_page_url": _first_page_url(q),
         }
         for q in questions
@@ -199,5 +205,5 @@ def get_question(
         "marks": question.marks,
         "question_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "question"],
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
-        "topic": _topic_info(question),
+        "topics": _topic_infos(question),
     }

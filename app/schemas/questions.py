@@ -24,7 +24,7 @@ class QuestionListItem(BaseModel):
     question_number: int
     marks: Optional[int] = None
     paper_info: PaperInfoSchema
-    topic: Optional[QuestionTopicInfo] = None
+    topics: list[QuestionTopicInfo] = []
     first_page_url: Optional[str] = None
 
 
@@ -48,4 +48,4 @@ class QuestionDetailResponse(BaseModel):
     marks: Optional[int] = None
     question_pages: list[QuestionPageSchema]
     answer_pages: list[QuestionPageSchema]
-    topic: Optional[QuestionTopicInfo] = None
+    topics: list[QuestionTopicInfo] = []

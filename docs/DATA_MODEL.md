@@ -55,8 +55,8 @@ QuestionPage: {
 
 QuestionTopic: {
   question_id (PK, FK → Question),
-  topic_id (FK → Topic, NOT NULL),
-  UNIQUE (question_id, topic_id)         -- required for FK from QuestionSubtopic
+  topic_id    (PK, FK → Topic),
+  PRIMARY KEY (question_id, topic_id)    -- composite PK; referenced by QuestionSubtopic FK
 }
 
 QuestionSubtopic: {
