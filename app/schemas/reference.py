@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 _orm = {"from_attributes": True}
@@ -93,3 +95,21 @@ class TopicWithSubtopicsResponse(BaseModel):
     topic_number: int
     subtopics: list[SubtopicResponse] = Field(default_factory=list)
     model_config = _orm
+
+
+class SubtopicSyncItem(BaseModel):
+    id: Optional[int] = None
+    name: str
+
+
+class TopicSyncItem(BaseModel):
+    id: Optional[int] = None
+    topic_number: int
+    name: str
+    subtopics: list[SubtopicSyncItem] = Field(default_factory=list)
+
+
+class TopicSyncRequest(BaseModel):
+    subject_id: int
+    stream_id: int
+    topics: list[TopicSyncItem] = Field(default_factory=list)
