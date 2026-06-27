@@ -92,7 +92,7 @@ def test_update_paper_stream_change_clears_topics(
 ):
     # Assign a topic to question 1, then change the paper's stream.
     q1 = next(q for q in sample_paper.questions if q.question_number == 1)
-    db_session.add(QuestionTopic(question_id=q1.id, subtopic_id=reference_data["subtopic"].id))
+    db_session.add(QuestionTopic(question_id=q1.id, topic_id=reference_data["topic"].id))
     db_session.flush()
 
     # A different stream (valid FK) to switch to.
@@ -144,7 +144,12 @@ def test_add_question(admin_client, sample_paper, reference_data, mock_s3):
     payload = {
         "question_number": 4,
         "marks": 7,
-        "subtopic_ids": [reference_data["subtopic"].id],
+        "topic_assignments": [
+            {
+                "topic_id": reference_data["topic"].id,
+                "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
+            }
+        ],
         "pages": [{
             "temp_key": up["temp_key"],
             "page_type": "question",
@@ -160,6 +165,7 @@ def test_add_question(admin_client, sample_paper, reference_data, mock_s3):
     assert q["marks"] == 7
     assert len(q["pages"]) == 1
     assert len(q["topics"]) == 1
+    assert q["topics"][0]["topic_name"] == "Algebra"
 
     detail = _get_detail(admin_client, sample_paper.id)
     assert len(detail["questions"]) == 4
@@ -175,7 +181,12 @@ def test_update_question_marks_and_topics(
     payload = {
         "question_number": 1,
         "marks": 9,
-        "subtopic_ids": [reference_data["subtopic"].id],
+        "topic_assignments": [
+            {
+                "topic_id": reference_data["topic"].id,
+                "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
+            }
+        ],
         "pages": [{
             "id": existing_page["id"],
             "page_type": existing_page["page_type"],
@@ -186,7 +197,9 @@ def test_update_question_marks_and_topics(
     assert resp.status_code == 200, resp.text
     updated = resp.json()
     assert updated["marks"] == 9
-    assert [t["subtopic_id"] for t in updated["topics"]] == [reference_data["subtopic"].id]
+    assert len(updated["topics"]) == 1
+    assert updated["topics"][0]["topic_name"] == "Algebra"
+    assert "Linear Equations" in updated["topics"][0]["subtopic_names"]
     assert len(updated["pages"]) == 1
 
 
@@ -201,7 +214,7 @@ def test_update_question_reorder_add_delete(admin_client, sample_paper, mock_s3)
     payload = {
         "question_number": 2,
         "marks": 3,
-        "subtopic_ids": [],
+        "topic_assignments": [],
         "pages": [
             {  # new page first
                 "temp_key": up["temp_key"],
@@ -241,7 +254,7 @@ def test_update_question_duplicate_number_rejected(admin_client, sample_paper, m
     payload = {
         "question_number": 2,
         "marks": q1["marks"],
-        "subtopic_ids": [],
+        "topic_assignments": [],
         "pages": [{
             "id": existing_page["id"],
             "page_type": existing_page["page_type"],
@@ -262,7 +275,7 @@ def test_update_question_same_number_allowed(admin_client, sample_paper, mock_s3
     payload = {
         "question_number": 1,
         "marks": 8,
-        "subtopic_ids": [],
+        "topic_assignments": [],
         "pages": [{
             "id": existing_page["id"],
             "page_type": existing_page["page_type"],
@@ -278,7 +291,7 @@ def test_add_question_duplicate_number_rejected(admin_client, sample_paper, mock
     payload = {
         "question_number": 1,  # already exists
         "marks": 1,
-        "subtopic_ids": [],
+        "topic_assignments": [],
         "pages": [],
     }
     resp = admin_client.post(f"/api/papers/{sample_paper.id}/questions", json=payload)

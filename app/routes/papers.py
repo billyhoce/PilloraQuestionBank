@@ -14,12 +14,14 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionSubtopic,
     QuestionTopic,
     Subtopic,
     Topic,
 )
 from app.routes.auth import require_admin
-from app.routes.questions import _paper_info
+from app.routes.ingest import SubtopicSuggestion, TopicAssignment
+from app.routes.questions import _paper_info, _topic_infos
 from app.services.ingest import delete_paper
 from app.services.paper_admin import (
     apply_page_changes,
@@ -62,7 +64,7 @@ class PageIn(BaseModel):
 class QuestionIn(BaseModel):
     question_number: int
     marks: Optional[int] = None
-    subtopic_ids: List[int] = []
+    topic_assignments: List[TopicAssignment] = []
     pages: List[PageIn]
 
 
@@ -80,9 +82,8 @@ _PAPER_REFS = (
 
 _QUESTION_EAGER = (
     selectinload(Question.pages),
-    selectinload(Question.topics)
-    .joinedload(QuestionTopic.subtopic)
-    .joinedload(Subtopic.topic),
+    selectinload(Question.topics).joinedload(QuestionTopic.topic),
+    selectinload(Question.question_subtopics).joinedload(QuestionSubtopic.subtopic),
 )
 
 
@@ -103,14 +104,7 @@ def _serialize_question(q: Question) -> dict:
             }
             for p in pages
         ],
-        "topics": [
-            {
-                "subtopic_id": qt.subtopic_id,
-                "subtopic_name": qt.subtopic.name,
-                "topic_name": qt.subtopic.topic.name,
-            }
-            for qt in q.topics
-        ],
+        "topics": _topic_infos(q),
     }
 
 
@@ -157,27 +151,55 @@ def _ensure_unique_question_number(
 
 
 def _set_topics(
-    db: Session, question_id: int, subtopic_ids: List[int], subject_id: int, stream_id: int
+    db: Session,
+    question_id: int,
+    topic_assignments: List[TopicAssignment],
+    subject_id: int,
+    stream_id: int,
 ) -> None:
-    valid_ids = {
-        sid
-        for (sid,) in db.query(Subtopic.id)
-        .join(Topic, Topic.id == Subtopic.topic_id)
+    valid_topic_ids = {
+        tid for (tid,) in db.query(Topic.id)
         .filter(Topic.subject_id == subject_id, Topic.stream_id == stream_id)
         .all()
     }
+
+    db.query(QuestionSubtopic).filter(
+        QuestionSubtopic.question_id == question_id
+    ).delete(synchronize_session=False)
     db.query(QuestionTopic).filter(
         QuestionTopic.question_id == question_id
     ).delete(synchronize_session=False)
 
-    seen: set[int] = set()
-    for sid in subtopic_ids:
-        if sid not in valid_ids:
-            raise HTTPException(status_code=422, detail=f"Invalid subtopic_id {sid}")
-        if sid in seen:
-            continue
-        seen.add(sid)
-        db.add(QuestionTopic(question_id=question_id, subtopic_id=sid))
+    # Phase 1: validate before any writes
+    for assignment in topic_assignments:
+        if assignment.topic_id not in valid_topic_ids:
+            raise HTTPException(status_code=422, detail=f"Invalid topic_id {assignment.topic_id}")
+        for s in assignment.subtopics:
+            subtopic = db.get(Subtopic, s.subtopic_id)
+            if subtopic is None or subtopic.topic_id != assignment.topic_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {assignment.topic_id}",
+                )
+
+    # Phase 2: insert
+    inserted_topic_ids: set[int] = set()
+    for assignment in topic_assignments:
+        if assignment.topic_id not in inserted_topic_ids:
+            db.add(QuestionTopic(question_id=question_id, topic_id=assignment.topic_id))
+            db.flush()
+            inserted_topic_ids.add(assignment.topic_id)
+
+        seen_subtopic_ids: set[int] = set()
+        for s in assignment.subtopics:
+            if s.subtopic_id in seen_subtopic_ids:
+                continue
+            seen_subtopic_ids.add(s.subtopic_id)
+            db.add(QuestionSubtopic(
+                question_id=question_id,
+                subtopic_id=s.subtopic_id,
+                topic_id=assignment.topic_id,
+            ))
 
 
 # --------------------------------------------------------------------------- #
@@ -256,11 +278,7 @@ def get_paper(
         db.query(Paper)
         .options(
             *_PAPER_REFS,
-            selectinload(Paper.questions).selectinload(Question.pages),
-            selectinload(Paper.questions)
-            .selectinload(Question.topics)
-            .joinedload(QuestionTopic.subtopic)
-            .joinedload(Subtopic.topic),
+            selectinload(Paper.questions).options(*_QUESTION_EAGER),
         )
         .filter(Paper.id == paper_id)
         .first()
@@ -345,7 +363,7 @@ def add_question_route(
         },
         db,
     )
-    _set_topics(db, question.id, payload.subtopic_ids, paper.subject_id, paper.stream_id)
+    _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
     db.flush()
     commit_with_page_moves(db, new_pairs)
     return _serialize_question(_reload_question(question.id, db))
@@ -379,7 +397,7 @@ def update_question_route(
     removed_keys, new_pairs = apply_page_changes(
         paper.id, question, [p.model_dump() for p in payload.pages], db
     )
-    _set_topics(db, question.id, payload.subtopic_ids, paper.subject_id, paper.stream_id)
+    _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
     db.flush()
     commit_with_page_moves(db, new_pairs, removed_keys)
 

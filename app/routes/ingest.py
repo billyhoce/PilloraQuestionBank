@@ -169,6 +169,7 @@ def ai_topics(
             {
                 "id": t.id,
                 "name": t.name,
+                "topic_number": t.topic_number,
                 "subtopics": [{"id": s.id, "name": s.name} for s in t.subtopics],
             }
             for t in topics_orm
@@ -240,24 +241,12 @@ def save_topics(
         .all()
     }
 
-    # Delete existing assignments for all questions in this paper.
-    # Cascade on question_subtopic's composite FK removes subtopic rows automatically
-    # when question_topic rows are deleted, but we delete explicitly for clarity.
-    db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
-    db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
-
+    # Phase 1: validate all assignments before any writes so a 422 leaves
+    # the DB unchanged (no half-written state).
     for qt in payload.question_topics:
-        inserted_topic_ids: set[int] = set()
         for assignment in qt.topic_assignments:
             if assignment.topic_id not in valid_topic_ids:
                 raise HTTPException(status_code=422, detail=f"Invalid topic_id {assignment.topic_id}")
-
-            if assignment.topic_id not in inserted_topic_ids:
-                db.add(QuestionTopic(question_id=qt.question_id, topic_id=assignment.topic_id))
-                db.flush()  # composite FK check on question_subtopic inserts requires this row to exist
-                inserted_topic_ids.add(assignment.topic_id)
-
-            seen_subtopic_ids: set[int] = set()
             for s in assignment.subtopics:
                 subtopic = db.get(Subtopic, s.subtopic_id)
                 if subtopic is None or subtopic.topic_id != assignment.topic_id:
@@ -265,6 +254,22 @@ def save_topics(
                         status_code=422,
                         detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {assignment.topic_id}",
                     )
+
+    # Phase 2: delete existing assignments for all questions in this paper.
+    db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
+    db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
+
+    # Phase 3: insert new assignments.
+    for qt in payload.question_topics:
+        inserted_topic_ids: set[int] = set()
+        for assignment in qt.topic_assignments:
+            if assignment.topic_id not in inserted_topic_ids:
+                db.add(QuestionTopic(question_id=qt.question_id, topic_id=assignment.topic_id))
+                db.flush()  # composite FK on question_subtopic requires this row to exist first
+                inserted_topic_ids.add(assignment.topic_id)
+
+            seen_subtopic_ids: set[int] = set()
+            for s in assignment.subtopics:
                 if s.subtopic_id in seen_subtopic_ids:
                     continue
                 seen_subtopic_ids.add(s.subtopic_id)
