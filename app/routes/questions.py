@@ -8,6 +8,7 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionSubtopic,
     QuestionTopic,
     Subtopic,
 )
@@ -44,23 +45,19 @@ def _apply_filters(
 
     if topic_ids:
         q = q.filter(
-            Question.topics.any(
-                QuestionTopic.subtopic.has(Subtopic.topic_id.in_(topic_ids))
-            )
+            Question.topics.any(QuestionTopic.topic_id.in_(topic_ids))
         )
         if exclusive:
             q = q.filter(
-                ~Question.topics.any(
-                    QuestionTopic.subtopic.has(Subtopic.topic_id.notin_(topic_ids))
-                )
+                ~Question.topics.any(QuestionTopic.topic_id.notin_(topic_ids))
             )
 
     if subtopic_keyword:
         kw = subtopic_keyword.strip()
         if kw:
             q = q.filter(
-                Question.topics.any(
-                    QuestionTopic.subtopic.has(Subtopic.name.ilike(f"%{kw}%"))
+                Question.question_subtopics.any(
+                    QuestionSubtopic.subtopic.has(Subtopic.name.ilike(f"%{kw}%"))
                 )
             )
 
@@ -93,6 +90,15 @@ def _first_page_url(question: Question) -> Optional[str]:
         return None
 
 
+def _topic_info(question: Question) -> Optional[dict]:
+    if not question.topics:
+        return None
+    return {
+        "topic_name": question.topics[0].topic.name,
+        "subtopic_names": [qs.subtopic.name for qs in question.question_subtopics],
+    }
+
+
 _PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.subject),
     joinedload(Paper.stream),
@@ -100,8 +106,11 @@ _PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.school),
     joinedload(Paper.exam_type),
 )
-_TOPICS_EAGER = selectinload(Question.topics).options(
-    joinedload(QuestionTopic.subtopic).joinedload(Subtopic.topic),
+_TOPIC_EAGER = selectinload(Question.topics).options(
+    joinedload(QuestionTopic.topic),
+)
+_SUBTOPICS_EAGER = selectinload(Question.question_subtopics).options(
+    joinedload(QuestionSubtopic.subtopic),
 )
 
 
@@ -137,7 +146,7 @@ def list_questions(
 
     questions = (
         _apply_filters(base, *filter_args)
-        .options(_PAPER_EAGER, selectinload(Question.pages), _TOPICS_EAGER)
+        .options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER)
         .order_by(Question.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -150,10 +159,7 @@ def list_questions(
             "question_number": q.question_number,
             "marks": q.marks,
             "paper_info": _paper_info(q.paper),
-            "topics": [
-                {"topic_name": qt.subtopic.topic.name, "subtopic_name": qt.subtopic.name}
-                for qt in q.topics
-            ],
+            "topic": _topic_info(q),
             "first_page_url": _first_page_url(q),
         }
         for q in questions
@@ -170,7 +176,7 @@ def get_question(
     question = (
         db.query(Question)
         .filter(Question.id == question_id)
-        .options(selectinload(Question.pages), _TOPICS_EAGER)
+        .options(selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER)
         .one_or_none()
     )
     if question is None:
@@ -193,8 +199,5 @@ def get_question(
         "marks": question.marks,
         "question_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "question"],
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
-        "topics": [
-            {"topic_name": qt.subtopic.topic.name, "subtopic_name": qt.subtopic.name}
-            for qt in question.topics
-        ],
+        "topic": _topic_info(question),
     }

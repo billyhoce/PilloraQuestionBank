@@ -54,10 +54,17 @@ QuestionPage: {
 }
 
 QuestionTopic: {
-  question_id (FK),
-  topic_id (FK),
-  subtopic_id (FK, nullable),
-  PRIMARY KEY (question_id, topic_id)
+  question_id (PK, FK → Question),
+  topic_id (FK → Topic, NOT NULL),
+  UNIQUE (question_id, topic_id)         -- required for FK from QuestionSubtopic
+}
+
+QuestionSubtopic: {
+  question_id (FK → Question),
+  subtopic_id (FK → Subtopic),
+  topic_id (NOT NULL),
+  PRIMARY KEY (question_id, subtopic_id),
+  FK (question_id, topic_id) → QuestionTopic  -- enforces subtopic is under the question's topic
 }
 
 User: {

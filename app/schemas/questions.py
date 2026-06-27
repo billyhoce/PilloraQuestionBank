@@ -14,9 +14,9 @@ class PaperInfoSchema(BaseModel):
     exam_type_name: str
 
 
-class QuestionTopicChip(BaseModel):
+class QuestionTopicInfo(BaseModel):
     topic_name: str
-    subtopic_name: str
+    subtopic_names: list[str]
 
 
 class QuestionListItem(BaseModel):
@@ -24,7 +24,7 @@ class QuestionListItem(BaseModel):
     question_number: int
     marks: Optional[int] = None
     paper_info: PaperInfoSchema
-    topics: list[QuestionTopicChip]
+    topic: Optional[QuestionTopicInfo] = None
     first_page_url: Optional[str] = None
 
 
@@ -48,4 +48,4 @@ class QuestionDetailResponse(BaseModel):
     marks: Optional[int] = None
     question_pages: list[QuestionPageSchema]
     answer_pages: list[QuestionPageSchema]
-    topics: list[QuestionTopicChip]
+    topic: Optional[QuestionTopicInfo] = None

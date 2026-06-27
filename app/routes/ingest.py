@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.ai.topic_labeler import label_question
 from app.db import get_db
 from app.logger import Timer, log
-from app.models.orm import Paper, Question, QuestionTopic, Subtopic, Topic
+from app.models.orm import Paper, Question, QuestionSubtopic, QuestionTopic, Subtopic, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
@@ -58,7 +58,8 @@ class AiTopicsResponse(BaseModel):
 
 class QuestionTopicsIn(BaseModel):
     question_id: int
-    topics: list[SubtopicSuggestion]
+    topic_id: int
+    subtopics: list[SubtopicSuggestion] = []
 
 
 class SaveTopicsPayload(BaseModel):
@@ -225,27 +226,42 @@ def save_topics(
     if not requested_ids.issubset(paper_question_ids):
         raise HTTPException(status_code=422, detail="One or more questions do not belong to this paper")
 
-    valid_subtopic_ids = {
-        sid for (sid,) in db.query(Subtopic.id)
-        .join(Topic, Topic.id == Subtopic.topic_id)
+    valid_topic_ids = {
+        tid for (tid,) in db.query(Topic.id)
         .filter(Topic.subject_id == paper.subject_id, Topic.stream_id == paper.stream_id)
         .all()
     }
 
+    # Delete existing assignments for all questions in this paper.
+    # Cascade on question_subtopic's composite FK removes those rows automatically
+    # when question_topic rows are deleted, but we also delete explicitly for clarity.
+    db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
     db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
 
     for qt in payload.question_topics:
+        if qt.topic_id not in valid_topic_ids:
+            raise HTTPException(status_code=422, detail=f"Invalid topic_id {qt.topic_id}")
+
+        db.add(QuestionTopic(question_id=qt.question_id, topic_id=qt.topic_id))
+        db.flush()  # needed so the composite FK check passes on question_subtopic inserts
+
         seen_subtopic_ids: set[int] = set()
-        for t in qt.topics:
-            if t.subtopic_id not in valid_subtopic_ids:
-                raise HTTPException(status_code=422, detail=f"Invalid subtopic_id {t.subtopic_id}")
-            if t.subtopic_id in seen_subtopic_ids:
+        for s in qt.subtopics:
+            subtopic = db.get(Subtopic, s.subtopic_id)
+            if subtopic is None or subtopic.topic_id != qt.topic_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {qt.topic_id}",
+                )
+            if s.subtopic_id in seen_subtopic_ids:
                 continue
-            seen_subtopic_ids.add(t.subtopic_id)
-            db.add(QuestionTopic(
+            seen_subtopic_ids.add(s.subtopic_id)
+            db.add(QuestionSubtopic(
                 question_id=qt.question_id,
-                subtopic_id=t.subtopic_id,
+                subtopic_id=s.subtopic_id,
+                topic_id=qt.topic_id,
             ))
+
     db.flush()
     return {"message": "Topics saved"}
 
