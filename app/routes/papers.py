@@ -87,6 +87,22 @@ _QUESTION_EAGER = (
 )
 
 
+def _topic_selections(q: Question) -> list[dict]:
+    """Return flat [{topic_id, subtopic_id}] selections for the editor UI."""
+    subtopics_by_topic: dict[int, list[int]] = {}
+    for qs in q.question_subtopics:
+        subtopics_by_topic.setdefault(qs.topic_id, []).append(qs.subtopic_id)
+    result = []
+    for qt in q.topics:
+        subtopic_ids = subtopics_by_topic.get(qt.topic_id, [])
+        if subtopic_ids:
+            for sid in subtopic_ids:
+                result.append({"topic_id": qt.topic_id, "subtopic_id": sid})
+        else:
+            result.append({"topic_id": qt.topic_id, "subtopic_id": None})
+    return result
+
+
 def _serialize_question(q: Question) -> dict:
     pages = sorted(q.pages, key=lambda p: (p.page_type, p.page_order))
     return {
@@ -104,7 +120,7 @@ def _serialize_question(q: Question) -> dict:
             }
             for p in pages
         ],
-        "topics": _topic_infos(q),
+        "selections": _topic_selections(q),
     }
 
 

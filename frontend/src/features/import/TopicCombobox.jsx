@@ -3,12 +3,24 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 function flattenTopics(topics) {
   const out = []
   for (const t of topics) {
-    for (const s of t.subtopics || []) {
+    const subtopics = t.subtopics || []
+    if (subtopics.length > 0) {
+      for (const s of subtopics) {
+        out.push({
+          key: `s-${s.id}`,
+          topic_id: t.id,
+          subtopic_id: s.id,
+          topic_name: t.name,
+          subtopic_name: s.name,
+        })
+      }
+    } else {
       out.push({
-        key: `s-${s.id}`,
-        subtopic_id: s.id,
+        key: `t-${t.id}`,
+        topic_id: t.id,
+        subtopic_id: null,
         topic_name: t.name,
-        subtopic_name: s.name,
+        subtopic_name: null,
       })
     }
   }
@@ -23,19 +35,22 @@ export default function TopicCombobox({ topics, selected, onAdd, placeholder = '
   const inputRef = useRef(null)
 
   const flat = useMemo(() => flattenTopics(topics || []), [topics])
-  const selectedSubtopicIds = useMemo(() => new Set((selected || []).map(s => s.subtopic_id)), [selected])
+  const selectedKeys = useMemo(
+    () => new Set((selected || []).map(s => `${s.topic_id}-${s.subtopic_id}`)),
+    [selected]
+  )
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return flat
-      .filter(opt => !selectedSubtopicIds.has(opt.subtopic_id))
+      .filter(opt => !selectedKeys.has(`${opt.topic_id}-${opt.subtopic_id}`))
       .filter(opt => {
         if (!q) return true
-        const label = `${opt.topic_name} ${opt.subtopic_name}`
+        const label = opt.subtopic_name ? `${opt.topic_name} ${opt.subtopic_name}` : opt.topic_name
         return label.toLowerCase().includes(q)
       })
       .slice(0, 50)
-  }, [flat, query, selectedSubtopicIds])
+  }, [flat, query, selectedKeys])
 
   useEffect(() => { setActiveIdx(0) }, [query, open])
 
@@ -48,7 +63,7 @@ export default function TopicCombobox({ topics, selected, onAdd, placeholder = '
   }, [])
 
   function pick(opt) {
-    onAdd({ subtopic_id: opt.subtopic_id })
+    onAdd({ topic_id: opt.topic_id, subtopic_id: opt.subtopic_id })
     setQuery('')
     setOpen(false)
     inputRef.current?.focus()
@@ -92,7 +107,7 @@ export default function TopicCombobox({ topics, selected, onAdd, placeholder = '
               className={`px-2 py-1 cursor-pointer ${i === activeIdx ? 'bg-blue-50' : ''}`}
             >
               <span className="text-gray-900">{opt.topic_name}</span>
-              <span className="text-gray-500"> &raquo; {opt.subtopic_name}</span>
+              {opt.subtopic_name && <span className="text-gray-500"> &raquo; {opt.subtopic_name}</span>}
             </li>
           ))}
         </ul>
