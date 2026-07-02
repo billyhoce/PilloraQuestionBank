@@ -4,6 +4,7 @@ import Spinner from '../../components/Spinner'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import TopicCombobox from '../import/TopicCombobox'
 import PageImageEditor, { existingPageDraft } from './PageImageEditor'
+import { selectionsToAssignments } from '../import/topicUtils'
 
 function seedPages(question, type) {
   return (question.pages || [])
@@ -19,9 +20,7 @@ function QuestionEditor({
   const [marks, setMarks] = useState(question.marks != null ? String(question.marks) : '')
   const [qPages, setQPages] = useState(() => (isNew ? [] : seedPages(question, 'question')))
   const [aPages, setAPages] = useState(() => (isNew ? [] : seedPages(question, 'answer')))
-  const [selected, setSelected] = useState(() =>
-    (question.topics || []).map((t) => ({ subtopic_id: t.subtopic_id }))
-  )
+  const [selected, setSelected] = useState(() => question.selections || [])
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -30,9 +29,11 @@ function QuestionEditor({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  const { subtopicById, topicById } = lookup || {}
+
   function addTopic(sel) {
     setSelected((prev) =>
-      prev.some((s) => s.subtopic_id === sel.subtopic_id) ? prev : [...prev, sel]
+      prev.some((s) => s.topic_id === sel.topic_id && s.subtopic_id === sel.subtopic_id) ? prev : [...prev, sel]
     )
   }
   function removeTopic(idx) {
@@ -51,7 +52,7 @@ function QuestionEditor({
     return {
       question_number: Number(questionNumber),
       marks: marks === '' ? null : Number(marks),
-      subtopic_ids: selected.map((s) => s.subtopic_id),
+      topic_assignments: selectionsToAssignments(selected),
       pages: ordered,
     }
   }
@@ -105,7 +106,7 @@ function QuestionEditor({
     setAiError(null)
     try {
       const res = await api.import.aiTopicsForQuestion(question.id)
-      setSelected(res.suggestions || [])
+      setSelected(res.selections || [])
     } catch (e) {
       setAiError(e.message)
     } finally {
@@ -187,12 +188,17 @@ function QuestionEditor({
               <p className="text-sm text-gray-400 italic">No topics selected</p>
             )}
             {selected.map((sel, i) => {
-              const s = lookup?.get(sel.subtopic_id)
+              let label
+              if (sel.subtopic_id != null) {
+                const s = subtopicById?.get(sel.subtopic_id)
+                label = s ? <><strong>{s.topic_name}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
+              } else {
+                const tName = topicById?.get(sel.topic_id)
+                label = tName ? <strong>{tName}</strong> : `Unknown topic ${sel.topic_id}`
+              }
               return (
                 <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
-                  <p className="text-sm text-gray-700 flex-grow">
-                    {s ? (<><strong>{s.topic_name}</strong> » {s.name}</>) : `Subtopic ${sel.subtopic_id}`}
-                  </p>
+                  <p className="text-sm text-gray-700 flex-grow">{label}</p>
                   <button
                     type="button"
                     onClick={() => removeTopic(i)}

@@ -194,6 +194,130 @@ def test_create_subtopic_duplicate_same_topic_returns_409(admin_client, referenc
 
 
 # ---------------------------------------------------------------------------
+# Topics — bulk sync (full replace)
+# ---------------------------------------------------------------------------
+
+
+def test_topics_sync_create_update_preserves_ids(admin_client, reference_data):
+    rd = reference_data
+    payload = {
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [
+            {
+                "id": rd["topic"].id,
+                "topic_number": 1,
+                "name": "Algebra II",  # rename in place
+                "subtopics": [{"id": rd["subtopic"].id, "name": "Linear Equations"}],
+            },
+            {
+                "id": None,
+                "topic_number": 2,
+                "name": "Geometry",  # new topic
+                "subtopics": [{"id": None, "name": "Circles"}, {"id": None, "name": "Polygons"}],
+            },
+        ],
+    }
+    resp = admin_client.put("/api/topics/sync", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert [t["name"] for t in data] == ["Algebra II", "Geometry"]
+    algebra = next(t for t in data if t["name"] == "Algebra II")
+    assert algebra["id"] == rd["topic"].id  # id preserved → question refs intact
+    geometry = next(t for t in data if t["name"] == "Geometry")
+    assert sorted(s["name"] for s in geometry["subtopics"]) == ["Circles", "Polygons"]
+
+
+def test_topics_sync_delete_all(admin_client, reference_data):
+    rd = reference_data
+    resp = admin_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+
+
+def test_topics_sync_delete_strips_question_labels(admin_client, reference_data, sample_paper, db_session):
+    from app.models.orm import Question, QuestionSubtopic, QuestionTopic
+
+    rd = reference_data
+    question = db_session.query(Question).filter_by(paper_id=sample_paper.id).first()
+    db_session.add(QuestionTopic(question_id=question.id, topic_id=rd["topic"].id))
+    db_session.flush()  # parent row must exist before the composite-FK subtopic link
+    db_session.add(QuestionSubtopic(
+        question_id=question.id, subtopic_id=rd["subtopic"].id, topic_id=rd["topic"].id
+    ))
+    db_session.flush()
+    assert db_session.query(QuestionTopic).filter_by(topic_id=rd["topic"].id).count() == 1
+
+    # Removing the topic from the sync payload deletes it and strips the labels.
+    resp = admin_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [],
+    })
+    assert resp.status_code == 200
+
+    db_session.expire_all()
+    assert db_session.query(QuestionTopic).filter_by(topic_id=rd["topic"].id).count() == 0
+    assert db_session.query(QuestionSubtopic).filter_by(subtopic_id=rd["subtopic"].id).count() == 0
+    # The question itself is kept.
+    assert db_session.query(Question).filter_by(id=question.id).first() is not None
+
+
+def test_topics_sync_swap_topic_numbers(admin_client, reference_data):
+    rd = reference_data
+    first = admin_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [
+            {"id": rd["topic"].id, "topic_number": 1, "name": "Algebra", "subtopics": []},
+            {"id": None, "topic_number": 2, "name": "Geometry", "subtopics": []},
+        ],
+    })
+    assert first.status_code == 200
+    ids = {t["name"]: t["id"] for t in first.json()["data"]}
+
+    # Swap their numbers — must not trip the unique (subject, stream, number) constraint.
+    swap = admin_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [
+            {"id": ids["Algebra"], "topic_number": 2, "name": "Algebra", "subtopics": []},
+            {"id": ids["Geometry"], "topic_number": 1, "name": "Geometry", "subtopics": []},
+        ],
+    })
+    assert swap.status_code == 200, swap.text
+    numbers = {t["name"]: t["topic_number"] for t in swap.json()["data"]}
+    assert numbers == {"Geometry": 1, "Algebra": 2}
+
+
+def test_topics_sync_duplicate_number_returns_400(admin_client, reference_data):
+    rd = reference_data
+    resp = admin_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [
+            {"id": None, "topic_number": 1, "name": "A", "subtopics": []},
+            {"id": None, "topic_number": 1, "name": "B", "subtopics": []},
+        ],
+    })
+    assert resp.status_code == 400
+
+
+def test_topics_sync_requires_admin(public_client, reference_data):
+    rd = reference_data
+    resp = public_client.put("/api/topics/sync", json={
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "topics": [],
+    })
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # Parametrized smoke tests — all list endpoints return 200
 # ---------------------------------------------------------------------------
 

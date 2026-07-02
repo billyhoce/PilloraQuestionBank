@@ -4,6 +4,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     UniqueConstraint,
@@ -66,6 +67,7 @@ class Topic(Base):
     __tablename__ = "topic"
     __table_args__ = (
         UniqueConstraint("subject_id", "stream_id", "name", name="uq_topic_subject_stream_name"),
+        UniqueConstraint("subject_id", "stream_id", "topic_number", name="uq_topic_subject_stream_number"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -142,6 +144,7 @@ class Question(Base):
     paper: Mapped[Paper] = relationship(back_populates="questions")
     pages: Mapped[list["QuestionPage"]] = relationship(back_populates="question", cascade="all, delete-orphan")
     topics: Mapped[list["QuestionTopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
+    question_subtopics: Mapped[list["QuestionSubtopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
 
 
 class QuestionPage(Base):
@@ -169,9 +172,35 @@ class QuestionTopic(Base):
     question_id: Mapped[int] = mapped_column(
         ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
     )
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topic.id", ondelete="RESTRICT"), primary_key=True
+    )
+
+    question: Mapped["Question"] = relationship(back_populates="topics")
+    topic: Mapped["Topic"] = relationship()
+
+
+class QuestionSubtopic(Base):
+    __tablename__ = "question_subtopic"
+    __table_args__ = (
+        # Composite FK enforces that a subtopic can only be assigned when the
+        # matching topic is already recorded in question_topic for this question.
+        # ON DELETE CASCADE propagates when the topic assignment is removed.
+        ForeignKeyConstraint(
+            ["question_id", "topic_id"],
+            ["question_topic.question_id", "question_topic.topic_id"],
+            name="fk_qsubtopic_question_topic",
+            ondelete="CASCADE",
+        ),
+    )
+
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
+    )
     subtopic_id: Mapped[int] = mapped_column(
         ForeignKey("subtopic.id", ondelete="CASCADE"), primary_key=True
     )
+    topic_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    question: Mapped[Question] = relationship(back_populates="topics")
-    subtopic: Mapped[Subtopic] = relationship()
+    question: Mapped["Question"] = relationship(back_populates="question_subtopics")
+    subtopic: Mapped["Subtopic"] = relationship()

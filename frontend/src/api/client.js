@@ -129,18 +129,12 @@ export const api = {
   topics: {
     list: (subject_id, stream_id) =>
       request('GET', `/api/topics?subject_id=${subject_id}&stream_id=${stream_id}`).then(r => r.data),
-    create: (subject_id, stream_id, name, topic_number) =>
-      request('POST', '/api/topics', { subject_id, stream_id, name, topic_number }),
-    update: (id, subject_id, stream_id, name, topic_number) =>
-      request('PUT', `/api/topics/${id}`, { subject_id, stream_id, name, topic_number }),
-    delete: (id) => request('DELETE', `/api/topics/${id}`),
+    sync: (subject_id, stream_id, topics) =>
+      request('PUT', '/api/topics/sync', { subject_id, stream_id, topics }).then(r => r.data),
   },
 
   subtopics: {
     list: (topic_id) => request('GET', `/api/subtopics?topic_id=${topic_id}`).then(r => r.data),
-    create: (topic_id, name) => request('POST', '/api/subtopics', { topic_id, name }),
-    update: (id, topic_id, name) => request('PUT', `/api/subtopics/${id}`, { topic_id, name }),
-    delete: (id) => request('DELETE', `/api/subtopics/${id}`),
   },
 
   questions: {

@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pytest
 
-from app.models.orm import Paper, Question, QuestionPage, QuestionTopic
+from app.models.orm import Paper, Question, QuestionPage, QuestionSubtopic, QuestionTopic
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +132,12 @@ def test_list_questions_filter_by_year(public_client, db_session, reference_data
 
 
 def test_list_questions_filter_by_topic_ids(public_client, db_session, reference_data, admin_user):
-    """topic_ids filter matches any question whose subtopic belongs to one of the listed topics."""
+    """topic_ids filter matches any question assigned to one of the listed topics."""
     paper = _add_paper(db_session, reference_data, admin_user)
     q_with_topic = _add_question(db_session, paper, number=1)
     q_no_topic = _add_question(db_session, paper, number=2)
 
-    qt = QuestionTopic(question_id=q_with_topic.id, subtopic_id=reference_data["subtopic"].id)
+    qt = QuestionTopic(question_id=q_with_topic.id, topic_id=reference_data["topic"].id)
     db_session.add(qt)
     db_session.flush()
 
@@ -165,8 +165,8 @@ def test_list_questions_filter_by_topic_ids_inclusive_union(public_client, db_se
     q_b = _add_question(db_session, paper, number=2)
     q_none = _add_question(db_session, paper, number=3)
     db_session.add_all([
-        QuestionTopic(question_id=q_a.id, subtopic_id=rd["subtopic"].id),
-        QuestionTopic(question_id=q_b.id, subtopic_id=sub_b.id),
+        QuestionTopic(question_id=q_a.id, topic_id=rd["topic"].id),
+        QuestionTopic(question_id=q_b.id, topic_id=topic_b.id),
     ])
     db_session.flush()
 
@@ -196,9 +196,9 @@ def test_list_questions_exclusive_topic_filter(public_client, db_session, refere
     q_only_a = _add_question(db_session, paper, number=1)
     q_a_and_b = _add_question(db_session, paper, number=2)
     db_session.add_all([
-        QuestionTopic(question_id=q_only_a.id, subtopic_id=rd["subtopic"].id),
-        QuestionTopic(question_id=q_a_and_b.id, subtopic_id=rd["subtopic"].id),
-        QuestionTopic(question_id=q_a_and_b.id, subtopic_id=sub_b.id),
+        QuestionTopic(question_id=q_only_a.id, topic_id=rd["topic"].id),
+        QuestionTopic(question_id=q_a_and_b.id, topic_id=rd["topic"].id),
+        QuestionTopic(question_id=q_a_and_b.id, topic_id=topic_b.id),
     ])
     db_session.flush()
 
@@ -225,10 +225,20 @@ def test_list_questions_subtopic_keyword(public_client, db_session, reference_da
     db_session.add(other_sub)
     db_session.flush()
 
-    db_session.add_all([
-        QuestionTopic(question_id=q_match.id, subtopic_id=reference_data["subtopic"].id),
-        QuestionTopic(question_id=q_other.id, subtopic_id=other_sub.id),
-    ])
+    db_session.add(QuestionTopic(question_id=q_match.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+    db_session.add(QuestionSubtopic(
+        question_id=q_match.id,
+        subtopic_id=reference_data["subtopic"].id,
+        topic_id=reference_data["topic"].id,
+    ))
+    db_session.add(QuestionTopic(question_id=q_other.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+    db_session.add(QuestionSubtopic(
+        question_id=q_other.id,
+        subtopic_id=other_sub.id,
+        topic_id=reference_data["topic"].id,
+    ))
     db_session.flush()
 
     resp = public_client.get("/api/questions?subtopic_keyword=linear")
@@ -319,11 +329,13 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
 
     paper = _add_paper(db_session, reference_data, admin_user)
     q = _add_question(db_session, paper)
-    qt = QuestionTopic(
+    db_session.add(QuestionTopic(question_id=q.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+    db_session.add(QuestionSubtopic(
         question_id=q.id,
         subtopic_id=reference_data["subtopic"].id,
-    )
-    db_session.add(qt)
+        topic_id=reference_data["topic"].id,
+    ))
     db_session.flush()
 
     with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
@@ -333,4 +345,4 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
     topics = resp.json()["topics"]
     assert len(topics) >= 1
     assert topics[0]["topic_name"] == "Algebra"
-    assert topics[0]["subtopic_name"] == "Linear Equations"
+    assert "Linear Equations" in topics[0]["subtopic_names"]

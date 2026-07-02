@@ -9,6 +9,7 @@ from app.models.orm import (
     ExamType,
     Level,
     Paper,
+    QuestionTopic,
     School,
     SchoolLevel,
     Stream,
@@ -32,6 +33,7 @@ from app.schemas.reference import (
     SubtopicResponse,
     TopicRequest,
     TopicResponse,
+    TopicSyncRequest,
     TopicWithSubtopicsResponse,
 )
 
@@ -381,6 +383,106 @@ def list_topics(subject_id: Optional[int] = None, stream_id: Optional[int] = Non
     if stream_id is not None:
         q = q.filter(Topic.stream_id == stream_id)
     topics = q.order_by(Topic.topic_number).all()
+    return {"data": [TopicWithSubtopicsResponse.model_validate(t) for t in topics]}
+
+
+@router.put("/topics/sync")
+def sync_topics(payload: TopicSyncRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Full-sync the topics + subtopics of one (subject, stream).
+
+    The submitted list is the source of truth: rows with an id are updated in place,
+    rows without an id are created, and existing rows absent from the payload are
+    deleted. Deleting a topic/subtopic that questions still reference strips that
+    label from those questions (the questions themselves are kept).
+    """
+    subject_id = payload.subject_id
+    stream_id = payload.stream_id
+
+    # --- Validate payload ---
+    seen_numbers: set[int] = set()
+    seen_names: set[str] = set()
+    for t in payload.topics:
+        name = t.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Topic name cannot be empty")
+        if t.topic_number < 1:
+            raise HTTPException(status_code=400, detail="Topic number must be at least 1")
+        if t.topic_number in seen_numbers:
+            raise HTTPException(status_code=400, detail=f"Duplicate topic number {t.topic_number}")
+        seen_numbers.add(t.topic_number)
+        name_key = name.lower()
+        if name_key in seen_names:
+            raise HTTPException(status_code=400, detail=f'Duplicate topic name "{name}"')
+        seen_names.add(name_key)
+        seen_subs: set[str] = set()
+        for s in t.subtopics:
+            sname = s.name.strip()
+            if not sname:
+                raise HTTPException(status_code=400, detail="Subtopic name cannot be empty")
+            sname_key = sname.lower()
+            if sname_key in seen_subs:
+                raise HTTPException(status_code=400, detail=f'Duplicate subtopic name "{sname}" in topic "{name}"')
+            seen_subs.add(sname_key)
+
+    # --- Load existing state ---
+    existing = (
+        db.query(Topic)
+        .options(joinedload(Topic.subtopics))
+        .filter(Topic.subject_id == subject_id, Topic.stream_id == stream_id)
+        .all()
+    )
+    existing_by_id = {t.id: t for t in existing}
+    payload_topic_ids = {t.id for t in payload.topics if t.id is not None}
+
+    # --- Delete topics absent from the payload (strip their question labels first) ---
+    for topic in existing:
+        if topic.id not in payload_topic_ids:
+            db.query(QuestionTopic).filter(QuestionTopic.topic_id == topic.id).delete(synchronize_session=False)
+            db.delete(topic)
+    db.flush()
+
+    # --- Park updated topics' numbers in a temp range so renumbers/swaps don't trip
+    #     the (subject, stream, topic_number) unique constraint mid-update. ---
+    updated = [t for t in payload.topics if t.id is not None and t.id in existing_by_id]
+    for t in updated:
+        existing_by_id[t.id].topic_number = -(t.topic_number + 100000)
+    db.flush()
+
+    try:
+        for t in payload.topics:
+            tname = t.name.strip()
+            if t.id is not None and t.id in existing_by_id:
+                obj = existing_by_id[t.id]
+                obj.name = tname
+                obj.topic_number = t.topic_number
+            else:
+                obj = Topic(subject_id=subject_id, stream_id=stream_id, name=tname, topic_number=t.topic_number)
+                db.add(obj)
+                db.flush()
+
+            existing_subs = {s.id: s for s in obj.subtopics}
+            payload_sub_ids = {s.id for s in t.subtopics if s.id is not None}
+            for sub in list(obj.subtopics):
+                if sub.id not in payload_sub_ids:
+                    obj.subtopics.remove(sub)  # delete-orphan cascade removes the row
+            for s in t.subtopics:
+                sname = s.name.strip()
+                if s.id is not None and s.id in existing_subs:
+                    existing_subs[s.id].name = sname
+                else:
+                    obj.subtopics.append(Subtopic(name=sname))
+            db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Topic or subtopic name conflicts with another entry")
+
+    topics = (
+        db.query(Topic)
+        .options(joinedload(Topic.subtopics))
+        .filter(Topic.subject_id == subject_id, Topic.stream_id == stream_id)
+        .order_by(Topic.topic_number)
+        .all()
+    )
     return {"data": [TopicWithSubtopicsResponse.model_validate(t) for t in topics]}
 
 

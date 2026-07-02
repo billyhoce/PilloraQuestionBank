@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
 import TopicCombobox from './TopicCombobox'
+import { buildTopicLookup, selectionsToAssignments } from './topicUtils'
 
 const REQUEST_INTERVAL_MS = 1300
 
@@ -16,15 +17,6 @@ function createRateLimitedQueue(intervalMs) {
   }
 }
 
-function buildTopicLookup(topics) {
-  const subtopicById = new Map()
-  for (const t of topics) {
-    for (const s of t.subtopics || []) {
-      subtopicById.set(s.id, { name: s.name, topic_name: t.name })
-    }
-  }
-  return { subtopicById }
-}
 
 export default function TopicReview({ paperId, questions, subjectId, streamId, onDone, onCancel }) {
   const [topics, setTopics] = useState(null)
@@ -46,7 +38,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
       const result = await enqueue(() => api.import.aiTopicsForQuestion(qid, abortRef.current?.signal))
       setQuestionState(prev => ({
         ...prev,
-        [qid]: { status: 'ready', selected: result.suggestions || [], error: null },
+        [qid]: { status: 'ready', selected: result.selections || [], error: null },
       }))
     } catch (e) {
       if (e.name === 'AbortError') return
@@ -75,7 +67,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   function addTopic(qid, sel) {
     setQuestionState(prev => {
       const cur = prev[qid]
-      if (cur.selected.some(s => s.subtopic_id === sel.subtopic_id)) return prev
+      if (cur.selected.some(s => s.topic_id === sel.topic_id && s.subtopic_id === sel.subtopic_id)) return prev
       return { ...prev, [qid]: { ...cur, selected: [...cur.selected, sel] } }
     })
   }
@@ -95,7 +87,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
     try {
       const question_topics = questions.map(q => ({
         question_id: q.id,
-        topics: questionState[q.id]?.selected ?? [],
+        topic_assignments: selectionsToAssignments(questionState[q.id]?.selected ?? []),
       }))
       await api.import.saveTopics(paperId, question_topics)
       onDone()
@@ -191,18 +183,17 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
                       <p className="text-sm text-gray-400 italic">No topics selected</p>
                     )}
                     {state.selected.map((sel, i) => {
-                      const s = lookup.subtopicById.get(sel.subtopic_id)
+                      let label
+                      if (sel.subtopic_id != null) {
+                        const s = lookup.subtopicById.get(sel.subtopic_id)
+                        label = s ? <><strong>{s.topic_name}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
+                      } else {
+                        const tName = lookup.topicById.get(sel.topic_id)
+                        label = tName ? <strong>{tName}</strong> : `Unknown topic ${sel.topic_id}`
+                      }
                       return (
                         <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
-                          <p className="text-sm text-gray-700 flex-grow">
-                            {s ? (
-                              <>
-                                <strong>{s.topic_name}</strong> » {s.name}
-                              </>
-                            ) : (
-                              `Subtopic ${sel.subtopic_id}`
-                            )}
-                          </p>
+                          <p className="text-sm text-gray-700 flex-grow">{label}</p>
                           <button
                             type="button"
                             onClick={() => removeTopic(q.id, i)}

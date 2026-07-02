@@ -389,7 +389,7 @@ def test_ai_topics_admin_only(public_client, sample_paper):
 def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3, sample_paper, db_session, reference_data):
     q = sample_paper.questions[0]
     rd = reference_data
-    suggestion = [{"subtopic_id": rd["subtopic"].id}]
+    suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
     with (
         patch("app.routes.ingest.label_question", return_value=suggestion) as mock_label,
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
@@ -399,7 +399,7 @@ def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["suggestions"] == suggestion
+    assert body["selections"] == suggestion
     mock_label.assert_called_once()
 
 
@@ -411,7 +411,7 @@ def test_ai_topics_missing_question_returns_404(admin_client, mock_s3):
 def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_session, reference_data):
     q = sample_paper.questions[0]
     rd = reference_data
-    suggestion = [{"subtopic_id": rd["subtopic"].id}]
+    suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
     with (
         patch("app.routes.ingest.label_question", return_value=suggestion),
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
@@ -422,8 +422,8 @@ def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_sess
     assert db_session.query(QuestionTopic).count() == 0
 
 
-def test_ai_topics_excludes_topics_with_no_subtopics(admin_client, mock_s3, sample_paper, db_session, reference_data):
-    """Topics without any subtopic must not be sent to the labeler (they are unselectable)."""
+def test_ai_topics_includes_topics_without_subtopics(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    """Topics without subtopics appear as bare selectable options in the flat list."""
     from app.models.orm import Topic
     rd = reference_data
     bare = Topic(subject_id=rd["subject"].id, stream_id=rd["stream"].id, name="Bare Topic", topic_number=999)
@@ -445,7 +445,7 @@ def test_ai_topics_excludes_topics_with_no_subtopics(admin_client, mock_s3, samp
         admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
     sent_ids = {t["id"] for t in captured["topics"]}
-    assert bare.id not in sent_ids
+    assert bare.id in sent_ids
     assert rd["topic"].id in sent_ids
 
 
@@ -508,7 +508,9 @@ def test_save_topics_persists_question_topics(admin_client, sample_paper, db_ses
         "question_topics": [
             {
                 "question_id": q.id,
-                "topics": [{"subtopic_id": rd["subtopic"].id}],
+                "topic_assignments": [
+                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
+                ],
             }
             for q in sample_paper.questions
         ],
@@ -523,7 +525,10 @@ def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, d
     payload = {
         "paper_id": sample_paper.id,
         "question_topics": [
-            {"question_id": 99999, "topics": [{"subtopic_id": rd["subtopic"].id}]}
+            {
+                "question_id": 99999,
+                "topic_assignments": [{"topic_id": rd["topic"].id, "subtopics": []}],
+            }
         ],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
@@ -531,11 +536,17 @@ def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, d
     assert db_session.query(QuestionTopic).count() == 0
 
 
-def test_save_topics_rejects_invalid_subtopic_id(admin_client, sample_paper, db_session):
+def test_save_topics_rejects_invalid_subtopic_id(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
     payload = {
         "paper_id": sample_paper.id,
         "question_topics": [
-            {"question_id": sample_paper.questions[0].id, "topics": [{"subtopic_id": 99999}]}
+            {
+                "question_id": sample_paper.questions[0].id,
+                "topic_assignments": [
+                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": 99999}]}
+                ],
+            }
         ],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
@@ -546,26 +557,31 @@ def test_save_topics_rejects_invalid_subtopic_id(admin_client, sample_paper, db_
 def test_save_topics_replaces_existing_rows(admin_client, sample_paper, db_session, reference_data):
     rd = reference_data
     q = sample_paper.questions[0]
-    db_session.add(QuestionTopic(question_id=q.id, subtopic_id=rd["subtopic"].id))
+    db_session.add(QuestionTopic(question_id=q.id, topic_id=rd["topic"].id))
     db_session.flush()
     assert db_session.query(QuestionTopic).count() == 1
 
     payload = {
         "paper_id": sample_paper.id,
         "question_topics": [
-            {"question_id": q.id, "topics": [{"subtopic_id": rd["subtopic"].id}]}
+            {
+                "question_id": q.id,
+                "topic_assignments": [
+                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
+                ],
+            }
         ],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
     rows = db_session.query(QuestionTopic).all()
     assert len(rows) == 1
-    assert rows[0].subtopic_id == rd["subtopic"].id
+    assert rows[0].topic_id == rd["topic"].id
 
 
 def test_save_topics_allows_multiple_subtopics_under_same_topic(admin_client, sample_paper, db_session, reference_data):
     """A single question can have multiple subtopics belonging to the same parent topic."""
-    from app.models.orm import Subtopic
+    from app.models.orm import QuestionSubtopic, Subtopic
     rd = reference_data
     sub2 = Subtopic(topic_id=rd["topic"].id, name="Quadratic Equations")
     db_session.add(sub2)
@@ -578,17 +594,23 @@ def test_save_topics_allows_multiple_subtopics_under_same_topic(admin_client, sa
         "question_topics": [
             {
                 "question_id": q.id,
-                "topics": [
-                    {"subtopic_id": rd["subtopic"].id},
-                    {"subtopic_id": sub2_id},
+                "topic_assignments": [
+                    {
+                        "topic_id": rd["topic"].id,
+                        "subtopics": [
+                            {"subtopic_id": rd["subtopic"].id},
+                            {"subtopic_id": sub2_id},
+                        ],
+                    }
                 ],
             }
         ],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
-    rows = db_session.query(QuestionTopic).filter(QuestionTopic.question_id == q.id).all()
-    assert {r.subtopic_id for r in rows} == {rd["subtopic"].id, sub2_id}
+    assert db_session.query(QuestionTopic).filter(QuestionTopic.question_id == q.id).count() == 1
+    qs_rows = db_session.query(QuestionSubtopic).filter(QuestionSubtopic.question_id == q.id).all()
+    assert {r.subtopic_id for r in qs_rows} == {rd["subtopic"].id, sub2_id}
 
 
 # ---------------------------------------------------------------------------

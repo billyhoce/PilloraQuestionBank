@@ -6,16 +6,10 @@ import ErrorBanner from '../../components/ErrorBanner'
 import useRefs from './useRefs'
 import PaperMetadataBar from './PaperMetadataBar'
 import QuestionEditor from './QuestionEditor'
+import { buildTopicLookup } from '../import/topicUtils'
 
 const AI_INTERVAL_MS = 1300
 
-function buildLookup(topics) {
-  const m = new Map()
-  for (const t of topics || []) {
-    for (const s of t.subtopics || []) m.set(s.id, { name: s.name, topic_name: t.name })
-  }
-  return m
-}
 
 function rateLimited(intervalMs) {
   let last = 0
@@ -56,7 +50,7 @@ export default function PaperEditor() {
     }
   }
 
-  const lookup = useMemo(() => buildLookup(topics), [topics])
+  const lookup = useMemo(() => buildTopicLookup(topics), [topics])
   const enqueue = useRef(rateLimited(AI_INTERVAL_MS)).current
 
   const loadTopics = useCallback((subjectId, streamId) => {
@@ -105,7 +99,7 @@ export default function PaperEditor() {
       for (const q of fresh.questions) {
         try {
           const res = await enqueue(() => api.import.aiTopicsForQuestion(q.id))
-          seed[q.id] = res.suggestions || []
+          seed[q.id] = res.selections || []
         } catch {
           seed[q.id] = []
         }
@@ -247,9 +241,7 @@ export default function PaperEditor() {
         <div className="flex-1 min-w-0">
           <div className="space-y-6">
             {sortedQuestions.map((q) => {
-              const seedQuestion = aiSeed[q.id]
-                ? { ...q, topics: aiSeed[q.id].map((s) => ({ subtopic_id: s.subtopic_id })) }
-                : q
+              const seedQuestion = aiSeed[q.id] ? { ...q, selections: aiSeed[q.id] } : q
               return (
                 <div key={`${q.id}-${relabelVersion}`} id={`q-${q.id}`} className="scroll-mt-4">
                   <QuestionEditor
