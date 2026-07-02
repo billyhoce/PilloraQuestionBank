@@ -164,8 +164,9 @@ def test_add_question(admin_client, sample_paper, reference_data, mock_s3):
     assert q["question_number"] == 4
     assert q["marks"] == 7
     assert len(q["pages"]) == 1
-    assert len(q["topics"]) == 1
-    assert q["topics"][0]["topic_name"] == "Algebra"
+    assert len(q["selections"]) == 1
+    assert q["selections"][0]["topic_id"] == reference_data["topic"].id
+    assert q["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
 
     detail = _get_detail(admin_client, sample_paper.id)
     assert len(detail["questions"]) == 4
@@ -197,9 +198,9 @@ def test_update_question_marks_and_topics(
     assert resp.status_code == 200, resp.text
     updated = resp.json()
     assert updated["marks"] == 9
-    assert len(updated["topics"]) == 1
-    assert updated["topics"][0]["topic_name"] == "Algebra"
-    assert "Linear Equations" in updated["topics"][0]["subtopic_names"]
+    assert len(updated["selections"]) == 1
+    assert updated["selections"][0]["topic_id"] == reference_data["topic"].id
+    assert updated["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
     assert len(updated["pages"]) == 1
 
 
