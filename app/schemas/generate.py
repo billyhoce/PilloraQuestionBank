@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.questions import QuestionListItem
 
@@ -31,3 +31,15 @@ class SelectResponse(BaseModel):
     target_marks: int
     exact: bool
     warning: Optional[str] = None
+
+
+class GeneratePaperRequest(BaseModel):
+    """Render one PDF variant from a manual selection of questions.
+
+    The frontend calls this twice (``variant='question'`` then ``'answer'``) to
+    produce the separate question and answer papers.
+    """
+
+    question_ids: list[int] = Field(min_length=1)  # empty -> 422
+    variant: Literal["question", "answer"] = "question"
+    header_text: str = ""

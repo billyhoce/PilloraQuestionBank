@@ -91,6 +91,6 @@ User: {
 These rules apply at import time when the server converts PDF pages to images. They directly shape the values stored in `QuestionPage.width_px` and `QuestionPage.height_px`, which the paper-generation engine uses for layout math.
 
 - **Do NOT resize to A4 aspect ratio.** Page heights vary across questions; only width is normalized.
-- **Standardize width:** pad all images to a fixed pixel width (e.g. **2480 px** for 300 dpi A4). If an image is narrower, right-pad the difference with blank space.
-- **Left margin reservation:** add **90 px** of blank space at 300 dpi to the left of the content. This is reserved for question-number insertion during paper generation.
+- **Store content-only images (no baked margin).** Page margins and question numbers are added later, by the paper-generation engine — not at import.
+- **Cap width at 1760 px:** if an image is wider than **1760 px**, downscale it to 1760 px preserving aspect ratio; if it is at or below 1760 px, keep it unchanged (never upscale at import). This one rule is applied to every page regardless of question/answer type. The generation engine handles the two types differently: question images are scaled up to exactly 1760 px and centered on the 2480 px page (360 px margin each side); answer images keep their stored width (≤ 1760 px), flush to a 360 px left margin.
 - **Store actual dimensions** (`width_px`, `height_px`) in `QuestionPage` so the layout engine can compute page-fit decisions without re-reading image headers.

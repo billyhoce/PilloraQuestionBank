@@ -6,51 +6,50 @@ from PIL import Image
 
 from app.pdf.image_processing import downscale_for_ai, get_dimensions, standardize, to_webp_bytes
 
-_TARGET_WIDTH = 2480
-_MARGIN_PX = 90
+_TARGET_WIDTH = 1760
 
 
 def _make_image(width: int, height: int, color=(200, 100, 50)) -> Image.Image:
     return Image.new("RGB", (width, height), color=color)
 
 
-def test_standardize_narrow_image_width_becomes_2480():
+def test_standardize_wide_image_downscaled_to_target_width():
+    img = _make_image(2480, 3508)
+    result = standardize(img)
+    assert result.width == _TARGET_WIDTH
+
+
+def test_standardize_downscale_preserves_aspect_ratio():
+    # 2480x1240 (2:1) → 1760x880, aspect kept
+    img = _make_image(2480, 1240)
+    result = standardize(img)
+    assert result.size == (_TARGET_WIDTH, 880)
+
+
+def test_standardize_narrow_image_kept_unchanged():
+    # At or below the target width, the image is returned as-is (no upscaling).
     img = _make_image(600, 400)
     result = standardize(img)
-    assert result.width == _TARGET_WIDTH
+    assert result.size == (600, 400)
 
 
-def test_standardize_adds_exactly_90px_left_margin():
-    # Fill with a distinctive non-white color
-    img = _make_image(_TARGET_WIDTH, 500, color=(200, 0, 0))
+def test_standardize_image_at_target_width_unchanged():
+    img = _make_image(_TARGET_WIDTH, 500)
     result = standardize(img)
-    # Left margin pixels should be white
-    assert result.getpixel((0, 0))[:3] == (255, 255, 255)
-    assert result.getpixel((_MARGIN_PX - 1, 0))[:3] == (255, 255, 255)
-    # Content starts at MARGIN_PX
-    assert result.getpixel((_MARGIN_PX, 0))[:3] == (200, 0, 0)
+    assert result.size == (_TARGET_WIDTH, 500)
 
 
-def test_standardize_preserves_height():
-    img = _make_image(_TARGET_WIDTH, 1234)
+def test_standardize_no_left_margin_content_flush_at_zero():
+    # Content-only: the top-left pixel is the image content, not white padding.
+    img = _make_image(2480, 500, color=(200, 0, 0))
     result = standardize(img)
-    assert result.height == 1234
+    assert result.getpixel((0, 0))[:3] == (200, 0, 0)
 
 
-def test_standardize_narrow_image_right_side_is_white():
-    # 300-wide image → padded to 2480; content occupies [180:480], rest is white
-    img = _make_image(300, 100, color=(0, 128, 0))
+def test_standardize_returns_rgb():
+    img = Image.new("RGBA", (600, 400), color=(0, 128, 0, 255))
     result = standardize(img)
-    # Right side beyond margin + content should be white
-    assert result.getpixel((_TARGET_WIDTH - 1, 0))[:3] == (255, 255, 255)
-
-
-def test_standardize_wide_image_content_not_cropped():
-    # Input exactly at target width: content should start at MARGIN_PX, not be shifted beyond
-    img = _make_image(_TARGET_WIDTH, 300, color=(0, 0, 200))
-    result = standardize(img)
-    assert result.width == _TARGET_WIDTH
-    assert result.getpixel((_MARGIN_PX, 0))[:3] == (0, 0, 200)
+    assert result.mode == "RGB"
 
 
 def test_to_webp_bytes_returns_webp_format():

@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models.orm import Question, User
-from app.pdf.layout_engine import LayoutEngine  # noqa: F401  (used by the deferred PDF route)
+from app.pdf.layout_engine import Block, LayoutEngine
 from app.routes.auth import get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
@@ -12,11 +12,17 @@ from app.routes.questions import (
     _apply_filters,
     serialize_list_item,
 )
-from app.schemas.generate import SelectRequest, SelectResponse
+from app.schemas.generate import GeneratePaperRequest, SelectRequest, SelectResponse
 from app.services.generate import knapsack_select
-from app.storage.s3_client import get_image_bytes, get_presigned_url  # noqa: F401  (deferred PDF route)
+from app.storage.s3_client import get_image_bytes
 
 router = APIRouter(prefix="/api", tags=["generation"])
+
+
+def _source_label(q: Question) -> str:
+    """Human-readable origin of a question, e.g. 'Raffles 2024 Sec 3 EOY Q5'."""
+    p = q.paper
+    return f"{p.school.name} {p.year} {p.level.name} {p.exam_type.name} Q{q.question_number}"
 
 
 @router.post("/generate/select", response_model=SelectResponse)
@@ -77,3 +83,44 @@ def select_questions(
         "exact": exact,
         "warning": warning,
     }
+
+
+@router.post("/generate/paper")
+def generate_paper(
+    payload: GeneratePaperRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Render one PDF variant (question or answer paper) from a manual selection.
+
+    Questions are laid out in ``question_ids`` order and numbered 1..N. The same
+    numbers are used in both variants, so an answer keeps the number of its
+    question even when earlier questions have no answer pages (those are skipped
+    in the answer variant, but their number is still reserved).
+    """
+    rows = (
+        db.query(Question)
+        .filter(Question.id.in_(payload.question_ids))
+        .options(_PAPER_EAGER, selectinload(Question.pages))
+        .all()
+    )
+    by_id = {q.id: q for q in rows}
+    ordered = [by_id[qid] for qid in payload.question_ids if qid in by_id]
+
+    blocks: list[Block] = []
+    for idx, q in enumerate(ordered, start=1):
+        pages = sorted(
+            (pg for pg in q.pages if pg.page_type == payload.variant),
+            key=lambda pg: pg.page_order,
+        )
+        if payload.variant == "answer" and not pages:
+            continue  # reserve the number, but nothing to render
+        blocks.append(Block(label=str(idx), source_label=_source_label(q), pages=pages))
+
+    # Question paper: scale images centered within 30 mm side margins.
+    # Answer paper: keep native size, flush to the left margin.
+    engine = LayoutEngine(fit_width=(payload.variant == "question"))
+    header = payload.header_text if payload.variant == "question" else ""
+    plan = engine.compute_layout(blocks, header_text=header)
+    pdf = engine.render(plan, fetch_bytes=get_image_bytes)
+    return Response(content=pdf, media_type="application/pdf")

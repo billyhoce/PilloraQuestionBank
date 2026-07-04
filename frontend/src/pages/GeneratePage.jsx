@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
@@ -39,6 +39,28 @@ function filtersToListArgs(filters, page) {
   }
 }
 
+// Timestamp for download filenames, e.g. "2026-07-04_16-45-30".
+function formatTimestamp(d) {
+  const p = (n) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+    `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
+  )
+}
+
+// Trigger a browser download of a Blob under the given filename.
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  // Revoke on the next tick so the download has started.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 // Map the UI filter object to the /generate/select `filters` payload (ints/null).
 function filtersToSelectPayload(filters) {
   const num = (v) => (v === '' || v == null ? null : Number(v))
@@ -77,6 +99,12 @@ export default function GeneratePage() {
   const [autoMode, setAutoMode] = useState('replace') // 'replace' | 'add'
   const [autoLoading, setAutoLoading] = useState(false)
   const [notice, setNotice] = useState(null) // { type: 'warning' | 'success', text }
+
+  // PDF generation state
+  const [headerText, setHeaderText] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genProgress, setGenProgress] = useState(0)
+  const progressTimer = useRef(null)
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -204,6 +232,48 @@ export default function GeneratePage() {
       setNotice({ type: 'warning', text: e?.message || 'Autocreate failed.' })
     } finally {
       setAutoLoading(false)
+    }
+  }
+
+  function stopProgress() {
+    if (progressTimer.current) {
+      clearInterval(progressTimer.current)
+      progressTimer.current = null
+    }
+  }
+
+  useEffect(() => stopProgress, [])
+
+  async function handleGenerate() {
+    if (cart.length === 0 || generating) return
+    setNotice(null)
+    setGenerating(true)
+    setGenProgress(0)
+
+    // Estimated bar: ease toward ~90% while the server works; completion snaps to 100%.
+    stopProgress()
+    progressTimer.current = setInterval(() => {
+      setGenProgress(p => (p < 90 ? p + Math.max(1, (90 - p) * 0.08) : p))
+    }, 200)
+
+    const ts = formatTimestamp(new Date())
+    const ids = cart.map(it => it.id)
+    try {
+      const [questionBlob, answerBlob] = await Promise.all([
+        api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText }),
+        api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '' }),
+      ])
+      stopProgress()
+      setGenProgress(100)
+      downloadBlob(questionBlob, `${ts}_question.pdf`)
+      // Small gap so the browser doesn't drop the second programmatic download.
+      setTimeout(() => downloadBlob(answerBlob, `${ts}_answer.pdf`), 600)
+      setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })
+    } catch (e) {
+      stopProgress()
+      setNotice({ type: 'warning', text: e?.message || 'PDF generation failed.' })
+    } finally {
+      setTimeout(() => { setGenerating(false); setGenProgress(0) }, 800)
     }
   }
 
@@ -386,13 +456,40 @@ export default function GeneratePage() {
                 </ul>
               )}
 
+              <div className="space-y-1 pt-1">
+                <label className="text-xs text-gray-600" htmlFor="header-text">
+                  Header / instructions (optional)
+                </label>
+                <textarea
+                  id="header-text"
+                  rows={2}
+                  value={headerText}
+                  onChange={e => setHeaderText(e.target.value)}
+                  placeholder="e.g. Answer all questions. Time: 2 hours."
+                  className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                />
+              </div>
+
+              {generating ? (
+                <div className="space-y-1">
+                  <div className="h-2 w-full bg-gray-200 rounded overflow-hidden">
+                    <div
+                      className="h-full bg-blue-600 transition-all duration-200"
+                      style={{ width: `${Math.round(genProgress)}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500">Generating PDFs… {Math.round(genProgress)}%</div>
+                </div>
+              ) : null}
+
               <button
                 type="button"
-                disabled
-                title="PDF export coming soon"
-                className="w-full px-4 py-2 bg-gray-200 text-gray-500 rounded text-sm cursor-not-allowed"
+                onClick={handleGenerate}
+                disabled={cart.length === 0 || generating}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Generate PDF (coming soon)
+                {generating ? <Spinner size="sm" /> : null}
+                {generating ? 'Generating…' : 'Generate PDF'}
               </button>
             </div>
           </aside>

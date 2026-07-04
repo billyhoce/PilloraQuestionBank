@@ -123,7 +123,8 @@ def test_update_paper_stream_change_clears_topics(
 def test_upload_image(admin_client, mock_s3):
     body = _upload_image(admin_client)
     assert body["temp_key"].startswith("tmp/")
-    assert body["dimensions"]["width"] == 2480
+    # A 2480px-wide upload is downscaled to the 1760px content width.
+    assert body["dimensions"]["width"] == 1760
     assert body["url"]
 
 

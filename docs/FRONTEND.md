@@ -128,9 +128,18 @@ cart) on the right.
 - Surfaces the server's `warning` (e.g. inexact total, no matches) or a success summary as an inline
   notice.
 
-### Not yet implemented
-- **Generate PDF** is a disabled "coming soon" button — `POST /api/generate/paper`, header/instructions
-  text, include-answers toggle, and the PDF download are still to build (see [BACKEND.md](./BACKEND.md#paper-generation-engine-not-implemented)).
+### Generate PDF (right)
+- Optional **header / instructions** `<textarea>` printed on the first page of the question PDF.
+- **Generate PDF** button (enabled once the cart is non-empty). On click it calls
+  `api.generate.paper` **twice in parallel** — `variant: "question"` (with `header_text`) and
+  `variant: "answer"` — each returning a PDF `Blob` (a binary fetch that bypasses the JSON-only
+  `request` helper).
+- An **estimated progress bar** (client-side only, no backend streaming) eases toward ~90% while the
+  requests are in flight, then snaps to 100% on completion.
+- On success both blobs auto-download via a local `downloadBlob` helper, named
+  `{timestamp}_question.pdf` and `{timestamp}_answer.pdf` (one shared client-generated timestamp; a
+  short gap between the two so browsers don't drop the second download). Errors surface as an inline
+  notice. See [BACKEND.md](./BACKEND.md#paper-generation-engine-implemented).
 
 ## Admin CRUD UI
 
