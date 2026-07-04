@@ -92,5 +92,5 @@ These rules apply at import time when the server converts PDF pages to images. T
 
 - **Do NOT resize to A4 aspect ratio.** Page heights vary across questions; only width is normalized.
 - **Standardize width:** pad all images to a fixed pixel width (e.g. **2480 px** for 300 dpi A4). If an image is narrower, right-pad the difference with blank space.
-- **Left margin reservation:** add **180 px** of blank space at 300 dpi to the left of the content. This is reserved for question-number insertion during paper generation.
+- **Left margin reservation:** add **90 px** of blank space at 300 dpi to the left of the content. This is reserved for question-number insertion during paper generation.
 - **Store actual dimensions** (`width_px`, `height_px`) in `QuestionPage` so the layout engine can compute page-fit decisions without re-reading image headers.

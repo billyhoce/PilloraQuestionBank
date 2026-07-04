@@ -15,10 +15,10 @@
 
 ```
 app/
-├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py
-├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py
+├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py, generate.py
+├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
-├── services/       # business logic — auth.py, ingest.py, generate.py (stub)
+├── services/       # business logic — auth.py, ingest.py, generate.py (question selection)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (stub)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
@@ -82,13 +82,27 @@ GET    /api/questions/:id         -- full question detail: question pages + answ
 
 There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned S3 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
 
-### Generation — Public (Not Implemented)
+### Generation — Authenticated (Partially Implemented)
 
 ```
-POST   /api/generate/paper       -- planned; no route exists yet
+POST   /api/generate/select      -- auto-select a randomized set of questions summing near
+                                    target_marks. Body: { filters, target_marks,
+                                    exclude_question_ids[] }. `filters` mirrors the Browse
+                                    filter params (subject_id, stream_id, level_id, year,
+                                    school_id, exam_type_id, topic_ids[], exclusive,
+                                    subtopic_keyword). Returns { items, total_marks,
+                                    target_marks, exact, warning }.
+POST   /api/generate/paper       -- planned; no route exists yet (PDF export)
 ```
 
-`app/services/generate.py::knapsack_select` and `app/pdf/layout_engine.py::LayoutEngine` are stubs that raise `NotImplementedError`. No route is registered in `main.py` for paper generation.
+`POST /api/generate/select` (`app/routes/generate.py`) is implemented. It reuses the Browse
+filter suite (`_apply_filters` + the eager-load options from `app/routes/questions.py`) to build
+the candidate pool, excludes any `exclude_question_ids`, then runs `knapsack_select`. It never
+returns a 404 — an empty result with a `warning` string keeps the live builder UI responsive.
+Requires authentication (`get_current_user`), not admin.
+
+`POST /api/generate/paper` (PDF export) is **not built yet** — `app/pdf/layout_engine.py::LayoutEngine`
+is still a stub that raises `NotImplementedError`, and no route is registered for it.
 
 ## Import Pipeline (Server Side)
 
@@ -122,18 +136,35 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 5. **`DELETE /api/import/papers/{paper_id}`** (Implemented)
    - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionTopic` in the DB), then deletes the associated S3 objects after the DB transaction succeeds.
 
+## Question Selection (Implemented)
+
+`app/services/generate.py::knapsack_select(questions, target_marks)` picks a subset of questions
+whose marks sum as close as possible to `target_marks`, exposed via `POST /api/generate/select`.
+
+- **Randomized-restart greedy**, not an exact optimizer. Each restart shuffles the pool and greedily
+  adds questions until the running total reaches the target, considering every intermediate subset.
+  The restart budget scales with pool size (`_RESTARTS_PER_QUESTION = 20`, clamped to `[200, 2000]`).
+- Prefers an **exact match**; otherwise returns the subset whose total is closest to the target
+  (a slight overshoot is allowed if it lands closer). Stops early once an exact match is found.
+- The randomness is intentional: the same filters/target produce a *different* paper each time.
+  Equally-good subsets are chosen by reservoir sampling so repeated calls vary.
+- Questions with `null` or non-positive `marks` are ignored. Returns `[]` for a non-positive target
+  or when nothing is selectable.
+
+`POST /api/generate/select` also supports an **add-to-selection** flow client-side: the frontend
+passes the already-chosen questions in `exclude_question_ids` and reduces `target_marks` by their
+running total, so autofill tops up an existing selection instead of replacing it (see
+[FRONTEND.md](./FRONTEND.md#paper-generation-ui)).
+
 ## Paper Generation Engine (Not Implemented)
 
-`POST /api/generate/paper` and its supporting engine are **not built yet**. The design below is the intended target; treat it as a spec for future work, not current behavior.
+`POST /api/generate/paper` and its supporting PDF engine are **not built yet**. The design below is
+the intended target; treat it as a spec for future work, not current behavior.
 
 ### Inputs (two modes)
 
 1. **Manual selection:** `{ question_ids: [...], header_text, include_answers }`
-2. **Auto-fill by criteria:** `{ filters, target_marks, header_text, include_answers }` — server selects questions whose marks sum to the target.
-
-### Auto-fill Algorithm
-
-Greedy / knapsack selection over questions matching `filters`. Prefer **exact match** to `target_marks`; otherwise return the closest combination. (At v1 scale, a simple iterative approach is fine.) `app/services/generate.py::knapsack_select` is currently a stub.
+2. **Auto-fill by criteria:** `{ filters, target_marks, header_text, include_answers }` — server selects questions whose marks sum to the target (question selection itself is already implemented via `/api/generate/select`; see above).
 
 ### PDF Layout Algorithm
 

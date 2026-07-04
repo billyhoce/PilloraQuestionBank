@@ -102,22 +102,35 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 
 ## Paper Generation UI
 
-Two modes selectable via a tab/toggle:
+`/generate` (`src/pages/GeneratePage.jsx`), authenticated-only. A single page combining manual
+selection and marks-based autofill — not separate tabs. Reached via a "Create Paper" link in the
+Browse header. Layout: filtered results on the left, a sticky sidebar (autocreate panel + selection
+cart) on the right.
 
-### Manual Selection
-- Filter questions (reuses the Browse filter panel).
-- Add/remove questions to a "selection cart" sidebar.
-- Cart shows per-question marks and running total.
-- "Generate" button enabled when cart has ≥ 1 question.
+### Filtered results (left)
+- Reuses the Browse `<FilterBar />` and `<QuestionCard />` (in `selectable` mode) plus paginated
+  "Load more". Each card shows an `+ Add` / `✓ Added` toggle and the question's marks.
+- Clicking a card's preview opens the shared `<QuestionDetailModal />`.
 
-### Auto-fill by Marks
-- Filter inputs (same as above) **plus** a target-marks number input.
-- "Generate" hits `POST /api/generate/paper` with `{ filters, target_marks }`.
+### Manual selection cart (right)
+- Adding/removing questions maintains a **selection cart** — full list-item objects, de-duped by id.
+- Cart lists each question (school / year / Q-number, marks) with a remove button, a running
+  **total marks**, and a warning when any selected question has no marks set. "Clear" empties it.
 
-### Common Options
-- **Header / instructions text** — multi-line text input rendered on the first page of the generated PDF.
-- **Include answers** — toggle (appends answer pages).
-- On submit, the response is a PDF file → trigger a browser download.
+### Autocreate panel (right)
+- A **target marks** number input plus a **Replace selection / Add to selection** radio.
+- "Autocreate Paper" calls `POST /api/generate/select` with
+  `{ filters, target_marks, exclude_question_ids }`:
+  - **Replace** — sends the raw target; the response items become the new cart.
+  - **Add** — sends `target_marks - cartTotalMarks` and the current cart ids as
+    `exclude_question_ids`, so the picked questions top up the existing selection (guards against a
+    non-positive remaining target).
+- Surfaces the server's `warning` (e.g. inexact total, no matches) or a success summary as an inline
+  notice.
+
+### Not yet implemented
+- **Generate PDF** is a disabled "coming soon" button — `POST /api/generate/paper`, header/instructions
+  text, include-answers toggle, and the PDF download are still to build (see [BACKEND.md](./BACKEND.md#paper-generation-engine-not-implemented)).
 
 ## Admin CRUD UI
 
