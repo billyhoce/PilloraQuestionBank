@@ -6,7 +6,10 @@ from app.logger import Timer, log, log_tokens
 
 LABEL_TOPICS_TOOL = {
     "name": "label_topics",
-    "description": "Select all items from the numbered list that this question tests.",
+    "description": (
+        "Select all items from the numbered list that this question tests, "
+        "and report how many marks the question is worth."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
@@ -15,8 +18,17 @@ LABEL_TOPICS_TOOL = {
                 "items": {"type": "string"},
                 "description": 'Codes from the numbered list, e.g. ["1.1", "2"]. Pick one or more.',
             },
+            "marks": {
+                "type": ["integer", "null"],
+                "description": (
+                    'Total marks the question is worth, read from the image — e.g. '
+                    '"(2 marks)" or a bracketed "[2]" next to the answer line. '
+                    "If the question has sub-parts, sum their marks. "
+                    "Use null if no marks are shown."
+                ),
+            },
         },
-        "required": ["selected_codes"],
+        "required": ["selected_codes", "marks"],
     },
 }
 
@@ -54,7 +66,9 @@ def build_system_prompt(subject: str, stream: str, options_str: str) -> str:
         f"- Pick one or more codes that best describe what the question is testing.\n"
         f"- For topics that have subtopics, only the subtopic lines are selectable — pick the specific subtopics that apply.\n"
         f"- For topics without subtopics, pick the bare topic code if it applies.\n"
-        f"- Only return codes that appear in the list above."
+        f"- Only return codes that appear in the list above.\n"
+        f"- Also report the total marks the question is worth (an integer), read "
+        f"from the paper; use null if no marks are shown."
     )
 
 
@@ -62,7 +76,7 @@ def label_question(
     question,
     topics: list[dict],
     image_bytes_list: list[bytes],
-) -> list[dict]:
+) -> dict:
     subject = question.paper.subject.name
     stream = question.paper.stream.name
     options_str, code_map = _build_options(topics)
@@ -79,7 +93,7 @@ def label_question(
         }
         for b in image_bytes_list
     ]
-    user_content = image_blocks + [{"type": "text", "text": "Identify the topics and subtopics covered in this question."}]
+    user_content = image_blocks + [{"type": "text", "text": "Identify the topics and subtopics covered in this question, and read how many marks it is worth."}]
 
     client = anthropic.Anthropic()
     with Timer() as t_call:
@@ -94,7 +108,8 @@ def label_question(
     log.info(f"{'label_question':<22}| haiku     | {t_call.s}")
     log_tokens("label_question", "claude-haiku-4-5-20251001", resp.usage)
 
-    raw_codes: list[str] = resp.content[0].input.get("selected_codes", [])
+    tool_input = resp.content[0].input
+    raw_codes: list[str] = tool_input.get("selected_codes", [])
     seen: set[tuple[int, int | None]] = set()
     out: list[dict] = []
     for code in raw_codes:
@@ -104,4 +119,4 @@ def label_question(
         seen.add(pair)
         topic_id, subtopic_id = pair
         out.append({"topic_id": topic_id, "subtopic_id": subtopic_id})
-    return out
+    return {"selections": out, "marks": tool_input.get("marks")}

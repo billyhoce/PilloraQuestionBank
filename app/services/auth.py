@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 
 import bcrypt
@@ -20,7 +20,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=_DEFAULT_EXPIRE_MINUTES))
+    expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=_DEFAULT_EXPIRE_MINUTES))
     to_encode["exp"] = expire
     return jwt.encode(to_encode, _JWT_SECRET_KEY, algorithm=_ALGORITHM)
 

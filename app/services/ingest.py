@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any
 
 import fitz  # PyMuPDF
@@ -74,7 +74,7 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
             year=payload["year"],
             paper_number=payload["paper_number"],
             created_by=created_by.id,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         db.add(paper)
         db.flush()
@@ -84,7 +84,7 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
             question = Question(
                 question_number=q_data["question_number"],
                 marks=q_data.get("marks"),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
             )
             paper.questions.append(question)
 

@@ -10,7 +10,7 @@ load_dotenv()
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-not-for-production")
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 import bcrypt
 import boto3
@@ -123,7 +123,7 @@ def _create_user(db_session: Session, email: str, password: str, role: str) -> U
         email=email,
         password_hash=hashed,
         role=role,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db_session.add(user)
     db_session.flush()
@@ -261,14 +261,14 @@ def sample_paper(db_session, reference_data, admin_user):
         year=2024,
         paper_number="1",
         created_by=admin_user.id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db_session.add(paper)
     db_session.flush()
 
-    q1 = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
-    q2 = Question(paper_id=paper.id, question_number=2, marks=3, created_at=datetime.utcnow())
-    q3 = Question(paper_id=paper.id, question_number=3, marks=2, created_at=datetime.utcnow())
+    q1 = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.now(UTC))
+    q2 = Question(paper_id=paper.id, question_number=2, marks=3, created_at=datetime.now(UTC))
+    q3 = Question(paper_id=paper.id, question_number=3, marks=2, created_at=datetime.now(UTC))
     db_session.add_all([q1, q2, q3])
     db_session.flush()
 

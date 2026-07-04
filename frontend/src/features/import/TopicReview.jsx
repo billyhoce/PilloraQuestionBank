@@ -22,7 +22,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   const [topics, setTopics] = useState(null)
   const [topicsError, setTopicsError] = useState(null)
   const [questionState, setQuestionState] = useState(() =>
-    Object.fromEntries(questions.map(q => [q.id, { status: 'loading', selected: [], error: null }]))
+    Object.fromEntries(questions.map(q => [q.id, { status: 'loading', selected: [], marks: q.marks ?? null, error: null }]))
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
@@ -38,7 +38,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
       const result = await enqueue(() => api.import.aiTopicsForQuestion(qid, abortRef.current?.signal))
       setQuestionState(prev => ({
         ...prev,
-        [qid]: { status: 'ready', selected: result.selections || [], error: null },
+        [qid]: { status: 'ready', selected: result.selections || [], marks: result.marks ?? null, error: null },
       }))
     } catch (e) {
       if (e.name === 'AbortError') return
@@ -79,6 +79,10 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
     })
   }
 
+  function setMarks(qid, val) {
+    setQuestionState(prev => ({ ...prev, [qid]: { ...prev[qid], marks: val } }))
+  }
+
   const anyLoading = Object.values(questionState).some(s => s.status === 'loading')
 
   async function handleSave() {
@@ -87,6 +91,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
     try {
       const question_topics = questions.map(q => ({
         question_id: q.id,
+        marks: questionState[q.id]?.marks ?? null,
         topic_assignments: selectionsToAssignments(questionState[q.id]?.selected ?? []),
       }))
       await api.import.saveTopics(paperId, question_topics)
@@ -133,9 +138,17 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <span className="font-semibold text-gray-900">Q{q.question_number}</span>
-                  {q.marks != null && (
-                    <span className="text-xs text-gray-500">[{q.marks} marks]</span>
-                  )}
+                  <label className="flex items-center gap-1 text-xs text-gray-500">
+                    Marks
+                    <input
+                      type="number"
+                      min="0"
+                      value={state.marks ?? ''}
+                      onChange={(e) => setMarks(q.id, e.target.value !== '' ? Number(e.target.value) : null)}
+                      placeholder="—"
+                      className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </label>
                 </div>
                 <div className="flex items-center gap-2">
                   {state.status === 'loading' && (

@@ -59,6 +59,7 @@ class AiTopicSelection(BaseModel):
 
 class AiTopicsResponse(BaseModel):
     selections: list[AiTopicSelection] = []
+    marks: Optional[int] = None
 
 
 class TopicAssignment(BaseModel):
@@ -68,6 +69,7 @@ class TopicAssignment(BaseModel):
 
 class QuestionTopicsIn(BaseModel):
     question_id: int
+    marks: Optional[int] = None
     topic_assignments: list[TopicAssignment]
 
 
@@ -196,7 +198,7 @@ def ai_topics(
 
         try:
             with Timer() as t_label:
-                suggestions = label_question(question, topics, image_bytes_list)
+                result = label_question(question, topics, image_bytes_list)
             log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
         except anthropic.RateLimitError as e:
             log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
@@ -212,7 +214,7 @@ def ai_topics(
             )
 
     log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
-    return {"selections": suggestions}
+    return {"selections": result["selections"], "marks": result["marks"]}
 
 
 @router.post("/save-topics", status_code=201)
@@ -259,8 +261,11 @@ def save_topics(
     db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
     db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
 
-    # Phase 3: insert new assignments.
+    # Phase 3: update marks and insert new assignments.
+    questions_by_id = {q.id: q for q in paper.questions}
     for qt in payload.question_topics:
+        questions_by_id[qt.question_id].marks = qt.marks
+
         inserted_topic_ids: set[int] = set()
         for assignment in qt.topic_assignments:
             if assignment.topic_id not in inserted_topic_ids:

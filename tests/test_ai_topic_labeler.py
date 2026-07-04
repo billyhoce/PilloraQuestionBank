@@ -1,8 +1,9 @@
 """Tests for the Claude topic-labeling AI module."""
-from datetime import datetime
+from datetime import datetime, UTC
 from unittest.mock import MagicMock, patch
 
 from app.ai.topic_labeler import (
+    LABEL_TOPICS_TOOL,
     _build_options,
     build_system_prompt,
     label_question,
@@ -23,6 +24,12 @@ def _make_topics(topic_id, subtopic_id, topic_number=1):
             "subtopics": [{"id": subtopic_id, "name": "Linear equations"}],
         }
     ]
+
+
+def test_label_topics_tool_schema_includes_marks():
+    props = LABEL_TOPICS_TOOL["input_schema"]["properties"]
+    assert "marks" in props
+    assert "marks" in LABEL_TOPICS_TOOL["input_schema"]["required"]
 
 
 def test_build_options_topic_with_subtopics_shows_only_subtopics():
@@ -109,10 +116,10 @@ def test_build_system_prompt_includes_positional_codes():
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_response(selected_codes: list):
+def _make_mock_response(selected_codes: list, marks=None):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock()]
-    mock_resp.content[0].input = {"selected_codes": selected_codes}
+    mock_resp.content[0].input = {"selected_codes": selected_codes, "marks": marks}
     mock_resp.usage.input_tokens = 100
     mock_resp.usage.output_tokens = 20
     mock_resp.usage.cache_creation_input_tokens = 0
@@ -133,11 +140,11 @@ def _make_paper_and_question(db_session, reference_data, admin_user):
         year=2024,
         paper_number="1",
         created_by=admin_user.id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db_session.add(paper)
     db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.utcnow())
+    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.now(UTC))
     db_session.add(question)
     db_session.flush()
     return paper, question
@@ -251,7 +258,8 @@ def test_label_question_filters_out_hallucinated_codes(mock_anthropic_cls, db_se
     topics = _make_topics(rd["topic"].id, rd["subtopic"].id)
     result = label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
 
-    assert result == [], "Hallucinated code '99.99' should be filtered out"
+    assert result["selections"] == [], "Hallucinated code '99.99' should be filtered out"
+    assert result["marks"] is None
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
@@ -264,11 +272,12 @@ def test_label_question_returns_valid_selection(mock_anthropic_cls, db_session, 
 
     topics = _make_topics(rd["topic"].id, rd["subtopic"].id)
     # topic_number=1, one subtopic → code is "1.1"
-    mock_client.messages.create.return_value = _make_mock_response(["1.1"])
+    mock_client.messages.create.return_value = _make_mock_response(["1.1"], marks=2)
 
     result = label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
 
-    assert result == [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    assert result["selections"] == [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    assert result["marks"] == 2
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")
@@ -284,4 +293,4 @@ def test_label_question_dedupes_repeated_codes(mock_anthropic_cls, db_session, r
 
     result = label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
 
-    assert result == [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    assert result["selections"] == [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]

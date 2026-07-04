@@ -1,4 +1,5 @@
 import Spinner from '../../components/Spinner'
+import ErrorBanner from '../../components/ErrorBanner'
 
 function SelectField({ label, value, onChange, options }) {
   return (
@@ -18,7 +19,7 @@ function SelectField({ label, value, onChange, options }) {
   )
 }
 
-export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel }) {
+export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -73,18 +74,21 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
         <div>{questionCount} question{questionCount !== 1 ? 's' : ''}</div>
         {answerCount > 0 && <div>{answerCount} answer set{answerCount !== 1 ? 's' : ''}</div>}
       </div>
+      {error && <ErrorBanner message={error} />}
       <button
         type="button"
         onClick={onNext}
-        disabled={!isComplete}
-        className="mt-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+        disabled={!isComplete || loading}
+        className="mt-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium flex items-center justify-center gap-2"
       >
-        Next →
+        {loading && <Spinner size="sm" />}
+        Confirm &amp; Import →
       </button>
       <button
         type="button"
         onClick={onCancel}
-        className="text-xs text-red-600 hover:text-red-700 text-center"
+        disabled={loading}
+        className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50"
       >
         Cancel Import
       </button>
