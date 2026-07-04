@@ -190,7 +190,7 @@ margins); `fit_width` selects the horizontal treatment per variant:
   360 = 2480). All questions therefore render at the same width regardless of their stored size.
 - **`fit_width=False` (answer paper):** each image keeps its **native size** (≤ 1760 px), **flush to
   the 360 px left margin**, with the remaining width as right padding. It never overflows (360 + 1760
-  < 2480). A **70 px vertical gap** separates one question's answer block from the next (`block_gap_px`);
+  < 2480). A **100 px vertical gap** separates one question's answer block from the next (`block_gap_px`);
   multiple answer pages of the same question stack with no extra gap.
 
 Both variants draw the question number into the **360 px left margin**, right-aligned just left of

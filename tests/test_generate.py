@@ -208,9 +208,9 @@ def test_answer_variant_renders_native(minimal_webp_bytes):
 
 def test_answer_variant_adds_gap_between_blocks():
     # capacity 810: two 400px answer blocks total 800px, which would otherwise
-    # fit — but the 70px inter-question gap pushes the second block to a new page.
+    # fit — but the 100px inter-question gap pushes the second block to a new page.
     engine = LayoutEngine(page_capacity_px=810, fit_width=False)
-    assert engine.block_gap_px == 70
+    assert engine.block_gap_px == 100
     plan = engine.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
     assert [b.page_index for b in plan.blocks] == [0, 1]
 
