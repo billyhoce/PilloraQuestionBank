@@ -3,7 +3,6 @@ import { api } from '../../api/client'
 import UploadDropZone from './UploadDropZone'
 import PageGrid from './PageGrid'
 import MetadataSidebar from './MetadataSidebar'
-import ConfirmSummary from './ConfirmSummary'
 import TopicReview from './TopicReview'
 
 const STORAGE_KEY = 'pillora_import_session'
@@ -25,7 +24,7 @@ function clearSession() {
   sessionStorage.removeItem(STORAGE_KEY)
 }
 
-function computeQuestions(pages, dividerIdx, marksMap) {
+function computeQuestions(pages, dividerIdx) {
   const qPages = dividerIdx !== null ? pages.slice(0, dividerIdx) : pages
   const aPages = dividerIdx !== null ? pages.slice(dividerIdx) : []
 
@@ -53,7 +52,7 @@ function computeQuestions(pages, dividerIdx, marksMap) {
         width_px: p.dimensions.width, height_px: p.dimensions.height,
       })),
     ]
-    return { question_number: qNum, marks: marksMap[qNum] ?? null, pages: pageDatas }
+    return { question_number: qNum, marks: null, pages: pageDatas }
   })
 }
 
@@ -71,7 +70,6 @@ export default function ImportPage() {
   const [pages, setPages] = useState(() => loadSession()?.pages ?? [])
   const [dividerIdx, setDividerIdx] = useState(() => loadSession()?.dividerIdx ?? null)
   const [metadata, setMetadata] = useState(() => loadSession()?.metadata ?? emptyMetadata)
-  const [marksMap, setMarksMap] = useState(() => loadSession()?.marksMap ?? {})
   const [paperId, setPaperId] = useState(() => loadSession()?.paperId ?? null)
   const [confirmedQuestions, setConfirmedQuestions] = useState(() => loadSession()?.confirmedQuestions ?? [])
   const [refs, setRefs] = useState(null)
@@ -91,9 +89,9 @@ export default function ImportPage() {
     if (step === 'upload') {
       clearSession()
     } else {
-      saveSession({ step, pages, dividerIdx, metadata, marksMap, paperId, confirmedQuestions })
+      saveSession({ step, pages, dividerIdx, metadata, paperId, confirmedQuestions })
     }
-  }, [step, pages, dividerIdx, metadata, marksMap, paperId, confirmedQuestions])
+  }, [step, pages, dividerIdx, metadata, paperId, confirmedQuestions])
 
   useEffect(() => {
     Promise.all([
@@ -194,7 +192,7 @@ export default function ImportPage() {
     setConfirmLoading(true)
     setConfirmError(null)
     try {
-      const questions = computeQuestions(pages, dividerIdx, marksMap)
+      const questions = computeQuestions(pages, dividerIdx)
       const result = await api.import.confirm({
         subject_id: metadata.subject_id,
         stream_id: metadata.stream_id,
@@ -221,7 +219,6 @@ export default function ImportPage() {
     setPages([])
     setDividerIdx(null)
     setMetadata(emptyMetadata)
-    setMarksMap({})
     setPaperId(null)
     setConfirmedQuestions([])
   }
@@ -290,27 +287,12 @@ export default function ImportPage() {
           refs={refs}
           questionCount={countGroups(qPages)}
           answerCount={countGroups(aPages)}
-          onNext={() => setStep('confirm_summary')}
+          onNext={handleConfirm}
           onCancel={handleCancel}
+          loading={confirmLoading}
+          error={confirmError}
         />
       </div>
-    )
-  }
-
-  if (step === 'confirm_summary') {
-    return (
-      <ConfirmSummary
-        questions={computeQuestions(pages, dividerIdx, marksMap)}
-        metadata={metadata}
-        refs={refs}
-        marksMap={marksMap}
-        onMarksChange={(qNum, val) => setMarksMap((prev) => ({ ...prev, [qNum]: val }))}
-        onConfirm={handleConfirm}
-        onBack={() => setStep('review')}
-        onCancel={handleCancel}
-        loading={confirmLoading}
-        error={confirmError}
-      />
     )
   }
 

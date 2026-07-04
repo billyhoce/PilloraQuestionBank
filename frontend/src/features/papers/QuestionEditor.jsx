@@ -107,6 +107,7 @@ function QuestionEditor({
     try {
       const res = await api.import.aiTopicsForQuestion(question.id)
       setSelected(res.selections || [])
+      setMarks(res.marks != null ? String(res.marks) : '')
     } catch (e) {
       setAiError(e.message)
     } finally {

@@ -21,7 +21,7 @@ def _add_paper(db_session, rd, admin_user, year=2024, school=None) -> Paper:
         year=year,
         paper_number="1",
         created_by=admin_user.id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(datetime.timezone.utc),
     )
     db_session.add(paper)
     db_session.flush()
@@ -33,7 +33,7 @@ def _add_question(db_session, paper, number=1, marks=5) -> Question:
         paper_id=paper.id,
         question_number=number,
         marks=marks,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(datetime.timezone.utc),
     )
     db_session.add(q)
     db_session.flush()
@@ -109,7 +109,7 @@ def test_list_questions_filter_by_subject_id(public_client, db_session, referenc
         subject_id=subj2.id, stream_id=stream2.id, level_id=level2.id,
         school_id=school2.id, exam_type_id=et2.id,
         year=2024, paper_number="1",
-        created_by=admin_user.id, created_at=datetime.utcnow(),
+        created_by=admin_user.id, created_at=datetime.now(datetime.timezone.utc),
     )
     db_session.add(paper2)
     db_session.flush()

@@ -391,7 +391,7 @@ def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3
     rd = reference_data
     suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
     with (
-        patch("app.routes.ingest.label_question", return_value=suggestion) as mock_label,
+        patch("app.routes.ingest.label_question", return_value={"selections": suggestion, "marks": 2}) as mock_label,
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
@@ -400,6 +400,7 @@ def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3
     assert resp.status_code == 200
     body = resp.json()
     assert body["selections"] == suggestion
+    assert body["marks"] == 2
     mock_label.assert_called_once()
 
 
@@ -413,7 +414,7 @@ def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_sess
     rd = reference_data
     suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
     with (
-        patch("app.routes.ingest.label_question", return_value=suggestion),
+        patch("app.routes.ingest.label_question", return_value={"selections": suggestion, "marks": None}),
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
@@ -435,7 +436,7 @@ def test_ai_topics_includes_topics_without_subtopics(admin_client, mock_s3, samp
 
     def fake_label(question, topics, image_bytes_list):
         captured["topics"] = topics
-        return []
+        return {"selections": [], "marks": None}
 
     with (
         patch("app.routes.ingest.label_question", side_effect=fake_label),
@@ -518,6 +519,28 @@ def test_save_topics_persists_question_topics(admin_client, sample_paper, db_ses
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
     assert db_session.query(QuestionTopic).count() == 3
+
+
+def test_save_topics_updates_marks(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
+    q = sample_paper.questions[0]
+    original_marks = q.marks  # fixture default is 5
+    payload = {
+        "paper_id": sample_paper.id,
+        "question_topics": [
+            {
+                "question_id": q.id,
+                "marks": original_marks + 1,
+                "topic_assignments": [
+                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
+                ],
+            }
+        ],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 201
+    db_session.expire_all()
+    assert db_session.get(Question, q.id).marks == original_marks + 1
 
 
 def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, db_session, reference_data):
