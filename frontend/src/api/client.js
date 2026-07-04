@@ -161,6 +161,28 @@ export const api = {
     get: (id, signal) => request('GET', `/api/questions/${id}`, undefined, signal),
   },
 
+  generate: {
+    // Auto-select a randomized set of questions summing near target_marks.
+    // body: { filters, target_marks, exclude_question_ids }
+    select: (body, signal) => request('POST', '/api/generate/select', body, signal),
+    // Render one PDF variant. body: { question_ids, variant, header_text }.
+    // Returns a Blob (binary) — bypasses `request`, which is JSON-only.
+    paper: async (body) => {
+      const res = await fetch('/api/generate/paper', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+        throw { status: res.status, message: friendlyMessage(res.status, false, data?.detail ?? '') }
+      }
+      return res.blob()
+    },
+  },
+
   papers: {
     years: ({ subject_id, stream_id, level_id } = {}) => {
       const params = new URLSearchParams()

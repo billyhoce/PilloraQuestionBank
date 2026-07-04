@@ -20,22 +20,23 @@ from app.services.ingest import confirm_import, pdf_to_images
 # ---------------------------------------------------------------------------
 
 
-def test_standardize_image_width_to_2480():
-    img = Image.new("RGB", (1000, 500), color=(100, 150, 200))
+def test_standardize_image_downscales_wide_to_1760():
+    img = Image.new("RGB", (2480, 500), color=(100, 150, 200))
     result = standardize(img)
-    assert result.width == 2480
+    assert result.width == 1760
 
 
-def test_standardize_image_adds_180px_left_margin():
+def test_standardize_image_keeps_narrow_unchanged():
+    img = Image.new("RGB", (1000, 500), color=(0, 100, 0))
+    result = standardize(img)
+    assert result.size == (1000, 500)
+
+
+def test_standardize_image_content_only_no_left_margin():
     img = Image.new("RGB", (2480, 300), color=(0, 100, 0))
     result = standardize(img)
-    assert result.getpixel((0, 0))[:3] == (255, 255, 255)
-
-
-def test_standardize_image_preserves_height():
-    img = Image.new("RGB", (2480, 999), color=(0, 0, 0))
-    result = standardize(img)
-    assert result.height == 999
+    # No white margin baked in — top-left is content.
+    assert result.getpixel((0, 0))[:3] == (0, 100, 0)
 
 
 def test_standardize_image_returns_webp_bytes():

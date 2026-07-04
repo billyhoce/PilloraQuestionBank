@@ -15,11 +15,11 @@
 
 ```
 app/
-├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py
-├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py
+├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py, generate.py
+├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
-├── services/       # business logic — auth.py, ingest.py, generate.py (stub)
-├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (stub)
+├── services/       # business logic — auth.py, ingest.py, generate.py (question selection)
+├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
@@ -82,13 +82,30 @@ GET    /api/questions/:id         -- full question detail: question pages + answ
 
 There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned S3 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
 
-### Generation — Public (Not Implemented)
+### Generation — Authenticated (Implemented)
 
 ```
-POST   /api/generate/paper       -- planned; no route exists yet
+POST   /api/generate/select      -- auto-select a randomized set of questions summing near
+                                    target_marks. Body: { filters, target_marks,
+                                    exclude_question_ids[] }. `filters` mirrors the Browse
+                                    filter params (subject_id, stream_id, level_id, year,
+                                    school_id, exam_type_id, topic_ids[], exclusive,
+                                    subtopic_keyword). Returns { items, total_marks,
+                                    target_marks, exact, warning }.
+POST   /api/generate/paper       -- render ONE PDF variant from a manual selection.
+                                    Body: { question_ids[] (min 1), variant:
+                                    "question"|"answer", header_text }. Returns
+                                    application/pdf. Empty question_ids -> 422.
 ```
 
-`app/services/generate.py::knapsack_select` and `app/pdf/layout_engine.py::LayoutEngine` are stubs that raise `NotImplementedError`. No route is registered in `main.py` for paper generation.
+`POST /api/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite
+(`_apply_filters` + the eager-load options from `app/routes/questions.py`) to build the candidate
+pool, excludes any `exclude_question_ids`, then runs `knapsack_select`. It never returns a 404 — an
+empty result with a `warning` string keeps the live builder UI responsive.
+
+`POST /api/generate/paper` renders the question **or** answer paper (one variant per call — the
+frontend calls it twice to get both PDFs). Both require authentication (`get_current_user`), not
+admin. See [Paper Generation Engine](#paper-generation-engine-implemented) below.
 
 ## Import Pipeline (Server Side)
 
@@ -97,7 +114,7 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 1. **`POST /api/import/upload-pdf`** (Implemented)
    - Accepts a single PDF (multipart upload). Rejects non-PDF content types with `422`.
    - Uses **PyMuPDF** to render every page to an RGB image at 300 dpi.
-   - Standardizes each page per `app/pdf/image_processing.py::standardize`: keeps original height, pads width to a fixed **2480 px** canvas with a **90 px** left margin (cropping source content if it would overflow the canvas).
+   - Standardizes each page per `app/pdf/image_processing.py::standardize`: stores the image **content-only** (no margin), downscaling to a **1760 px** width (aspect preserved) only when wider, otherwise keeping it unchanged. Page margins and question numbers are added later by the generation engine.
    - Encodes WebP at quality 85 (`to_webp_bytes`).
    - Stores images under `tmp/{upload_id}/page_{i}.webp` and returns presigned URLs (2-hour expiry) for the frontend grid preview, along with each page's width/height.
    - Always calls AI filename-metadata extraction (see [AI_INTEGRATION.md](./AI_INTEGRATION.md)) and returns `suggested_metadata` alongside the pages — this is unconditional, not optional.
@@ -122,42 +139,87 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 5. **`DELETE /api/import/papers/{paper_id}`** (Implemented)
    - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionTopic` in the DB), then deletes the associated S3 objects after the DB transaction succeeds.
 
-## Paper Generation Engine (Not Implemented)
+## Question Selection (Implemented)
 
-`POST /api/generate/paper` and its supporting engine are **not built yet**. The design below is the intended target; treat it as a spec for future work, not current behavior.
+`app/services/generate.py::knapsack_select(questions, target_marks)` picks a subset of questions
+whose marks sum as close as possible to `target_marks`, exposed via `POST /api/generate/select`.
 
-### Inputs (two modes)
+- **Randomized-restart greedy**, not an exact optimizer. Each restart shuffles the pool and greedily
+  adds questions until the running total reaches the target, considering every intermediate subset.
+  The restart budget scales with pool size (`_RESTARTS_PER_QUESTION = 20`, clamped to `[200, 2000]`).
+- Prefers an **exact match**; otherwise returns the subset whose total is closest to the target
+  (a slight overshoot is allowed if it lands closer). Stops early once an exact match is found.
+- The randomness is intentional: the same filters/target produce a *different* paper each time.
+  Equally-good subsets are chosen by reservoir sampling so repeated calls vary.
+- Questions with `null` or non-positive `marks` are ignored. Returns `[]` for a non-positive target
+  or when nothing is selectable.
 
-1. **Manual selection:** `{ question_ids: [...], header_text, include_answers }`
-2. **Auto-fill by criteria:** `{ filters, target_marks, header_text, include_answers }` — server selects questions whose marks sum to the target.
+`POST /api/generate/select` also supports an **add-to-selection** flow client-side: the frontend
+passes the already-chosen questions in `exclude_question_ids` and reduces `target_marks` by their
+running total, so autofill tops up an existing selection instead of replacing it (see
+[FRONTEND.md](./FRONTEND.md#paper-generation-ui)).
 
-### Auto-fill Algorithm
+## Paper Generation Engine (Implemented)
 
-Greedy / knapsack selection over questions matching `filters`. Prefer **exact match** to `target_marks`; otherwise return the closest combination. (At v1 scale, a simple iterative approach is fine.) `app/services/generate.py::knapsack_select` is currently a stub.
+`POST /api/generate/paper` (`app/routes/generate.py::generate_paper`) turns a manual selection into
+a PDF. It generates **one variant per call** — the frontend calls it twice, `variant="question"`
+then `variant="answer"`, to produce the separate question and answer papers, which follow identical
+layout rules. There is no server-side autofill-at-generate: the selection is already resolved
+(manually or via `/generate/select`) before this endpoint is hit.
 
-### PDF Layout Algorithm
+### Route behavior
 
-- **Page size:** A4 (210 × 297 mm).
-- **Margins:** reserve a left margin for question numbers; reserve top/bottom for header/footer.
-- **First page:** insert custom header/instructions text from `header_text`.
-- **For each question (in selection order):**
-  1. Compute *source label* and place it above the question in small text:
-     ```
-     {School} {Year} {Level} {ExamType} Q{question_number}
-     ```
-     Example: `Raffles Institution 2024 Sec 3 EOY Q5`
-     Note: `Q{question_number}` here is the **original** number from the source paper, not the renumbered position.
-  2. Place a *paper-local* question number in the left margin: `Q1`, `Q2`, ... — renumbered for this generated paper.
-  3. Place the question's image(s) in `page_order`.
-  4. Track a vertical cursor. If `cursor + image_height > page_height - bottom_margin`, start a new page before placing the image.
-  5. After placing all pages of a question, if the next question fits in the remaining space, place it on the same page; otherwise, start a new page.
-- **Answer pages (optional):** if `include_answers`, append all `page_type='answer'` images after all questions, grouped per question, with the same renumbered labels.
+- Fetches the selected `Question` rows (eager-loading pages + paper), then **re-sorts them into
+  `question_ids` order** (a DB `IN` query is unordered).
+- Numbers questions `1..N` in **selection order**. The same numbers are used in both variants: an
+  answer keeps the number of its question. For `variant="answer"`, a question with no answer pages
+  is **skipped**, but its number stays reserved so the remaining answers still match the question
+  paper.
+- `header_text` is printed only on the question variant.
+- Returns `Response(pdf, media_type="application/pdf")`. Empty `question_ids` → 422 (schema).
 
-`app/pdf/layout_engine.py::LayoutEngine.compute_layout` / `.render` are currently stubs (`NotImplementedError`). `app/pdf/layout_engine.py` already defines the `QuestionLayout` / `LayoutPlan` dataclasses the implementation is expected to fill in.
+### Layout engine (`app/pdf/layout_engine.py`)
+
+Works in **300-DPI pixel space** (A4 = 2480×3508 px). Stored images are content-only (≤ 1760 px
+wide from ingestion); the engine builds the page margins itself. `LayoutEngine(page_capacity_px,
+fit_width)` — `page_capacity_px` is the usable vertical budget (page height minus top/bottom
+margins); `fit_width` selects the horizontal treatment per variant:
+
+- **`fit_width=True` (question paper):** each image is scaled (aspect preserved) to a fixed **1760 px
+  content width** and drawn **centered** on the page — **360 px margin on each side** (1760 + 360 +
+  360 = 2480). All questions therefore render at the same width regardless of their stored size.
+- **`fit_width=False` (answer paper):** each image keeps its **native size** (≤ 1760 px), **flush to
+  the 360 px left margin**, with the remaining width as right padding. It never overflows (360 + 1760
+  < 2480). A **100 px vertical gap** separates one question's answer block from the next (`block_gap_px`);
+  multiple answer pages of the same question stack with no extra gap.
+
+Both variants draw the question number into the **360 px left margin**, right-aligned just left of
+the image.
+
+- `compute_layout(blocks, header_text="") -> LayoutPlan`: greedy **packing** — keeps a running
+  cursor and places each block (one question's pages for this variant) on the current page while it
+  fits `page_capacity_px`; a block that would overflow starts a new page. Two short consecutive
+  questions therefore share a page. A block taller than a whole page starts fresh and its pages flow
+  across pages at render time. Block heights use the variant's scale (`_image_scale`). Header height
+  is reserved on the first page. `page_count` is a lower bound (render is authoritative when a tall
+  block overflows).
+- `render(plan, fetch_bytes) -> bytes`: **ReportLab** canvas at A4, scaling px→points. For each
+  block it places the page image(s) (`fetch_bytes(image_key)` → Pillow → `ImageReader`) at the
+  variant's scale and left offset, then draws the **number in the left margin**, right-aligned just
+  left of the image's edge and nudged slightly below the block's top (drawn *after* the image so it
+  is never covered). Page-breaks per image; an image taller than the page is scaled to fit. In
+  production `fetch_bytes` is `get_image_bytes`; the `variant="answer"` call only fetches answer
+  bytes and vice-versa, so no image is fetched twice across the two requests.
+
+Dataclasses: `Block(label, source_label, pages, page_index)` and
+`LayoutPlan(page_count, blocks, header_text)`. `source_label`
+(`{School} {Year} {Level} {ExamType} Q{original_number}`) is assembled per question but not yet
+drawn — kept for future use.
 
 ### Library
 
-ReportLab is already in `requirements.txt`, in preference over FPDF2, for the per-page cursor + image flow described above.
+ReportLab (in `requirements.txt`) drives the per-page cursor + image flow; Pillow decodes the stored
+WebP page images.
 
 ## Auth & Security
 

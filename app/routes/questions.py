@@ -105,6 +105,18 @@ def _topic_infos(question: Question) -> list[dict]:
     ]
 
 
+def serialize_list_item(q: Question) -> dict:
+    """Build a QuestionListItem dict for a question (with eager-loaded relations)."""
+    return {
+        "id": q.id,
+        "question_number": q.question_number,
+        "marks": q.marks,
+        "paper_info": _paper_info(q.paper),
+        "topics": _topic_infos(q),
+        "first_page_url": _first_page_url(q),
+    }
+
+
 _PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.subject),
     joinedload(Paper.stream),
@@ -159,17 +171,7 @@ def list_questions(
         .all()
     )
 
-    items = [
-        {
-            "id": q.id,
-            "question_number": q.question_number,
-            "marks": q.marks,
-            "paper_info": _paper_info(q.paper),
-            "topics": _topic_infos(q),
-            "first_page_url": _first_page_url(q),
-        }
-        for q in questions
-    ]
+    items = [serialize_list_item(q) for q in questions]
 
     return {"total": total, "items": items}
 

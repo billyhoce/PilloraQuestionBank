@@ -1,22 +1,13 @@
 """Tests for knapsack selection, PDF layout engine, and generation routes."""
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from app.models.orm import Paper, Question, QuestionPage
-from app.pdf.layout_engine import LayoutEngine, LayoutPlan, QuestionLayout
+from app.models.orm import Question
+from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan
 from app.services.generate import knapsack_select
 
-# The paper-generation engine (knapsack + layout) is a TDD stub not yet
-# implemented (app/services/generate.py, app/pdf/layout_engine.py). These tests
-# describe the target behavior and are expected to fail until it lands. xfail
-# (non-strict) keeps them running and out of CI's red without hiding them —
-# once the feature is implemented they will XPASS, signalling this marker can
-# be removed.
-pytestmark = pytest.mark.xfail(reason="paper generation engine not yet implemented", strict=False)
+# The knapsack function, /api/generate/select, and the PDF layout engine +
+# /api/generate/paper route are all implemented — every test here runs for real.
 
 
 # ---------------------------------------------------------------------------
@@ -32,30 +23,17 @@ def _make_question(id: int, marks: Optional[int], question_number: int = 1) -> M
     return q
 
 
-def _make_question_layout(
-    question_id: int,
+def _make_block(
     label: str,
-    source_label: str,
-    question_page_heights: list[int],
-    answer_page_heights: list[int] = None,
+    page_heights: list[int],
+    source_label: str = "School 2024 Sec 3 EOY Q1",
     page_index: int = 0,
-) -> QuestionLayout:
-    q_pages = [
-        MagicMock(image_key=f"papers/1/q{question_id}/question_{i}.webp", height_px=h, width_px=2480, page_type="question", page_order=i)
-        for i, h in enumerate(question_page_heights)
+) -> Block:
+    pages = [
+        MagicMock(image_key=f"k_{label}_{i}.webp", height_px=h, width_px=2480, page_order=i)
+        for i, h in enumerate(page_heights)
     ]
-    a_pages = [
-        MagicMock(image_key=f"papers/1/q{question_id}/answer_{i}.webp", height_px=h, width_px=2480, page_type="answer", page_order=i)
-        for i, h in enumerate(answer_page_heights or [])
-    ]
-    return QuestionLayout(
-        question_id=question_id,
-        label=label,
-        source_label=source_label,
-        page_index=page_index,
-        question_pages=q_pages,
-        answer_pages=a_pages,
-    )
+    return Block(label=label, source_label=source_label, pages=pages, page_index=page_index)
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +55,12 @@ def test_knapsack_exact_match_preferred_over_overshoot():
     assert total == 5
 
 
-def test_knapsack_no_exact_match_returns_closest_below():
+def test_knapsack_no_exact_match_returns_closest():
+    # No subset of [5, 7, 3] sums to 6; closest either way is 5 or 7 (distance 1).
     questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
     result = knapsack_select(questions, target_marks=6)
     total = sum(q.marks for q in result)
-    assert total <= 6
-    assert total == 5  # closest below: [5]
+    assert abs(total - 6) <= 1
 
 
 def test_knapsack_empty_pool_returns_empty():
@@ -121,196 +99,284 @@ def test_knapsack_single_question_exact():
     assert result[0].id == 1
 
 
+def test_knapsack_randomized_produces_variety():
+    # A pool with many exact-8 combinations should not always return the same one.
+    questions = [_make_question(i, m) for i, m in enumerate([1, 2, 3, 4, 5, 6, 7], start=1)]
+    seen = set()
+    for _ in range(20):
+        result = knapsack_select(questions, target_marks=8)
+        assert sum(q.marks for q in result) == 8
+        seen.add(frozenset(q.id for q in result))
+    assert len(seen) > 1
+
+
 # ---------------------------------------------------------------------------
-# Layout engine — LayoutPlan structure
+# Layout engine — compute_layout packing (page_capacity_px in px)
 # ---------------------------------------------------------------------------
 
-# A4 usable height in points ≈ 720pt (842 - top/bottom margins).
-# Images are rendered at 1pt per px scaled to page width; exact scaling depends
-# on implementation, but the engine must respect a configurable capacity.
-# We supply capacity_px to LayoutEngine for deterministic unit tests.
 
-_PAGE_CAPACITY_PX = 1000  # mock capacity for test isolation
-
-
-def _engine(capacity_px=_PAGE_CAPACITY_PX) -> LayoutEngine:
-    return LayoutEngine(page_capacity_px=capacity_px)
+def _engine(capacity_px=1000, fit_width=False) -> LayoutEngine:
+    # Packing tests use fit_width=False so block heights map 1:1 (no image
+    # scaling), keeping the capacity/height arithmetic easy to reason about.
+    return LayoutEngine(page_capacity_px=capacity_px, fit_width=fit_width)
 
 
-def test_layout_single_question_one_page():
-    engine = _engine()
-    q = _make_question_layout(1, "Q1", "School 2024 Sec 3 EOY Q1", question_page_heights=[600])
-    plan = engine.compute_layout([q], header_text="", include_answers=False)
-    assert plan.page_count >= 1
-
-
-def test_layout_cursor_advances_after_each_question():
-    engine = _engine(capacity_px=2000)
-    q1 = _make_question_layout(1, "Q1", "S 2024 Sec 3 EOY Q1", question_page_heights=[400])
-    q2 = _make_question_layout(2, "Q2", "S 2024 Sec 3 EOY Q2", question_page_heights=[400])
-    plan = engine.compute_layout([q1, q2], header_text="", include_answers=False)
-    # Both fit on one page; page_count is 1
+def test_layout_single_block_one_page():
+    plan = _engine().compute_layout([_make_block("1", [600])])
     assert plan.page_count == 1
-    # Q2's page index equals Q1's page index (same page)
-    layout_q1 = plan.question_assignments[0]
-    layout_q2 = plan.question_assignments[1]
-    assert layout_q1.page_index == layout_q2.page_index
+    assert plan.blocks[0].page_index == 0
+
+
+def test_layout_consecutive_blocks_share_a_page():
+    # capacity=2000, two 400px blocks → both on page 0.
+    plan = _engine(capacity_px=2000).compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    assert plan.page_count == 1
+    assert plan.blocks[0].page_index == plan.blocks[1].page_index == 0
 
 
 def test_layout_new_page_when_space_insufficient():
-    # capacity=700, Q1=600px, Q2=400px → Q2 doesn't fit after Q1
-    engine = _engine(capacity_px=700)
-    q1 = _make_question_layout(1, "Q1", "S 2024 Sec 3 EOY Q1", question_page_heights=[600])
-    q2 = _make_question_layout(2, "Q2", "S 2024 Sec 3 EOY Q2", question_page_heights=[400])
-    plan = engine.compute_layout([q1, q2], header_text="", include_answers=False)
+    # capacity=700, Q1=600px, Q2=400px → Q2 doesn't fit after Q1.
+    plan = _engine(capacity_px=700).compute_layout([_make_block("1", [600]), _make_block("2", [400])])
     assert plan.page_count >= 2
-    assert plan.question_assignments[1].page_index > plan.question_assignments[0].page_index
+    assert plan.blocks[1].page_index > plan.blocks[0].page_index
 
 
-def test_layout_tall_question_forces_new_page():
-    engine = _engine(capacity_px=500)
-    q = _make_question_layout(1, "Q1", "S 2024 Sec 3 EOY Q1", question_page_heights=[800])
-    plan = engine.compute_layout([q], header_text="Test header", include_answers=False)
-    # Tall question must start even if it overflows (doesn't fit); page_count >= 1
+def test_layout_packs_by_running_total():
+    # The worked example: capacity=600, heights 200/300/200 → [Q1,Q2] then [Q3].
+    plan = _engine(capacity_px=600).compute_layout(
+        [_make_block("1", [200]), _make_block("2", [300]), _make_block("3", [200])]
+    )
+    assert [b.page_index for b in plan.blocks] == [0, 0, 1]
+    assert plan.page_count == 2
+
+
+def test_layout_tall_block_starts_fresh():
+    # A block taller than a page still starts on its own page (page_index 0 here).
+    plan = _engine(capacity_px=500).compute_layout([_make_block("1", [800])])
     assert plan.page_count >= 1
+    assert plan.blocks[0].page_index == 0
 
 
-def test_layout_source_label_in_plan():
-    engine = _engine()
-    source = "Raffles Institution 2024 Sec 3 EOY Q5"
-    q = _make_question_layout(5, "Q1", source, question_page_heights=[400])
-    plan = engine.compute_layout([q], header_text="", include_answers=False)
-    labels = [qa.source_label for qa in plan.question_assignments]
-    assert any("Raffles Institution" in lbl for lbl in labels)
-    assert any("EOY" in lbl for lbl in labels)
+def test_layout_multipage_block_flows():
+    # Two 400px pages within one block, capacity 500: the block still starts on
+    # page 0; render flows the second page. compute_layout counts the start page.
+    plan = _engine(capacity_px=500).compute_layout([_make_block("1", [400, 400])])
+    assert plan.blocks[0].page_index == 0
 
 
-def test_layout_renumbers_questions():
-    engine = _engine(capacity_px=5000)
-    questions = [
-        _make_question_layout(7, "Q1", "School 2024 Sec 3 EOY Q7", question_page_heights=[200]),
-        _make_question_layout(8, "Q2", "School 2024 Sec 3 EOY Q8", question_page_heights=[200]),
-        _make_question_layout(9, "Q3", "School 2024 Sec 3 EOY Q9", question_page_heights=[200]),
-    ]
-    plan = engine.compute_layout(questions, header_text="", include_answers=False)
-    labels = [qa.label for qa in plan.question_assignments]
-    assert labels == ["Q1", "Q2", "Q3"]
-
-
-def test_layout_answer_pages_appended_when_include_answers_true():
-    engine = _engine(capacity_px=5000)
-    q = _make_question_layout(
-        1, "Q1", "S 2024 Sec 3 EOY Q1",
-        question_page_heights=[400],
-        answer_page_heights=[300],
+def test_layout_preserves_labels_and_order():
+    plan = _engine(capacity_px=5000).compute_layout(
+        [_make_block("1", [200]), _make_block("2", [200]), _make_block("3", [200])]
     )
-    plan = engine.compute_layout([q], header_text="", include_answers=True)
-    assert plan.has_answer_section is True
-
-
-def test_layout_no_answer_pages_when_include_answers_false():
-    engine = _engine(capacity_px=5000)
-    q = _make_question_layout(
-        1, "Q1", "S 2024 Sec 3 EOY Q1",
-        question_page_heights=[400],
-        answer_page_heights=[300],
-    )
-    plan = engine.compute_layout([q], header_text="", include_answers=False)
-    assert plan.has_answer_section is False
-
-
-def test_layout_answer_section_uses_renumbered_labels():
-    engine = _engine(capacity_px=5000)
-    q = _make_question_layout(
-        99, "Q1", "S 2024 Sec 3 EOY Q99",
-        question_page_heights=[400],
-        answer_page_heights=[300],
-    )
-    plan = engine.compute_layout([q], header_text="", include_answers=True)
-    answer_labels = [qa.label for qa in plan.question_assignments if qa.answer_pages]
-    assert "Q1" in answer_labels
+    assert [b.label for b in plan.blocks] == ["1", "2", "3"]
 
 
 def test_layout_header_text_in_plan():
-    engine = _engine()
-    plan = engine.compute_layout([], header_text="Attempt all questions.", include_answers=False)
+    plan = _engine().compute_layout([], header_text="Attempt all questions.")
     assert plan.header_text == "Attempt all questions."
 
 
-def test_layout_empty_question_list_produces_header_only_plan():
-    engine = _engine()
-    plan = engine.compute_layout([], header_text="Instructions.", include_answers=False)
+def test_layout_empty_block_list_produces_at_least_one_page():
+    plan = _engine().compute_layout([], header_text="Instructions.")
     assert plan.page_count >= 1
-    assert len(plan.question_assignments) == 0
+    assert plan.blocks == []
+
+
+def test_layout_render_returns_pdf_bytes(minimal_webp_bytes):
+    # End-to-end render with real ReportLab + a real WebP image.
+    plan = _engine().compute_layout([_make_block("1", [800])], header_text="Header")
+    pdf = _engine().render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 0
+
+
+def test_question_variant_scales_image_down():
+    # fit_width=True scales a full-width (2480px) page to 1760px content width,
+    # which lowers its height proportionally.
+    block = _make_block("1", [800])  # width_px=2480, height_px=800
+    q_engine = LayoutEngine(fit_width=True)
+    a_engine = LayoutEngine(fit_width=False)
+    assert q_engine._block_height_px(block) < 800  # scaled to 1760px content width
+    assert a_engine._block_height_px(block) == 800  # native size preserved
+
+
+def test_answer_variant_renders_native(minimal_webp_bytes):
+    plan = LayoutEngine(fit_width=False).compute_layout([_make_block("1", [800])])
+    pdf = LayoutEngine(fit_width=False).render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_answer_variant_adds_gap_between_blocks():
+    # capacity 810: two 400px answer blocks total 800px, which would otherwise
+    # fit — but the 100px inter-question gap pushes the second block to a new page.
+    engine = LayoutEngine(page_capacity_px=810, fit_width=False)
+    assert engine.block_gap_px == 100
+    plan = engine.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    assert [b.page_index for b in plan.blocks] == [0, 1]
+
+
+def test_question_variant_has_no_block_gap():
+    engine = LayoutEngine(fit_width=True)
+    assert engine.block_gap_px == 0
+    # Without a gap the two 400px (scaled) blocks comfortably share a page.
+    plan = engine.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    assert plan.blocks[0].page_index == plan.blocks[1].page_index == 0
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Routes — /api/generate/select (implemented)
 # ---------------------------------------------------------------------------
 
 
-def test_generate_manual_mode_returns_pdf(public_client, sample_paper, db_session, reference_data):
-    from app.models.orm import Question
+def test_generate_select_requires_auth(client):
+    resp = client.post("/api/generate/select", json={"filters": {}, "target_marks": 10})
+    assert resp.status_code == 401
 
-    questions = db_session.query(Question).filter_by(paper_id=sample_paper.id).all()
-    ids = [q.id for q in questions]
 
+def test_generate_select_returns_selection(public_client, sample_paper, reference_data):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 10,  # 5 + 3 + 2 = 10, exact
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_marks"] == 10
+    assert data["target_marks"] == 10
+    assert data["exact"] is True
+    assert data["warning"] is None
+    assert len(data["items"]) == 3
+
+
+def test_generate_select_excludes_ids(public_client, sample_paper, db_session, reference_data):
+    qs = db_session.query(Question).filter_by(paper_id=sample_paper.id).all()
+    excluded = [q.id for q in qs if q.marks == 5]  # the 5-mark question
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 5,  # remaining pool is 3 + 2 = 5
+        "exclude_question_ids": excluded,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = [it["id"] for it in data["items"]]
+    assert excluded[0] not in ids
+    assert data["total_marks"] == 5
+    assert data["exact"] is True
+
+
+def test_generate_select_no_match_returns_warning(public_client):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": 99999},  # no such subject
+        "target_marks": 10,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["warning"] is not None
+
+
+def test_generate_select_inexact_returns_warning(public_client, sample_paper, reference_data):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 100,  # unreachable; best is all questions = 10
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["exact"] is False
+    assert data["warning"] is not None
+    assert data["total_marks"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Routes — /api/generate/paper PDF export (deferred: PDF phase)
+# ---------------------------------------------------------------------------
+
+
+def _question_ids(db_session, paper) -> list[int]:
+    qs = (
+        db_session.query(Question)
+        .filter_by(paper_id=paper.id)
+        .order_by(Question.question_number)
+        .all()
+    )
+    return [q.id for q in qs]
+
+
+def test_generate_paper_returns_pdf(public_client, sample_paper, db_session, reference_data):
+    ids = _question_ids(db_session, sample_paper)
     with (
-        patch("app.routes.generate.get_presigned_url", return_value="https://fake.url"),
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake pdf bytes"),
     ):
         resp = public_client.post("/api/generate/paper", json={
             "question_ids": ids,
+            "variant": "question",
             "header_text": "Test paper",
-            "include_answers": False,
         })
-
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
     assert len(resp.content) > 0
 
 
-def test_generate_manual_mode_empty_question_ids_returns_422(public_client):
-    resp = public_client.post("/api/generate/paper", json={
-        "question_ids": [],
-        "header_text": "",
-        "include_answers": False,
-    })
+def test_generate_paper_empty_question_ids_returns_422(public_client):
+    resp = public_client.post("/api/generate/paper", json={"question_ids": [], "variant": "question"})
     assert resp.status_code == 422
 
 
-def test_generate_autofill_returns_pdf(public_client, sample_paper, db_session, reference_data):
+def test_generate_paper_requires_auth(client):
+    resp = client.post("/api/generate/paper", json={"question_ids": [1], "variant": "question"})
+    assert resp.status_code == 401
+
+
+def test_generate_paper_renumbers_in_selection_order(public_client, sample_paper, db_session, reference_data):
+    # Reverse the natural order; blocks must be labeled 1..N in the given order.
+    ids = list(reversed(_question_ids(db_session, sample_paper)))
+    captured = {}
+
+    def spy_compute(self, blocks, header_text=""):
+        captured["blocks"] = blocks
+        captured["fit_width"] = self.fit_width
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+
     with (
-        patch("app.routes.generate.get_presigned_url", return_value="https://fake.url"),
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
-        patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake pdf bytes"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
     ):
-        resp = public_client.post("/api/generate/paper", json={
-            "filters": {"subject_id": reference_data["subject"].id},
-            "target_marks": 10,
-            "header_text": "Auto paper",
-            "include_answers": False,
-        })
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "question"})
 
     assert resp.status_code == 200
-    assert resp.headers["content-type"] == "application/pdf"
+    blocks = captured["blocks"]
+    assert [b.label for b in blocks] == ["1", "2", "3"]
+    # First selected id maps to label "1".
+    assert blocks[0].pages[0].image_key.endswith("question_0.webp")
+    # Question variant scales images to a fixed 1760px content width.
+    assert captured["fit_width"] is True
 
 
-def test_generate_autofill_no_match_returns_404(public_client):
-    resp = public_client.post("/api/generate/paper", json={
-        "filters": {"subject_id": 99999},  # no such subject
-        "target_marks": 10,
-        "header_text": "",
-        "include_answers": False,
-    })
-    assert resp.status_code == 404
+def test_generate_paper_answer_variant_skips_questions_without_answers(
+    public_client, sample_paper, db_session, reference_data
+):
+    # In sample_paper only Q2 has an answer page. Answer variant → 1 block, kept
+    # at its selection number ("2").
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
 
+    def spy_compute(self, blocks, header_text=""):
+        captured["blocks"] = blocks
+        captured["fit_width"] = self.fit_width
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
 
-def test_generate_requires_auth(client):
-    resp = client.post("/api/generate/paper", json={
-        "question_ids": [1],
-        "header_text": "",
-        "include_answers": False,
-    })
-    assert resp.status_code == 401
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "answer"})
+
+    assert resp.status_code == 200
+    blocks = captured["blocks"]
+    assert len(blocks) == 1
+    assert blocks[0].label == "2"
+    assert all(p.page_type == "answer" for p in blocks[0].pages)
+    # Answer variant keeps native image size (flush-left, no centering).
+    assert captured["fit_width"] is False
