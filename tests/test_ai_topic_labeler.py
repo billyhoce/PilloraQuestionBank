@@ -1,5 +1,5 @@
 """Tests for the Claude topic-labeling AI module."""
-from datetime import datetime
+from datetime import datetime, UTC
 from unittest.mock import MagicMock, patch
 
 from app.ai.topic_labeler import (
@@ -140,11 +140,11 @@ def _make_paper_and_question(db_session, reference_data, admin_user):
         year=2024,
         paper_number="1",
         created_by=admin_user.id,
-        created_at=datetime.now(datetime.timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(paper)
     db_session.flush()
-    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.now(datetime.timezone.utc))
+    question = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.now(UTC))
     db_session.add(question)
     db_session.flush()
     return paper, question
