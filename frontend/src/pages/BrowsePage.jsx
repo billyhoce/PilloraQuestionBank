@@ -144,6 +144,7 @@ export default function BrowsePage() {
         <div className="flex items-center gap-3 text-sm">
           {user ? (
             <>
+              <Link to="/generate" className="text-blue-600 hover:underline">Create Paper</Link>
               <span className="text-gray-500">{user.email}</span>
               {user.role === 'admin' ? (
                 <Link to="/admin/reference" className="text-blue-600 hover:underline">Admin</Link>

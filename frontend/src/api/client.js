@@ -161,6 +161,12 @@ export const api = {
     get: (id, signal) => request('GET', `/api/questions/${id}`, undefined, signal),
   },
 
+  generate: {
+    // Auto-select a randomized set of questions summing near target_marks.
+    // body: { filters, target_marks, exclude_question_ids }
+    select: (body, signal) => request('POST', '/api/generate/select', body, signal),
+  },
+
   papers: {
     years: ({ subject_id, stream_id, level_id } = {}) => {
       const params = new URLSearchParams()

@@ -10,13 +10,13 @@ from app.models.orm import Paper, Question, QuestionPage
 from app.pdf.layout_engine import LayoutEngine, LayoutPlan, QuestionLayout
 from app.services.generate import knapsack_select
 
-# The paper-generation engine (knapsack + layout) is a TDD stub not yet
-# implemented (app/services/generate.py, app/pdf/layout_engine.py). These tests
-# describe the target behavior and are expected to fail until it lands. xfail
-# (non-strict) keeps them running and out of CI's red without hiding them —
-# once the feature is implemented they will XPASS, signalling this marker can
-# be removed.
-pytestmark = pytest.mark.xfail(reason="paper generation engine not yet implemented", strict=False)
+# The PDF layout engine and the /api/generate/paper PDF route are still a TDD
+# stub (app/pdf/layout_engine.py, and no PDF route in app/routes/generate.py).
+# Those tests describe the target behavior and stay xfail (non-strict) until the
+# PDF phase lands — they'll XPASS then, signalling the marker can be removed.
+# The knapsack function and the /api/generate/select route ARE implemented, so
+# their tests run for real (no marker).
+deferred = pytest.mark.xfail(reason="PDF generation engine not yet implemented", strict=False)
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +77,12 @@ def test_knapsack_exact_match_preferred_over_overshoot():
     assert total == 5
 
 
-def test_knapsack_no_exact_match_returns_closest_below():
+def test_knapsack_no_exact_match_returns_closest():
+    # No subset of [5, 7, 3] sums to 6; closest either way is 5 or 7 (distance 1).
     questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
     result = knapsack_select(questions, target_marks=6)
     total = sum(q.marks for q in result)
-    assert total <= 6
-    assert total == 5  # closest below: [5]
+    assert abs(total - 6) <= 1
 
 
 def test_knapsack_empty_pool_returns_empty():
@@ -121,8 +121,19 @@ def test_knapsack_single_question_exact():
     assert result[0].id == 1
 
 
+def test_knapsack_randomized_produces_variety():
+    # A pool with many exact-8 combinations should not always return the same one.
+    questions = [_make_question(i, m) for i, m in enumerate([1, 2, 3, 4, 5, 6, 7], start=1)]
+    seen = set()
+    for _ in range(20):
+        result = knapsack_select(questions, target_marks=8)
+        assert sum(q.marks for q in result) == 8
+        seen.add(frozenset(q.id for q in result))
+    assert len(seen) > 1
+
+
 # ---------------------------------------------------------------------------
-# Layout engine — LayoutPlan structure
+# Layout engine — LayoutPlan structure (deferred: PDF phase)
 # ---------------------------------------------------------------------------
 
 # A4 usable height in points ≈ 720pt (842 - top/bottom margins).
@@ -137,6 +148,7 @@ def _engine(capacity_px=_PAGE_CAPACITY_PX) -> LayoutEngine:
     return LayoutEngine(page_capacity_px=capacity_px)
 
 
+@deferred
 def test_layout_single_question_one_page():
     engine = _engine()
     q = _make_question_layout(1, "Q1", "School 2024 Sec 3 EOY Q1", question_page_heights=[600])
@@ -144,6 +156,7 @@ def test_layout_single_question_one_page():
     assert plan.page_count >= 1
 
 
+@deferred
 def test_layout_cursor_advances_after_each_question():
     engine = _engine(capacity_px=2000)
     q1 = _make_question_layout(1, "Q1", "S 2024 Sec 3 EOY Q1", question_page_heights=[400])
@@ -157,6 +170,7 @@ def test_layout_cursor_advances_after_each_question():
     assert layout_q1.page_index == layout_q2.page_index
 
 
+@deferred
 def test_layout_new_page_when_space_insufficient():
     # capacity=700, Q1=600px, Q2=400px → Q2 doesn't fit after Q1
     engine = _engine(capacity_px=700)
@@ -167,6 +181,7 @@ def test_layout_new_page_when_space_insufficient():
     assert plan.question_assignments[1].page_index > plan.question_assignments[0].page_index
 
 
+@deferred
 def test_layout_tall_question_forces_new_page():
     engine = _engine(capacity_px=500)
     q = _make_question_layout(1, "Q1", "S 2024 Sec 3 EOY Q1", question_page_heights=[800])
@@ -175,6 +190,7 @@ def test_layout_tall_question_forces_new_page():
     assert plan.page_count >= 1
 
 
+@deferred
 def test_layout_source_label_in_plan():
     engine = _engine()
     source = "Raffles Institution 2024 Sec 3 EOY Q5"
@@ -185,6 +201,7 @@ def test_layout_source_label_in_plan():
     assert any("EOY" in lbl for lbl in labels)
 
 
+@deferred
 def test_layout_renumbers_questions():
     engine = _engine(capacity_px=5000)
     questions = [
@@ -197,6 +214,7 @@ def test_layout_renumbers_questions():
     assert labels == ["Q1", "Q2", "Q3"]
 
 
+@deferred
 def test_layout_answer_pages_appended_when_include_answers_true():
     engine = _engine(capacity_px=5000)
     q = _make_question_layout(
@@ -208,6 +226,7 @@ def test_layout_answer_pages_appended_when_include_answers_true():
     assert plan.has_answer_section is True
 
 
+@deferred
 def test_layout_no_answer_pages_when_include_answers_false():
     engine = _engine(capacity_px=5000)
     q = _make_question_layout(
@@ -219,6 +238,7 @@ def test_layout_no_answer_pages_when_include_answers_false():
     assert plan.has_answer_section is False
 
 
+@deferred
 def test_layout_answer_section_uses_renumbered_labels():
     engine = _engine(capacity_px=5000)
     q = _make_question_layout(
@@ -231,12 +251,14 @@ def test_layout_answer_section_uses_renumbered_labels():
     assert "Q1" in answer_labels
 
 
+@deferred
 def test_layout_header_text_in_plan():
     engine = _engine()
     plan = engine.compute_layout([], header_text="Attempt all questions.", include_answers=False)
     assert plan.header_text == "Attempt all questions."
 
 
+@deferred
 def test_layout_empty_question_list_produces_header_only_plan():
     engine = _engine()
     plan = engine.compute_layout([], header_text="Instructions.", include_answers=False)
@@ -245,13 +267,75 @@ def test_layout_empty_question_list_produces_header_only_plan():
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Routes — /api/generate/select (implemented)
 # ---------------------------------------------------------------------------
 
 
-def test_generate_manual_mode_returns_pdf(public_client, sample_paper, db_session, reference_data):
-    from app.models.orm import Question
+def test_generate_select_requires_auth(client):
+    resp = client.post("/api/generate/select", json={"filters": {}, "target_marks": 10})
+    assert resp.status_code == 401
 
+
+def test_generate_select_returns_selection(public_client, sample_paper, reference_data):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 10,  # 5 + 3 + 2 = 10, exact
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_marks"] == 10
+    assert data["target_marks"] == 10
+    assert data["exact"] is True
+    assert data["warning"] is None
+    assert len(data["items"]) == 3
+
+
+def test_generate_select_excludes_ids(public_client, sample_paper, db_session, reference_data):
+    qs = db_session.query(Question).filter_by(paper_id=sample_paper.id).all()
+    excluded = [q.id for q in qs if q.marks == 5]  # the 5-mark question
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 5,  # remaining pool is 3 + 2 = 5
+        "exclude_question_ids": excluded,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = [it["id"] for it in data["items"]]
+    assert excluded[0] not in ids
+    assert data["total_marks"] == 5
+    assert data["exact"] is True
+
+
+def test_generate_select_no_match_returns_warning(public_client):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": 99999},  # no such subject
+        "target_marks": 10,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["warning"] is not None
+
+
+def test_generate_select_inexact_returns_warning(public_client, sample_paper, reference_data):
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 100,  # unreachable; best is all questions = 10
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["exact"] is False
+    assert data["warning"] is not None
+    assert data["total_marks"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Routes — /api/generate/paper PDF export (deferred: PDF phase)
+# ---------------------------------------------------------------------------
+
+
+@deferred
+def test_generate_manual_mode_returns_pdf(public_client, sample_paper, db_session, reference_data):
     questions = db_session.query(Question).filter_by(paper_id=sample_paper.id).all()
     ids = [q.id for q in questions]
 
@@ -271,6 +355,7 @@ def test_generate_manual_mode_returns_pdf(public_client, sample_paper, db_sessio
     assert len(resp.content) > 0
 
 
+@deferred
 def test_generate_manual_mode_empty_question_ids_returns_422(public_client):
     resp = public_client.post("/api/generate/paper", json={
         "question_ids": [],
@@ -280,6 +365,7 @@ def test_generate_manual_mode_empty_question_ids_returns_422(public_client):
     assert resp.status_code == 422
 
 
+@deferred
 def test_generate_autofill_returns_pdf(public_client, sample_paper, db_session, reference_data):
     with (
         patch("app.routes.generate.get_presigned_url", return_value="https://fake.url"),
@@ -297,6 +383,7 @@ def test_generate_autofill_returns_pdf(public_client, sample_paper, db_session, 
     assert resp.headers["content-type"] == "application/pdf"
 
 
+@deferred
 def test_generate_autofill_no_match_returns_404(public_client):
     resp = public_client.post("/api/generate/paper", json={
         "filters": {"subject_id": 99999},  # no such subject
@@ -307,6 +394,7 @@ def test_generate_autofill_no_match_returns_404(public_client):
     assert resp.status_code == 404
 
 
+@deferred
 def test_generate_requires_auth(client):
     resp = client.post("/api/generate/paper", json={
         "question_ids": [1],
