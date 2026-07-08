@@ -5,6 +5,7 @@ import ConfirmDialog from '../../components/ConfirmDialog'
 import TopicCombobox from '../import/TopicCombobox'
 import PageImageEditor, { existingPageDraft } from './PageImageEditor'
 import { selectionsToAssignments } from '../import/topicUtils'
+import { formatTopic } from '../../utils/topicFormat'
 
 function seedPages(question, type) {
   return (question.pages || [])
@@ -192,10 +193,10 @@ function QuestionEditor({
               let label
               if (sel.subtopic_id != null) {
                 const s = subtopicById?.get(sel.subtopic_id)
-                label = s ? <><strong>{s.topic_name}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
+                label = s ? <><strong>{formatTopic(s.topic_number, s.topic_name)}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
               } else {
-                const tName = topicById?.get(sel.topic_id)
-                label = tName ? <strong>{tName}</strong> : `Unknown topic ${sel.topic_id}`
+                const t = topicById?.get(sel.topic_id)
+                label = t ? <strong>{formatTopic(t.topic_number, t.name)}</strong> : `Unknown topic ${sel.topic_id}`
               }
               return (
                 <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">

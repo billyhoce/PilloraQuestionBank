@@ -4,6 +4,7 @@ import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
 import TopicCombobox from './TopicCombobox'
 import { buildTopicLookup, selectionsToAssignments } from './topicUtils'
+import { formatTopic } from '../../utils/topicFormat'
 
 const REQUEST_INTERVAL_MS = 1300
 
@@ -199,10 +200,10 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
                       let label
                       if (sel.subtopic_id != null) {
                         const s = lookup.subtopicById.get(sel.subtopic_id)
-                        label = s ? <><strong>{s.topic_name}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
+                        label = s ? <><strong>{formatTopic(s.topic_number, s.topic_name)}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
                       } else {
-                        const tName = lookup.topicById.get(sel.topic_id)
-                        label = tName ? <strong>{tName}</strong> : `Unknown topic ${sel.topic_id}`
+                        const t = lookup.topicById.get(sel.topic_id)
+                        label = t ? <strong>{formatTopic(t.topic_number, t.name)}</strong> : `Unknown topic ${sel.topic_id}`
                       }
                       return (
                         <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">

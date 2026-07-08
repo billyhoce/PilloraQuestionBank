@@ -413,4 +413,19 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
     topics = resp.json()["topics"]
     assert len(topics) >= 1
     assert topics[0]["topic_name"] == "Algebra"
+    assert topics[0]["topic_number"] == 1
     assert "Linear Equations" in topics[0]["subtopic_names"]
+
+
+def test_list_questions_topics_include_topic_number(public_client, db_session, reference_data, admin_user):
+    """The list payload carries topic_number so the UI can render 'T1 Algebra'."""
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper)
+    db_session.add(QuestionTopic(question_id=q.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+
+    resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    item = next(it for it in resp.json()["items"] if it["id"] == q.id)
+    assert item["topics"][0]["topic_name"] == "Algebra"
+    assert item["topics"][0]["topic_number"] == 1

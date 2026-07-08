@@ -77,7 +77,8 @@ GET    /api/questions             -- filter params: subject_id, stream_id, level
                                      and exam-type names; an all-digit keyword also matches
                                      the paper year exactly),
                                      page, page_size
-                                  -- returns paginated question list with paper info, topic chips,
+                                  -- returns paginated question list with paper info, topic chips
+                                     ({ topic_name, topic_number, subtopic_names[] }),
                                      and a presigned first-page image URL
 GET    /api/questions/:id         -- full question detail: question pages + answer pages
                                      (each with a presigned S3 URL), topics

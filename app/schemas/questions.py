@@ -16,6 +16,7 @@ class PaperInfoSchema(BaseModel):
 
 class QuestionTopicInfo(BaseModel):
     topic_name: str
+    topic_number: int
     subtopic_names: list[str]
 
 

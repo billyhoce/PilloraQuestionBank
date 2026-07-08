@@ -118,6 +118,7 @@ def _topic_infos(question: Question) -> list[dict]:
     return [
         {
             "topic_name": qt.topic.name,
+            "topic_number": qt.topic.topic_number,
             "subtopic_names": subtopics_by_topic.get(qt.topic_id, []),
         }
         for qt in question.topics
