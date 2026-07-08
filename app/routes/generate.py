@@ -50,7 +50,7 @@ def select_questions(
         f.exam_type_id,
         f.topic_ids,
         f.exclusive,
-        f.subtopic_keyword,
+        f.search,
     )
     if payload.exclude_question_ids:
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))

@@ -37,7 +37,7 @@ export default function FilterBar({ filters, onFilterChange }) {
   const [schoolLevels, setSchoolLevels] = useState([])
   const [topics, setTopics] = useState([])
   const [years, setYears] = useState([])
-  const [kwInput, setKwInput] = useState(filters.subtopic_keyword || '')
+  const [kwInput, setKwInput] = useState(filters.search || '')
 
   useEffect(() => {
     Promise.all([
@@ -89,8 +89,8 @@ export default function FilterBar({ filters, onFilterChange }) {
   }, [filters.subject_id, filters.stream_id, filters.level_id])
 
   useEffect(() => {
-    setKwInput(filters.subtopic_keyword || '')
-  }, [filters.subtopic_keyword])
+    setKwInput(filters.search || '')
+  }, [filters.search])
 
   const selectedLevel = levels.find(l => String(l.id) === String(filters.level_id))
   const selectedStream = streams.find(s => String(s.id) === String(filters.stream_id))
@@ -125,7 +125,7 @@ export default function FilterBar({ filters, onFilterChange }) {
   }
 
   function submitKw() {
-    onFilterChange({ subtopic_keyword: kwInput.trim() })
+    onFilterChange({ search: kwInput.trim() })
   }
 
   const visibleStreams = selectedLevel
@@ -186,7 +186,7 @@ export default function FilterBar({ filters, onFilterChange }) {
             value={kwInput}
             onChange={e => setKwInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submitKw() }}
-            placeholder="Subtopic keyword e.g. indices, prime factorisation, simultaneous equations"
+            placeholder="Search topic, subtopic, school, subject, level, exam type or year"
             className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
@@ -196,10 +196,10 @@ export default function FilterBar({ filters, onFilterChange }) {
           >
             Search
           </button>
-          {filters.subtopic_keyword ? (
+          {filters.search ? (
             <button
               type="button"
-              onClick={() => { setKwInput(''); onFilterChange({ subtopic_keyword: '' }) }}
+              onClick={() => { setKwInput(''); onFilterChange({ search: '' }) }}
               className="px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-100"
             >
               Clear

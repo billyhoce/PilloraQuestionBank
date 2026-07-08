@@ -215,7 +215,7 @@ def test_list_questions_exclusive_topic_filter(public_client, db_session, refere
     assert q_a_and_b.id not in ids
 
 
-def test_list_questions_subtopic_keyword(public_client, db_session, reference_data, admin_user):
+def test_search_by_subtopic_name(public_client, db_session, reference_data, admin_user):
     from app.models.orm import Subtopic
     paper = _add_paper(db_session, reference_data, admin_user)
     q_match = _add_question(db_session, paper, number=1)
@@ -241,11 +241,79 @@ def test_list_questions_subtopic_keyword(public_client, db_session, reference_da
     ))
     db_session.flush()
 
-    resp = public_client.get("/api/questions?subtopic_keyword=linear")
+    resp = public_client.get("/api/questions?search=linear")
     assert resp.status_code == 200
     ids = [q["id"] for q in resp.json()["items"]]
     assert q_match.id in ids
     assert q_other.id not in ids
+
+
+def test_search_by_topic_name(public_client, db_session, reference_data, admin_user):
+    """The search keyword matches assigned topic names (case-insensitive)."""
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q_algebra = _add_question(db_session, paper, number=1)
+    q_no_topic = _add_question(db_session, paper, number=2)
+
+    db_session.add(QuestionTopic(question_id=q_algebra.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+
+    resp = public_client.get("/api/questions?search=algebra")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_algebra.id in ids
+    assert q_no_topic.id not in ids
+
+
+def test_search_by_school_name(public_client, db_session, reference_data, admin_user):
+    from app.models.orm import School
+    school2 = School(name="Anglo-Chinese School")
+    db_session.add(school2)
+    db_session.flush()
+
+    paper_ri = _add_paper(db_session, reference_data, admin_user)
+    paper_acs = _add_paper(db_session, reference_data, admin_user, school=school2)
+    q_ri = _add_question(db_session, paper_ri)
+    q_acs = _add_question(db_session, paper_acs)
+
+    resp = public_client.get("/api/questions?search=raffles")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_ri.id in ids
+    assert q_acs.id not in ids
+
+
+def test_search_by_paper_metadata_names(public_client, db_session, reference_data, admin_user):
+    """Subject, level, stream and exam type names are all searchable."""
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper)
+
+    for kw in ("math", "sec 3", "g3", "eoy"):
+        resp = public_client.get(f"/api/questions?search={kw}")
+        assert resp.status_code == 200, kw
+        ids = [item["id"] for item in resp.json()["items"]]
+        assert q.id in ids, f"search={kw!r} should match via paper metadata"
+
+
+def test_search_by_year(public_client, db_session, reference_data, admin_user):
+    paper_2019 = _add_paper(db_session, reference_data, admin_user, year=2019)
+    paper_2024 = _add_paper(db_session, reference_data, admin_user, year=2024)
+    q_2019 = _add_question(db_session, paper_2019)
+    q_2024 = _add_question(db_session, paper_2024)
+
+    resp = public_client.get("/api/questions?search=2019")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_2019.id in ids
+    assert q_2024.id not in ids
+
+
+def test_search_no_match_returns_zero(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    _add_question(db_session, paper)
+
+    resp = public_client.get("/api/questions?search=zzz-no-such-thing")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
 
 
 def test_list_questions_multi_filter_conjunction(public_client, db_session, reference_data, admin_user):

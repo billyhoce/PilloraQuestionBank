@@ -274,6 +274,29 @@ def test_generate_select_no_match_returns_warning(public_client):
     assert data["warning"] is not None
 
 
+def test_generate_select_accepts_search_filter(public_client, sample_paper, reference_data):
+    """filters.search narrows the candidate pool like the Browse search box."""
+    # Matching keyword (school name) — pool is the sample paper's questions
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"search": "raffles"},
+        "target_marks": 5,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_marks"] == 5
+    assert data["exact"] is True
+
+    # Non-matching keyword — empty pool
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"search": "zzz-no-such-thing"},
+        "target_marks": 5,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["warning"] is not None
+
+
 def test_generate_select_inexact_returns_warning(public_client, sample_paper, reference_data):
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
