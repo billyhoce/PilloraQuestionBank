@@ -58,7 +58,7 @@ export default function ReferencePage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-[90%] mx-auto">
       <h1 className="text-2xl font-semibold text-gray-900 mb-6">Reference Data</h1>
 
       {/* Tab bar */}

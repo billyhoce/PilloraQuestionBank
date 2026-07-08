@@ -156,7 +156,7 @@ export default function BrowsePage() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
+      <main className="max-w-[90%] mx-auto px-6 py-6 space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />

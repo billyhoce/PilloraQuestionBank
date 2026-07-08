@@ -15,6 +15,10 @@
 - **Location:** tests are colocated with the code they cover as `*.test.js` / `*.test.jsx`; shared setup lives in `src/test/setup.js` (registers jest-dom matchers), configured via the `test` block in `vite.config.js`.
 - **Convention:** import test APIs explicitly (`import { describe, it, expect, vi } from 'vitest'`) — vitest globals are not enabled.
 
+## Page Layout Convention
+
+Content pages span ~90% of the viewport: the page-level wrapper uses `max-w-[90%] mx-auto` (Browse, Generate, admin Reference, Papers list/editor, import Topic Review). Exceptions: the import review grid is already full-width under the app shell, and the Login/Register auth cards stay narrow (`max-w-sm`).
+
 ## Topic Display Convention
 
 Topics are always displayed with their topic number as a `T{n}` prefix, e.g. **"T1 Algebra"** — on Browse question cards, the topic filter chips, the AI topic-labelling review, the paper editor's topic labels, and the add-topic combobox. Use the shared helper `formatTopic(topicNumber, name)` in `src/utils/topicFormat.js` (falls back to the bare name when no number is available). The admin Topics tab shows the number in its own editable column instead.

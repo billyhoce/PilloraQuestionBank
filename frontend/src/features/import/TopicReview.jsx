@@ -122,7 +122,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   }
 
   return (
-    <div className="p-4 max-w-5xl mx-auto">
+    <div className="p-4 max-w-[90%] mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-lg font-semibold text-gray-900">Review AI topic suggestions</h1>
         <p className="text-xs text-gray-500">
