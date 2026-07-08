@@ -57,7 +57,7 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Render the assigned label on each thumbnail.
 
 ### Step 5 — Manual Adjust (Merge Pages into One Question)
-- Each page has a "merge with previous" toggle (e.g. "this is Q2 continued").
+- Each page has a "Merge with prev" toggle (e.g. "this is Q2 continued") — available both on the thumbnail and inside the lightbox, so pages can be merged while paging through the zoomed images without leaving fullscreen.
 - When a page is marked as a continuation, **all subsequent pages auto-renumber** (Q4 → Q3, Q5 → Q4, etc.).
 - Visual cue (e.g. left bracket grouping) for which pages belong to the same question.
 
