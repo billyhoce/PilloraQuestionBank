@@ -8,6 +8,13 @@
 - **Type:** SPA (single-page app)
 - **Styling:** developer's choice — pick once and stick to it (Tailwind, CSS Modules, or vanilla CSS all fine at this scale)
 
+## Testing
+
+- **Runner:** [Vitest](https://vitest.dev/) with `jsdom` + React Testing Library (`@testing-library/react`, `@testing-library/jest-dom`).
+- **Run:** `cd frontend && npm test` (also runs in CI's `frontend-build` job).
+- **Location:** tests are colocated with the code they cover as `*.test.js` / `*.test.jsx`; shared setup lives in `src/test/setup.js` (registers jest-dom matchers), configured via the `test` block in `vite.config.js`.
+- **Convention:** import test APIs explicitly (`import { describe, it, expect, vi } from 'vitest'`) — vitest globals are not enabled.
+
 ## Routes / Pages
 
 | Path | Page | Access |
