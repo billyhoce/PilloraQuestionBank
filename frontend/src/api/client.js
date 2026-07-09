@@ -137,6 +137,13 @@ export const api = {
     list: (topic_id) => request('GET', `/api/subtopics?topic_id=${topic_id}`).then(r => r.data),
   },
 
+  tags: {
+    list: () => request('GET', '/api/tags').then(r => r.data),
+    create: (name) => request('POST', '/api/tags', { name }),
+    update: (id, name) => request('PUT', `/api/tags/${id}`, { name }),
+    delete: (id) => request('DELETE', `/api/tags/${id}`),
+  },
+
   questions: {
     list: (filters = {}, signal) => {
       const params = new URLSearchParams()
@@ -153,6 +160,7 @@ export const api = {
       append('search', filters.search)
       if (filters.exclusive) params.append('exclusive', 'true')
       for (const id of filters.topic_ids || []) params.append('topic_ids', id)
+      for (const id of filters.tag_ids || []) params.append('tag_ids', id)
       append('page', filters.page ?? 1)
       append('page_size', filters.page_size ?? 50)
       const qs = params.toString()
@@ -216,6 +224,7 @@ export const api = {
     addQuestion: (paperId, payload) => request('POST', `/api/papers/${paperId}/questions`, payload),
     updateQuestion: (questionId, payload) => request('PUT', `/api/questions/${questionId}`, payload),
     deleteQuestion: (questionId) => request('DELETE', `/api/questions/${questionId}`),
+    setQuestionTags: (questionId, tag_ids) => request('PUT', `/api/questions/${questionId}/tags`, { tag_ids }),
     uploadImage: (file) => {
       const form = new FormData()
       form.append('file', file)

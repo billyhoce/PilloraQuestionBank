@@ -5,7 +5,7 @@ import StreamsTab from '../../features/reference/tabs/StreamsTab'
 import LevelsTab from '../../features/reference/tabs/LevelsTab'
 import TopicsTab from '../../features/reference/tabs/TopicsTab'
 
-const TAB_KEYS = ['school-levels', 'subjects', 'schools', 'exam-types', 'streams', 'levels', 'topics']
+const TAB_KEYS = ['school-levels', 'subjects', 'schools', 'exam-types', 'streams', 'levels', 'topics', 'tags']
 const TAB_LABELS = {
   'school-levels': 'School Levels',
   'subjects': 'Subjects',
@@ -14,6 +14,7 @@ const TAB_LABELS = {
   'streams': 'Streams',
   'levels': 'Levels',
   'topics': 'Topics & Subtopics',
+  'tags': 'Tags',
 }
 
 export default function ReferencePage() {
@@ -25,6 +26,7 @@ export default function ReferencePage() {
   const [examTypes, setExamTypes] = useState([])
   const [streams, setStreams] = useState([])
   const [levels, setLevels] = useState([])
+  const [tags, setTags] = useState([])
   const [pageLoading, setPageLoading] = useState(true)
 
   useEffect(() => {
@@ -35,13 +37,15 @@ export default function ReferencePage() {
       api.examTypes.list(),
       api.streams.list(),
       api.levels.list(),
-    ]).then(([sl, sub, sch, et, str, lev]) => {
+      api.tags.list(),
+    ]).then(([sl, sub, sch, et, str, lev, tg]) => {
       setSchoolLevels(sl)
       setSubjects(sub)
       setSchools(sch)
       setExamTypes(et)
       setStreams(str)
       setLevels(lev)
+      setTags(tg)
     }).finally(() => setPageLoading(false))
   }, [])
 
@@ -53,6 +57,7 @@ export default function ReferencePage() {
       'exam-types': () => api.examTypes.list().then(setExamTypes),
       'streams': () => api.streams.list().then(setStreams),
       'levels': () => api.levels.list().then(setLevels),
+      'tags': () => api.tags.list().then(setTags),
     }
     await loaders[key]?.()
   }
@@ -148,6 +153,16 @@ export default function ReferencePage() {
         )}
         {activeTab === 'topics' && (
           <TopicsTab subjects={subjects} streams={streams} />
+        )}
+        {activeTab === 'tags' && (
+          <SimpleTab
+            label="Tag"
+            rows={tags}
+            loading={pageLoading}
+            onCreate={async (name) => { await api.tags.create(name); await refresh('tags') }}
+            onUpdate={async (id, name) => { await api.tags.update(id, name); await refresh('tags') }}
+            onDelete={async (id) => { await api.tags.delete(id); await refresh('tags') }}
+          />
         )}
       </div>
     </div>
