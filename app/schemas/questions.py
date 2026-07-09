@@ -20,12 +20,18 @@ class QuestionTopicInfo(BaseModel):
     subtopic_names: list[str]
 
 
+class QuestionTagInfo(BaseModel):
+    id: int
+    name: str
+
+
 class QuestionListItem(BaseModel):
     id: int
     question_number: int
     marks: Optional[int] = None
     paper_info: PaperInfoSchema
     topics: list[QuestionTopicInfo] = []
+    tags: list[QuestionTagInfo] = []
     first_page_url: Optional[str] = None
 
 
@@ -50,3 +56,4 @@ class QuestionDetailResponse(BaseModel):
     question_pages: list[QuestionPageSchema]
     answer_pages: list[QuestionPageSchema]
     topics: list[QuestionTopicInfo] = []
+    tags: list[QuestionTagInfo] = []

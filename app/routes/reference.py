@@ -15,6 +15,7 @@ from app.models.orm import (
     Stream,
     Subject,
     Subtopic,
+    Tag,
     Topic,
     User,
 )
@@ -31,6 +32,7 @@ from app.schemas.reference import (
     SubjectResponse,
     SubtopicRequest,
     SubtopicResponse,
+    TagResponse,
     TopicRequest,
     TopicResponse,
     TopicSyncRequest,
@@ -368,6 +370,64 @@ def delete_exam_type(exam_type_id: int, db: Session = Depends(get_db), _: User =
     if obj is None:
         _not_found("Exam type")
     _delete_with_fk_guard(db, obj, "exam type")
+
+
+# ---------------------------------------------------------------------------
+# Tags
+#
+# Tags are global, flat labels. Unlike other reference data, deleting a tag is
+# NOT blocked when it is in use: the FK cascade strips the tag from every
+# question that carried it (tags are lightweight labels), so delete uses a plain
+# db.delete rather than _delete_with_fk_guard.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tags")
+def list_tags(db: Session = Depends(get_db)):
+    return {"data": db.query(Tag).order_by(Tag.name).all()}
+
+
+@router.get("/tags/{tag_id}", response_model=TagResponse)
+def get_tag(tag_id: int, db: Session = Depends(get_db)):
+    obj = db.get(Tag, tag_id)
+    if obj is None:
+        _not_found("Tag")
+    return obj
+
+
+@router.post("/tags", response_model=TagResponse, status_code=201)
+def create_tag(payload: NameRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    obj = Tag(name=payload.name)
+    db.add(obj)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Tag already exists")
+    return obj
+
+
+@router.put("/tags/{tag_id}", response_model=TagResponse)
+def update_tag(tag_id: int, payload: NameRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    obj = db.get(Tag, tag_id)
+    if obj is None:
+        _not_found("Tag")
+    obj.name = payload.name
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Tag already exists")
+    return obj
+
+
+@router.delete("/tags/{tag_id}", status_code=204)
+def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    obj = db.get(Tag, tag_id)
+    if obj is None:
+        _not_found("Tag")
+    db.delete(obj)
+    db.flush()
 
 
 # ---------------------------------------------------------------------------

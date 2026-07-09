@@ -3,7 +3,14 @@ from datetime import datetime, UTC
 
 import pytest
 
-from app.models.orm import Paper, Question, QuestionPage, QuestionSubtopic, QuestionTopic
+from app.models.orm import (
+    Paper,
+    Question,
+    QuestionPage,
+    QuestionSubtopic,
+    QuestionTag,
+    QuestionTopic,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +185,82 @@ def test_list_questions_filter_by_topic_ids_inclusive_union(public_client, db_se
     assert q_a.id in ids
     assert q_b.id in ids
     assert q_none.id not in ids
+
+
+# ---------------------------------------------------------------------------
+# Tag filter / search / serialization
+# ---------------------------------------------------------------------------
+
+
+def test_list_questions_filter_by_tag_ids(public_client, db_session, reference_data, admin_user):
+    """tag_ids filter matches any question carrying one of the listed tags."""
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q_with_tag = _add_question(db_session, paper, number=1)
+    q_no_tag = _add_question(db_session, paper, number=2)
+
+    db_session.add(QuestionTag(question_id=q_with_tag.id, tag_id=reference_data["tag"].id))
+    db_session.flush()
+
+    resp = public_client.get(f"/api/questions?tag_ids={reference_data['tag'].id}")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_with_tag.id in ids
+    assert q_no_tag.id not in ids
+
+
+def test_list_questions_filter_by_tag_ids_union(public_client, db_session, reference_data, admin_user):
+    """Multiple tag_ids are OR-combined (inclusive)."""
+    from app.models.orm import Tag
+
+    rd = reference_data
+    paper = _add_paper(db_session, rd, admin_user)
+
+    tag_b = Tag(name="Graphing")
+    db_session.add(tag_b)
+    db_session.flush()
+
+    q_a = _add_question(db_session, paper, number=1)
+    q_b = _add_question(db_session, paper, number=2)
+    q_none = _add_question(db_session, paper, number=3)
+    db_session.add_all([
+        QuestionTag(question_id=q_a.id, tag_id=rd["tag"].id),
+        QuestionTag(question_id=q_b.id, tag_id=tag_b.id),
+    ])
+    db_session.flush()
+
+    resp = public_client.get(f"/api/questions?tag_ids={rd['tag'].id}&tag_ids={tag_b.id}")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_a.id in ids
+    assert q_b.id in ids
+    assert q_none.id not in ids
+
+
+def test_list_questions_search_matches_tag_name(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q_tagged = _add_question(db_session, paper, number=1)
+    q_plain = _add_question(db_session, paper, number=2)
+    db_session.add(QuestionTag(question_id=q_tagged.id, tag_id=reference_data["tag"].id))
+    db_session.flush()
+
+    # reference_data tag name is "Challenging"
+    resp = public_client.get("/api/questions?search=challeng")
+    assert resp.status_code == 200
+    ids = [q["id"] for q in resp.json()["items"]]
+    assert q_tagged.id in ids
+    assert q_plain.id not in ids
+
+
+def test_list_questions_includes_tags_in_response(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper, number=1)
+    db_session.add(QuestionTag(question_id=q.id, tag_id=reference_data["tag"].id))
+    db_session.flush()
+
+    resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    item = next(it for it in resp.json()["items"] if it["id"] == q.id)
+    assert [t["name"] for t in item["tags"]] == ["Challenging"]
 
 
 def test_list_questions_exclusive_topic_filter(public_client, db_session, reference_data, admin_user):

@@ -8,6 +8,7 @@ from app.routes.auth import get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
     _SUBTOPICS_EAGER,
+    _TAG_EAGER,
     _TOPIC_EAGER,
     _apply_filters,
     serialize_list_item,
@@ -50,13 +51,14 @@ def select_questions(
         f.exam_type_id,
         f.topic_ids,
         f.exclusive,
+        f.tag_ids,
         f.search,
     )
     if payload.exclude_question_ids:
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))
 
     candidates = (
-        query.options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER)
+        query.options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
         .order_by(Question.id)
         .all()
     )

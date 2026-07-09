@@ -92,6 +92,12 @@ class Subtopic(Base):
     topic: Mapped[Topic] = relationship(back_populates="subtopics")
 
 
+class Tag(Base):
+    __tablename__ = "tag"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+
+
 class User(Base):
     __tablename__ = "app_user"
     __table_args__ = (CheckConstraint("role IN ('admin', 'public')", name="ck_user_role"),)
@@ -145,6 +151,7 @@ class Question(Base):
     pages: Mapped[list["QuestionPage"]] = relationship(back_populates="question", cascade="all, delete-orphan")
     topics: Mapped[list["QuestionTopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
     question_subtopics: Mapped[list["QuestionSubtopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
+    tags: Mapped[list["QuestionTag"]] = relationship(back_populates="question", cascade="all, delete-orphan")
 
 
 class QuestionPage(Base):
@@ -204,3 +211,17 @@ class QuestionSubtopic(Base):
 
     question: Mapped["Question"] = relationship(back_populates="question_subtopics")
     subtopic: Mapped["Subtopic"] = relationship()
+
+
+class QuestionTag(Base):
+    __tablename__ = "question_tag"
+
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("tag.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    question: Mapped["Question"] = relationship(back_populates="tags")
+    tag: Mapped["Tag"] = relationship()
