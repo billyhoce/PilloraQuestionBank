@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__github__merge_pull_request",
+      "mcp__github__enable_pr_auto_merge",
+      "mcp__github__push_files",
+      "mcp__github__create_or_update_file",
+      "mcp__github__delete_file",
+      "Bash(gh pr merge*)",
+      "Bash(git push origin main*)",
+      "Bash(git push -u origin main*)",
+      "Bash(git push --force origin main*)",
+      "Bash(git push -f origin main*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); deny() { printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$1\"; }; if printf '%s' \"$cmd\" | grep -qE 'git[[:space:]]+push[^;&|]*[^A-Za-z0-9_./-]main([^A-Za-z0-9_./-]|$)'; then deny 'Pushing to main is reserved for the repository owner. Push to a feature branch and open a PR.'; elif printf '%s' \"$cmd\" | grep -qE 'gh[[:space:]][^;&|]*pr[[:space:]]+merge'; then deny 'Merging PRs is reserved for the repository owner.'; elif printf '%s' \"$cmd\" | grep -qE 'git[[:space:]]+push' && [ \"$(git branch --show-current 2>/dev/null)\" = 'main' ]; then deny 'Pushing while checked out on main is reserved for the repository owner.'; fi",
+            "statusMessage": "Checking push/merge policy"
+          }
+        ]
+      }
+    ]
+  }
+}

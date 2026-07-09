@@ -1,4 +1,7 @@
-.claude
+# Claude Code: commit shared .claude/settings.json (team guardrails),
+# ignore everything else in .claude/ (personal/local state)
+.claude/*
+!.claude/settings.json
 
 .env
 .vscode/
