@@ -43,3 +43,20 @@ describe('QuestionCard topic chips', () => {
     expect(screen.getAllByText('T1 Algebra')).toHaveLength(1)
   })
 })
+
+describe('QuestionCard tag chips', () => {
+  it('renders tag chips from item.tags', () => {
+    const item = {
+      ...baseItem,
+      tags: [{ id: 1, name: 'Challenging' }, { id: 2, name: 'Graphing' }],
+    }
+    render(<QuestionCard item={item} onClick={() => {}} />)
+    expect(screen.getByText('Challenging')).toBeInTheDocument()
+    expect(screen.getByText('Graphing')).toBeInTheDocument()
+  })
+
+  it('renders no tag chips when tags are absent', () => {
+    render(<QuestionCard item={baseItem} onClick={() => {}} />)
+    expect(screen.queryByText('Challenging')).not.toBeInTheDocument()
+  })
+})

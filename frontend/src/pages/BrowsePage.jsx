@@ -22,6 +22,7 @@ function filtersFromParams(params) {
     year: params.get('year') || '',
     topic_ids: params.getAll('topic_ids').map(v => Number(v)).filter(n => Number.isFinite(n)),
     exclusive: params.get('exclusive') === '1',
+    tag_ids: params.getAll('tag_ids').map(v => Number(v)).filter(n => Number.isFinite(n)),
     search: params.get('kw') || '',
   }
 }
@@ -33,6 +34,7 @@ function paramsFromFilters(filters) {
   }
   for (const id of filters.topic_ids || []) p.append('topic_ids', id)
   if (filters.exclusive && (filters.topic_ids || []).length > 0) p.set('exclusive', '1')
+  for (const id of filters.tag_ids || []) p.append('tag_ids', id)
   if (filters.search) p.set('kw', filters.search)
   return p
 }
@@ -81,6 +83,7 @@ export default function BrowsePage() {
         year: filters.year || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
+        tag_ids: filters.tag_ids,
         search: filters.search || undefined,
         page: 1,
         page_size: PAGE_SIZE,
@@ -117,6 +120,7 @@ export default function BrowsePage() {
         year: filters.year || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
+        tag_ids: filters.tag_ids,
         search: filters.search || undefined,
         page: nextPage,
         page_size: PAGE_SIZE,
@@ -134,6 +138,10 @@ export default function BrowsePage() {
       setLoadingMore(false)
     }
   }
+
+  const handleTagsChanged = useCallback((questionId, nextTags) => {
+    setItems(prev => prev.map(it => (it.id === questionId ? { ...it, tags: nextTags } : it)))
+  }, [])
 
   const hasMore = items.length < total
 
@@ -197,7 +205,11 @@ export default function BrowsePage() {
       </main>
 
       {selectedItem ? (
-        <QuestionDetailModal item={selectedItem} onClose={() => setSelectedItem(null)} />
+        <QuestionDetailModal
+          item={selectedItem}
+          onClose={() => setSelectedItem(null)}
+          onTagsChanged={handleTagsChanged}
+        />
       ) : null}
     </div>
   )

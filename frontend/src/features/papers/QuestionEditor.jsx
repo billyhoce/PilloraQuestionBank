@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import TopicCombobox from '../import/TopicCombobox'
+import TagCombobox from '../../components/TagCombobox'
 import PageImageEditor, { existingPageDraft } from './PageImageEditor'
 import { selectionsToAssignments } from '../import/topicUtils'
 import { formatTopic } from '../../utils/topicFormat'
@@ -15,13 +16,14 @@ function seedPages(question, type) {
 }
 
 function QuestionEditor({
-  paperId, question, isNew = false, topics, lookup, usedNumbers = [], onSaved, onCancelNew, onDeleted, onExpand,
+  paperId, question, isNew = false, topics, tags = [], lookup, usedNumbers = [], onSaved, onCancelNew, onDeleted, onExpand,
 }, ref) {
   const [questionNumber, setQuestionNumber] = useState(String(question.question_number ?? ''))
   const [marks, setMarks] = useState(question.marks != null ? String(question.marks) : '')
   const [qPages, setQPages] = useState(() => (isNew ? [] : seedPages(question, 'question')))
   const [aPages, setAPages] = useState(() => (isNew ? [] : seedPages(question, 'answer')))
   const [selected, setSelected] = useState(() => question.selections || [])
+  const [selectedTags, setSelectedTags] = useState(() => question.tags || [])
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -41,6 +43,13 @@ function QuestionEditor({
     setSelected((prev) => prev.filter((_, i) => i !== idx))
   }
 
+  function addTag(tag) {
+    setSelectedTags((prev) => (prev.some((t) => t.id === tag.id) ? prev : [...prev, tag]))
+  }
+  function removeTag(id) {
+    setSelectedTags((prev) => prev.filter((t) => t.id !== id))
+  }
+
   function buildPayload() {
     const ordered = [...qPages, ...aPages].map((p, idx) => ({
       id: p.id,
@@ -54,6 +63,7 @@ function QuestionEditor({
       question_number: Number(questionNumber),
       marks: marks === '' ? null : Number(marks),
       topic_assignments: selectionsToAssignments(selected),
+      tag_ids: selectedTags.map((t) => t.id),
       pages: ordered,
     }
   }
@@ -215,6 +225,36 @@ function QuestionEditor({
             <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Add topic</p>
             <TopicCombobox topics={topics || []} selected={selected} onAdd={addTopic} />
             {aiError && <p className="text-xs text-red-600 mt-1">{aiError}</p>}
+          </div>
+
+          <div>
+            <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Tags</p>
+            {selectedTags.length === 0 && (
+              <p className="text-sm text-gray-400 italic">No tags</p>
+            )}
+            {selectedTags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {selectedTags.map((t) => (
+                  <span
+                    key={t.id}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 border border-amber-300 text-amber-800 rounded-full bg-amber-50"
+                  >
+                    {t.name}
+                    <button
+                      type="button"
+                      onClick={() => removeTag(t.id)}
+                      className="text-amber-500 hover:text-red-600"
+                      aria-label={`Remove ${t.name}`}
+                    >×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <TagCombobox
+              tags={tags || []}
+              selectedIds={selectedTags.map((t) => t.id)}
+              onAdd={addTag}
+            />
           </div>
         </div>
       </div>
