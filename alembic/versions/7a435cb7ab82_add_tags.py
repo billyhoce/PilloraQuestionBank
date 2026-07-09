@@ -35,8 +35,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['tag_id'], ['tag.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('question_id', 'tag_id'),
     )
+    op.create_index('ix_question_tag_tag_id', 'question_tag', ['tag_id'], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index('ix_question_tag_tag_id', table_name='question_tag')
     op.drop_table('question_tag')
     op.drop_table('tag')
