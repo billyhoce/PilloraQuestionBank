@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
+import { useAuth } from '../../context/AuthContext'
 import Spinner from '../Spinner'
 import ErrorBanner from '../ErrorBanner'
+import TagCombobox from '../TagCombobox'
 
-export default function QuestionDetailModal({ item, onClose }) {
+export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  const [questionTags, setQuestionTags] = useState([])
+  const [allTags, setAllTags] = useState([])
+  const [tagError, setTagError] = useState(null)
+  const [savingTags, setSavingTags] = useState(false)
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose() }
@@ -19,11 +29,42 @@ export default function QuestionDetailModal({ item, onClose }) {
     setLoading(true)
     setError(null)
     api.questions.get(item.id)
-      .then(data => { if (!cancelled) setDetail(data) })
+      .then(data => { if (!cancelled) { setDetail(data); setQuestionTags(data.tags || []) } })
       .catch(e => { if (!cancelled) setError(e.message || 'Failed to load question') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [item.id])
+
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    api.tags.list().then(data => { if (!cancelled) setAllTags(data || []) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [isAdmin])
+
+  async function persistTags(nextTags) {
+    const prev = questionTags
+    setQuestionTags(nextTags)  // optimistic
+    setSavingTags(true)
+    setTagError(null)
+    try {
+      await api.papers.setQuestionTags(item.id, nextTags.map(t => t.id))
+      onTagsChanged?.(item.id, nextTags)
+    } catch (e) {
+      setQuestionTags(prev)  // revert
+      setTagError(e.message || 'Failed to update tags')
+    } finally {
+      setSavingTags(false)
+    }
+  }
+
+  function addTag(tag) {
+    if (questionTags.some(t => t.id === tag.id)) return
+    persistTags([...questionTags, tag])
+  }
+  function removeTag(id) {
+    persistTags(questionTags.filter(t => t.id !== id))
+  }
 
   const { paper_info, question_number } = item
   const title = `${paper_info.school_name} ${paper_info.year} ${paper_info.exam_type_name} ${paper_info.paper_number} · Q${question_number}`
@@ -64,6 +105,41 @@ export default function QuestionDetailModal({ item, onClose }) {
             <ErrorBanner message={error} />
           ) : detail ? (
             <div className="space-y-6">
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Tags</h3>
+                {questionTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {questionTags.map(t => (
+                      <span
+                        key={t.id}
+                        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 border border-amber-300 text-amber-800 rounded-full bg-amber-50"
+                      >
+                        {t.name}
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => removeTag(t.id)}
+                            disabled={savingTags}
+                            className="text-amber-500 hover:text-red-600 disabled:opacity-50"
+                            aria-label={`Remove ${t.name}`}
+                          >×</button>
+                        ) : null}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic mb-2">No tags</p>
+                )}
+                {isAdmin ? (
+                  <TagCombobox
+                    tags={allTags}
+                    selectedIds={questionTags.map(t => t.id)}
+                    onAdd={addTag}
+                  />
+                ) : null}
+                {tagError ? <p className="text-xs text-red-600 mt-1">{tagError}</p> : null}
+              </section>
+
               <section>
                 {detail.marks != null ? (
                   <div className="text-sm text-gray-600 mb-2">Marks: {detail.marks}</div>

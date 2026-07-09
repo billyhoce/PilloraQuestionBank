@@ -12,11 +12,13 @@ from app.models.orm import (
     Question,
     QuestionPage,
     QuestionSubtopic,
+    QuestionTag,
     QuestionTopic,
     School,
     Stream,
     Subject,
     Subtopic,
+    Tag,
     Topic,
 )
 from app.schemas.questions import QuestionDetailResponse, QuestionListResponse
@@ -35,6 +37,7 @@ def _apply_filters(
     exam_type_id,
     topic_ids,
     exclusive,
+    tag_ids,
     search,
 ):
     if subject_id is not None:
@@ -59,6 +62,11 @@ def _apply_filters(
                 ~Question.topics.any(QuestionTopic.topic_id.notin_(topic_ids))
             )
 
+    if tag_ids:
+        q = q.filter(
+            Question.tags.any(QuestionTag.tag_id.in_(tag_ids))
+        )
+
     if search:
         kw = search.strip()
         if kw:
@@ -69,6 +77,9 @@ def _apply_filters(
                 ),
                 Question.question_subtopics.any(
                     QuestionSubtopic.subtopic.has(Subtopic.name.ilike(pattern))
+                ),
+                Question.tags.any(
+                    QuestionTag.tag.has(Tag.name.ilike(pattern))
                 ),
                 Paper.school.has(School.name.ilike(pattern)),
                 Paper.subject.has(Subject.name.ilike(pattern)),
@@ -125,6 +136,13 @@ def _topic_infos(question: Question) -> list[dict]:
     ]
 
 
+def _tag_infos(question: Question) -> list[dict]:
+    return [
+        {"id": qt.tag.id, "name": qt.tag.name}
+        for qt in question.tags
+    ]
+
+
 def serialize_list_item(q: Question) -> dict:
     """Build a QuestionListItem dict for a question (with eager-loaded relations)."""
     return {
@@ -133,6 +151,7 @@ def serialize_list_item(q: Question) -> dict:
         "marks": q.marks,
         "paper_info": _paper_info(q.paper),
         "topics": _topic_infos(q),
+        "tags": _tag_infos(q),
         "first_page_url": _first_page_url(q),
     }
 
@@ -150,6 +169,9 @@ _TOPIC_EAGER = selectinload(Question.topics).options(
 _SUBTOPICS_EAGER = selectinload(Question.question_subtopics).options(
     joinedload(QuestionSubtopic.subtopic),
 )
+_TAG_EAGER = selectinload(Question.tags).options(
+    joinedload(QuestionTag.tag),
+)
 
 
 @router.get("/questions", response_model=QuestionListResponse)
@@ -162,6 +184,7 @@ def list_questions(
     exam_type_id: Optional[int] = None,
     topic_ids: List[int] = Query(default=[]),
     exclusive: bool = False,
+    tag_ids: List[int] = Query(default=[]),
     search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
@@ -176,6 +199,7 @@ def list_questions(
         exam_type_id,
         topic_ids,
         exclusive,
+        tag_ids,
         search,
     )
 
@@ -184,7 +208,7 @@ def list_questions(
 
     questions = (
         _apply_filters(base, *filter_args)
-        .options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER)
+        .options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
         .order_by(Question.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -204,7 +228,7 @@ def get_question(
     question = (
         db.query(Question)
         .filter(Question.id == question_id)
-        .options(selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER)
+        .options(selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
         .one_or_none()
     )
     if question is None:
@@ -228,4 +252,5 @@ def get_question(
         "question_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "question"],
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
         "topics": _topic_infos(question),
+        "tags": _tag_infos(question),
     }

@@ -29,6 +29,7 @@ export default function PaperEditor() {
   const [metadata, setMetadata] = useState(null)
   const [questions, setQuestions] = useState([])
   const [topics, setTopics] = useState([])
+  const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
 
@@ -55,6 +56,10 @@ export default function PaperEditor() {
 
   const loadTopics = useCallback((subjectId, streamId) => {
     return api.topics.list(subjectId, streamId).then(setTopics).catch(() => setTopics([]))
+  }, [])
+
+  useEffect(() => {
+    api.tags.list().then(setTags).catch(() => setTags([]))
   }, [])
 
   useEffect(() => {
@@ -128,7 +133,7 @@ export default function PaperEditor() {
     const maxNum = questions.reduce((m, q) => Math.max(m, q.question_number), 0)
     setNewDrafts((prev) => [
       ...prev,
-      { tempId: `d-${Date.now()}-${prev.length}`, question_number: maxNum + 1 + prev.length, marks: null, pages: [], topics: [] },
+      { tempId: `d-${Date.now()}-${prev.length}`, question_number: maxNum + 1 + prev.length, marks: null, pages: [], topics: [], tags: [] },
     ])
   }
 
@@ -249,6 +254,7 @@ export default function PaperEditor() {
                     paperId={id}
                     question={seedQuestion}
                     topics={topics}
+                    tags={tags}
                     lookup={lookup}
                     usedNumbers={questions.filter((o) => o.id !== q.id).map((o) => o.question_number)}
                     onSaved={handleQuestionSaved}
@@ -267,6 +273,7 @@ export default function PaperEditor() {
                   isNew
                   question={d}
                   topics={topics}
+                  tags={tags}
                   lookup={lookup}
                   usedNumbers={allNumbers}
                   onSaved={(serialized) => handleDraftSaved(d.tempId, serialized)}

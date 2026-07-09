@@ -15,13 +15,15 @@ from app.models.orm import (
     Question,
     QuestionPage,
     QuestionSubtopic,
+    QuestionTag,
     QuestionTopic,
     Subtopic,
+    Tag,
     Topic,
 )
 from app.routes.auth import require_admin
 from app.routes.ingest import SubtopicSuggestion, TopicAssignment
-from app.routes.questions import _paper_info, _topic_infos
+from app.routes.questions import _paper_info, _tag_infos, _topic_infos
 from app.services.ingest import delete_paper
 from app.services.paper_admin import (
     apply_page_changes,
@@ -65,7 +67,12 @@ class QuestionIn(BaseModel):
     question_number: int
     marks: Optional[int] = None
     topic_assignments: List[TopicAssignment] = []
+    tag_ids: List[int] = []
     pages: List[PageIn]
+
+
+class TagsIn(BaseModel):
+    tag_ids: List[int] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -84,6 +91,7 @@ _QUESTION_EAGER = (
     selectinload(Question.pages),
     selectinload(Question.topics).joinedload(QuestionTopic.topic),
     selectinload(Question.question_subtopics).joinedload(QuestionSubtopic.subtopic),
+    selectinload(Question.tags).joinedload(QuestionTag.tag),
 )
 
 
@@ -121,6 +129,7 @@ def _serialize_question(q: Question) -> dict:
             for p in pages
         ],
         "selections": _topic_selections(q),
+        "tags": _tag_infos(q),
     }
 
 
@@ -216,6 +225,26 @@ def _set_topics(
                 subtopic_id=s.subtopic_id,
                 topic_id=assignment.topic_id,
             ))
+
+
+def _set_tags(db: Session, question_id: int, tag_ids: List[int]) -> None:
+    """Replace a question's tags with the given ids (deduped). Validates that
+    every id refers to an existing tag before writing anything."""
+    unique_ids = list(dict.fromkeys(tag_ids))
+
+    valid_ids = {
+        tid for (tid,) in db.query(Tag.id).filter(Tag.id.in_(unique_ids)).all()
+    } if unique_ids else set()
+    for tid in unique_ids:
+        if tid not in valid_ids:
+            raise HTTPException(status_code=422, detail=f"Invalid tag_id {tid}")
+
+    db.query(QuestionTag).filter(
+        QuestionTag.question_id == question_id
+    ).delete(synchronize_session=False)
+
+    for tid in unique_ids:
+        db.add(QuestionTag(question_id=question_id, tag_id=tid))
 
 
 # --------------------------------------------------------------------------- #
@@ -380,6 +409,7 @@ def add_question_route(
         db,
     )
     _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
+    _set_tags(db, question.id, payload.tag_ids)
     db.flush()
     commit_with_page_moves(db, new_pairs)
     return _serialize_question(_reload_question(question.id, db))
@@ -414,10 +444,40 @@ def update_question_route(
         paper.id, question, [p.model_dump() for p in payload.pages], db
     )
     _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
+    _set_tags(db, question.id, payload.tag_ids)
     db.flush()
     commit_with_page_moves(db, new_pairs, removed_keys)
 
     return _serialize_question(_reload_question(question.id, db))
+
+
+@router.put("/questions/{question_id}/tags")
+def set_question_tags_route(
+    question_id: int,
+    payload: TagsIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Replace a question's tags without touching its pages/topics. Used for
+    quick tagging from the browse page. Returns the question's tags."""
+    question = db.get(Question, question_id)
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    _set_tags(db, question_id, payload.tag_ids)
+    db.flush()
+    db.commit()
+
+    tags = (
+        db.query(QuestionTag)
+        .options(joinedload(QuestionTag.tag))
+        .filter(QuestionTag.question_id == question_id)
+        .all()
+    )
+    return {
+        "id": question_id,
+        "tags": [{"id": qt.tag.id, "name": qt.tag.name} for qt in tags],
+    }
 
 
 @router.delete("/questions/{question_id}", status_code=204)

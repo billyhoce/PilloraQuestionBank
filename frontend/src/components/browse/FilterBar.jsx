@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client'
 import TopicMultiSelect from './TopicMultiSelect'
+import TagCombobox from '../TagCombobox'
 
 function Chip({ active, disabled, onClick, children }) {
   return (
@@ -36,6 +37,7 @@ export default function FilterBar({ filters, onFilterChange }) {
   const [examTypes, setExamTypes] = useState([])
   const [schoolLevels, setSchoolLevels] = useState([])
   const [topics, setTopics] = useState([])
+  const [tags, setTags] = useState([])
   const [years, setYears] = useState([])
   const [kwInput, setKwInput] = useState(filters.search || '')
 
@@ -47,13 +49,15 @@ export default function FilterBar({ filters, onFilterChange }) {
       api.schools.list(),
       api.examTypes.list(),
       api.schoolLevels.list(),
-    ]).then(([lv, st, su, sc, et, sl]) => {
+      api.tags.list(),
+    ]).then(([lv, st, su, sc, et, sl, tg]) => {
       setLevels(lv || [])
       setStreams(st || [])
       setSubjects(su || [])
       setSchools(sc || [])
       setExamTypes(et || [])
       setSchoolLevels(sl || [])
+      setTags(tg || [])
     }).catch(() => {})
   }, [])
 
@@ -132,6 +136,17 @@ export default function FilterBar({ filters, onFilterChange }) {
     ? streams.filter(s => s.school_level_id === selectedLevel.school_level_id)
     : streams
 
+  const selectedTagIds = filters.tag_ids || []
+  const selectedTags = tags.filter(t => selectedTagIds.includes(t.id))
+
+  function addTag(tag) {
+    if (selectedTagIds.includes(tag.id)) return
+    onFilterChange({ tag_ids: [...selectedTagIds, tag.id] })
+  }
+  function removeTag(id) {
+    onFilterChange({ tag_ids: selectedTagIds.filter(t => t !== id) })
+  }
+
   return (
     <div className="bg-gray-50 border-2 border-gray-300 rounded-lg p-4 space-y-1">
       <Row label="Level">
@@ -186,7 +201,7 @@ export default function FilterBar({ filters, onFilterChange }) {
             value={kwInput}
             onChange={e => setKwInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submitKw() }}
-            placeholder="Search topic, subtopic, school, subject, level, exam type or year"
+            placeholder="Search topic, subtopic, tag, school, subject, level, exam type or year"
             className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
@@ -223,6 +238,39 @@ export default function FilterBar({ filters, onFilterChange }) {
         ) : (
           <div className="text-sm text-gray-500 italic pt-1">Select a Stream and Subject to filter by topic.</div>
         )}
+      </Row>
+
+      <Row label="Tags">
+        <div className="flex flex-col gap-2">
+          {selectedTags.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {selectedTags.map(t => (
+                <span
+                  key={t.id}
+                  className="inline-flex items-center gap-1 text-sm px-2.5 py-0.5 border border-amber-300 text-amber-800 rounded-full bg-amber-50"
+                >
+                  {t.name}
+                  <button
+                    type="button"
+                    onClick={() => removeTag(t.id)}
+                    className="text-amber-500 hover:text-red-600"
+                    aria-label={`Remove ${t.name}`}
+                  >×</button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {tags.length > 0 ? (
+            <TagCombobox
+              tags={tags}
+              selectedIds={selectedTagIds}
+              onAdd={addTag}
+              placeholder="Filter by tag…"
+            />
+          ) : (
+            <div className="text-sm text-gray-500 italic pt-1">No tags defined yet.</div>
+          )}
+        </div>
       </Row>
 
       <Row label="More">

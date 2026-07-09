@@ -16,6 +16,7 @@ class GenerateFilters(BaseModel):
     exam_type_id: Optional[int] = None
     topic_ids: list[int] = []
     exclusive: bool = False
+    tag_ids: list[int] = []
     search: Optional[str] = None
 
 

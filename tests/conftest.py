@@ -36,6 +36,7 @@ from app.models.orm import (
     Stream,
     Subject,
     Subtopic,
+    Tag,
     Topic,
     User,
 )
@@ -226,6 +227,10 @@ def reference_data(db_session):
     db_session.add(subtopic)
     db_session.flush()
 
+    tag = Tag(name="Challenging")
+    db_session.add(tag)
+    db_session.flush()
+
     return {
         "school_level": school_level,
         "subject": subject,
@@ -235,6 +240,7 @@ def reference_data(db_session):
         "exam_type": exam_type,
         "topic": topic,
         "subtopic": subtopic,
+        "tag": tag,
     }
 
 

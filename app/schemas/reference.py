@@ -59,6 +59,12 @@ class ExamTypeResponse(BaseModel):
     model_config = _orm
 
 
+class TagResponse(BaseModel):
+    id: int
+    name: str
+    model_config = _orm
+
+
 class TopicRequest(BaseModel):
     subject_id: int
     stream_id: int

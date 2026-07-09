@@ -4,7 +4,7 @@ import io
 
 from PIL import Image
 
-from app.models.orm import Paper, Question, QuestionTopic, Stream
+from app.models.orm import Paper, Question, QuestionTag, QuestionTopic, Stream
 
 
 def _webp(width=2480, height=400):
@@ -325,3 +325,111 @@ def test_delete_paper(admin_client, sample_paper, mock_s3, db_session):
 def test_question_endpoints_require_admin(public_client, sample_paper):
     assert public_client.delete(f"/api/papers/{sample_paper.id}").status_code == 403
     assert public_client.get("/api/papers").status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# Tagging questions
+# --------------------------------------------------------------------------- #
+
+def test_add_question_with_tags(admin_client, sample_paper, reference_data, mock_s3):
+    up = _upload_image(admin_client)
+    payload = {
+        "question_number": 4,
+        "marks": 7,
+        "topic_assignments": [],
+        "tag_ids": [reference_data["tag"].id],
+        "pages": [{
+            "temp_key": up["temp_key"],
+            "page_type": "question",
+            "page_order": 1,
+            "width_px": up["dimensions"]["width"],
+            "height_px": up["dimensions"]["height"],
+        }],
+    }
+    resp = admin_client.post(f"/api/papers/{sample_paper.id}/questions", json=payload)
+    assert resp.status_code == 201, resp.text
+    q = resp.json()
+    assert [t["name"] for t in q["tags"]] == ["Challenging"]
+
+
+def test_update_question_replaces_tags(admin_client, sample_paper, reference_data, mock_s3, db_session):
+    from app.models.orm import Tag
+
+    tag2 = Tag(name="Graphing")
+    db_session.add(tag2)
+    db_session.flush()
+
+    detail = _get_detail(admin_client, sample_paper.id)
+    q1 = next(q for q in detail["questions"] if q["question_number"] == 1)
+    existing_page = q1["pages"][0]
+
+    def _payload(tag_ids):
+        return {
+            "question_number": 1,
+            "marks": 5,
+            "topic_assignments": [],
+            "tag_ids": tag_ids,
+            "pages": [{
+                "id": existing_page["id"],
+                "page_type": existing_page["page_type"],
+                "page_order": 1,
+            }],
+        }
+
+    resp = admin_client.put(f"/api/questions/{q1['id']}", json=_payload([reference_data["tag"].id]))
+    assert resp.status_code == 200, resp.text
+    assert {t["name"] for t in resp.json()["tags"]} == {"Challenging"}
+
+    # Replace with a different tag — the old one is dropped.
+    resp = admin_client.put(f"/api/questions/{q1['id']}", json=_payload([tag2.id]))
+    assert resp.status_code == 200, resp.text
+    assert {t["name"] for t in resp.json()["tags"]} == {"Graphing"}
+
+
+def test_add_question_invalid_tag_id_returns_422(admin_client, sample_paper, mock_s3):
+    payload = {
+        "question_number": 4,
+        "marks": 1,
+        "topic_assignments": [],
+        "tag_ids": [99999],
+        "pages": [],
+    }
+    resp = admin_client.post(f"/api/papers/{sample_paper.id}/questions", json=payload)
+    assert resp.status_code == 422
+
+
+def test_set_question_tags_endpoint(admin_client, sample_paper, reference_data, mock_s3, db_session):
+    q1 = next(q for q in sample_paper.questions if q.question_number == 1)
+    resp = admin_client.put(
+        f"/api/questions/{q1.id}/tags", json={"tag_ids": [reference_data["tag"].id]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert {t["name"] for t in resp.json()["tags"]} == {"Challenging"}
+    db_session.expire_all()
+    assert db_session.query(QuestionTag).filter_by(question_id=q1.id).count() == 1
+
+    # Clearing tags.
+    resp = admin_client.put(f"/api/questions/{q1.id}/tags", json={"tag_ids": []})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tags"] == []
+
+
+def test_set_question_tags_requires_admin(public_client, sample_paper, reference_data):
+    q1 = next(q for q in sample_paper.questions if q.question_number == 1)
+    resp = public_client.put(
+        f"/api/questions/{q1.id}/tags", json={"tag_ids": [reference_data["tag"].id]}
+    )
+    assert resp.status_code == 403
+
+
+def test_set_question_tags_invalid_tag_returns_422(admin_client, sample_paper):
+    q1 = next(q for q in sample_paper.questions if q.question_number == 1)
+    resp = admin_client.put(f"/api/questions/{q1.id}/tags", json={"tag_ids": [99999]})
+    assert resp.status_code == 422
+
+
+def test_set_question_tags_missing_question_returns_404(admin_client, reference_data):
+    resp = admin_client.put(
+        "/api/questions/99999/tags", json={"tag_ids": [reference_data["tag"].id]}
+    )
+    assert resp.status_code == 404
