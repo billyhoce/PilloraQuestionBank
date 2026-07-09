@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-export default function Lightbox({ pages, currentIdx, onClose, onPrev, onNext }) {
+export default function Lightbox({ pages, currentIdx, onClose, onPrev, onNext, canMerge, onToggleMerge }) {
   useEffect(() => {
     if (currentIdx === null) return
     function onKey(e) {
@@ -13,6 +13,9 @@ export default function Lightbox({ pages, currentIdx, onClose, onPrev, onNext })
   }, [currentIdx, onClose, onPrev, onNext])
 
   if (currentIdx === null) return null
+
+  const page = pages[currentIdx]
+  const showMerge = Boolean(onToggleMerge && canMerge?.(currentIdx))
 
   return (
     <div
@@ -31,11 +34,27 @@ export default function Lightbox({ pages, currentIdx, onClose, onPrev, onNext })
         >
           ‹
         </button>
-        <img
-          src={pages[currentIdx]?.url}
-          alt={`Page ${currentIdx + 1}`}
-          className="max-h-[90vh] max-w-[75vw] object-contain rounded shadow-2xl"
-        />
+        <div className="flex flex-col items-center gap-3">
+          <img
+            src={page?.url}
+            alt={`Page ${currentIdx + 1}`}
+            className="max-h-[85vh] max-w-[75vw] object-contain rounded shadow-2xl"
+          />
+          {showMerge && (
+            <button
+              type="button"
+              title="Merge with previous"
+              onClick={() => onToggleMerge(currentIdx)}
+              className={`text-sm px-3 py-1.5 rounded border transition-colors ${
+                page?.mergeWithPrev
+                  ? 'bg-blue-100 text-blue-700 border-blue-300'
+                  : 'bg-white/10 text-white border-white/40 hover:bg-white/20'
+              }`}
+            >
+              Merge with prev
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={onNext}

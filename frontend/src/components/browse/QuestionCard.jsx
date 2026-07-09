@@ -1,7 +1,9 @@
+import { formatTopic } from '../../utils/topicFormat'
+
 export default function QuestionCard({ item, onClick, selectable = false, selected = false, onToggleSelect }) {
   const { paper_info, topics, first_page_url, question_number, marks } = item
-  const uniqueTopicNames = [...new Set((topics || []).map(t => t.topic_name))]
-  const subtopicNames = [...new Set((topics || []).map(t => t.subtopic_name))]
+  const uniqueTopics = [...new Map((topics || []).map(t => [t.topic_name, t])).values()]
+  const subtopicNames = [...new Set((topics || []).flatMap(t => t.subtopic_names || []))]
   const title = `${paper_info.school_name} ${paper_info.year} ${paper_info.exam_type_name} ${paper_info.paper_number} · Q${question_number}`
 
   const preview = (
@@ -21,14 +23,14 @@ export default function QuestionCard({ item, onClick, selectable = false, select
 
   const meta = (
     <>
-      {uniqueTopicNames.length > 0 ? (
+      {uniqueTopics.length > 0 ? (
         <div className="flex flex-wrap gap-1">
-          {uniqueTopicNames.map(name => (
+          {uniqueTopics.map(t => (
             <span
-              key={name}
+              key={t.topic_name}
               className="text-[10px] px-1.5 py-0.5 border border-blue-300 text-blue-700 rounded bg-blue-50"
             >
-              {name}
+              {formatTopic(t.topic_number, t.topic_name)}
             </span>
           ))}
         </div>

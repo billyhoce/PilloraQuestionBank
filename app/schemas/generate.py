@@ -16,7 +16,7 @@ class GenerateFilters(BaseModel):
     exam_type_id: Optional[int] = None
     topic_ids: list[int] = []
     exclusive: bool = False
-    subtopic_keyword: Optional[str] = None
+    search: Optional[str] = None
 
 
 class SelectRequest(BaseModel):

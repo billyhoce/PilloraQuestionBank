@@ -8,6 +8,21 @@
 - **Type:** SPA (single-page app)
 - **Styling:** developer's choice — pick once and stick to it (Tailwind, CSS Modules, or vanilla CSS all fine at this scale)
 
+## Testing
+
+- **Runner:** [Vitest](https://vitest.dev/) with `jsdom` + React Testing Library (`@testing-library/react`, `@testing-library/jest-dom`).
+- **Run:** `cd frontend && npm test` (also runs in CI's `frontend-build` job).
+- **Location:** tests are colocated with the code they cover as `*.test.js` / `*.test.jsx`; shared setup lives in `src/test/setup.js` (registers jest-dom matchers), configured via the `test` block in `vite.config.js`.
+- **Convention:** import test APIs explicitly (`import { describe, it, expect, vi } from 'vitest'`) — vitest globals are not enabled.
+
+## Page Layout Convention
+
+Content pages span ~90% of the viewport: the page-level wrapper uses `max-w-[90%] mx-auto` (Browse, Generate, admin Reference, Papers list/editor, import Topic Review). Exceptions: the import review grid is already full-width under the app shell, and the Login/Register auth cards stay narrow (`max-w-sm`).
+
+## Topic Display Convention
+
+Topics are always displayed with their topic number as a `T{n}` prefix, e.g. **"T1 Algebra"** — on Browse question cards, the topic filter chips, the AI topic-labelling review, the paper editor's topic labels, and the add-topic combobox. Use the shared helper `formatTopic(topicNumber, name)` in `src/utils/topicFormat.js` (falls back to the bare name when no number is available). The admin Topics tab shows the number in its own editable column instead.
+
 ## Routes / Pages
 
 | Path | Page | Access |
@@ -42,7 +57,7 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Render the assigned label on each thumbnail.
 
 ### Step 5 — Manual Adjust (Merge Pages into One Question)
-- Each page has a "merge with previous" toggle (e.g. "this is Q2 continued").
+- Each page has a "Merge with prev" toggle (e.g. "this is Q2 continued") — available both on the thumbnail and inside the lightbox, so pages can be merged while paging through the zoomed images without leaving fullscreen.
 - When a page is marked as a continuation, **all subsequent pages auto-renumber** (Q4 → Q3, Q5 → Q4, etc.).
 - Visual cue (e.g. left bracket grouping) for which pages belong to the same question.
 

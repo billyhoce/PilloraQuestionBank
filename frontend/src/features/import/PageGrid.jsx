@@ -69,6 +69,8 @@ export default function PageGrid({ pages, dividerIdx, onToggleMerge, onSetDivide
         onClose={() => setLightboxIdx(null)}
         onPrev={() => setLightboxIdx((idx) => Math.max(0, idx - 1))}
         onNext={() => setLightboxIdx((idx) => Math.min(pages.length - 1, idx + 1))}
+        canMerge={(i) => i > 0 && i !== dividerIdx}
+        onToggleMerge={onToggleMerge}
       />
     </>
   )

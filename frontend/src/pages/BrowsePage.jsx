@@ -22,7 +22,7 @@ function filtersFromParams(params) {
     year: params.get('year') || '',
     topic_ids: params.getAll('topic_ids').map(v => Number(v)).filter(n => Number.isFinite(n)),
     exclusive: params.get('exclusive') === '1',
-    subtopic_keyword: params.get('kw') || '',
+    search: params.get('kw') || '',
   }
 }
 
@@ -33,7 +33,7 @@ function paramsFromFilters(filters) {
   }
   for (const id of filters.topic_ids || []) p.append('topic_ids', id)
   if (filters.exclusive && (filters.topic_ids || []).length > 0) p.set('exclusive', '1')
-  if (filters.subtopic_keyword) p.set('kw', filters.subtopic_keyword)
+  if (filters.search) p.set('kw', filters.search)
   return p
 }
 
@@ -81,7 +81,7 @@ export default function BrowsePage() {
         year: filters.year || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
-        subtopic_keyword: filters.subtopic_keyword || undefined,
+        search: filters.search || undefined,
         page: 1,
         page_size: PAGE_SIZE,
       },
@@ -117,7 +117,7 @@ export default function BrowsePage() {
         year: filters.year || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
-        subtopic_keyword: filters.subtopic_keyword || undefined,
+        search: filters.search || undefined,
         page: nextPage,
         page_size: PAGE_SIZE,
       })
@@ -156,7 +156,7 @@ export default function BrowsePage() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
+      <main className="max-w-[90%] mx-auto px-6 py-6 space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />

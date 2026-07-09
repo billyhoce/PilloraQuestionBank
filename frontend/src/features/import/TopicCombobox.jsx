@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { formatTopic } from '../../utils/topicFormat'
 
 function flattenTopics(topics) {
   const out = []
@@ -11,6 +12,7 @@ function flattenTopics(topics) {
           topic_id: t.id,
           subtopic_id: s.id,
           topic_name: t.name,
+          topic_number: t.topic_number,
           subtopic_name: s.name,
         })
       }
@@ -20,6 +22,7 @@ function flattenTopics(topics) {
         topic_id: t.id,
         subtopic_id: null,
         topic_name: t.name,
+        topic_number: t.topic_number,
         subtopic_name: null,
       })
     }
@@ -106,7 +109,7 @@ export default function TopicCombobox({ topics, selected, onAdd, placeholder = '
               onMouseEnter={() => setActiveIdx(i)}
               className={`px-2 py-1 cursor-pointer ${i === activeIdx ? 'bg-blue-50' : ''}`}
             >
-              <span className="text-gray-900">{opt.topic_name}</span>
+              <span className="text-gray-900">{formatTopic(opt.topic_number, opt.topic_name)}</span>
               {opt.subtopic_name && <span className="text-gray-500"> &raquo; {opt.subtopic_name}</span>}
             </li>
           ))}

@@ -39,4 +39,5 @@ jobs:
       # warnings. It must not block the build/deploy gate.
       - run: npm run lint
         continue-on-error: true
+      - run: npm test
       - run: npm run build

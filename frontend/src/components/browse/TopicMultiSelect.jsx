@@ -1,3 +1,5 @@
+import { formatTopic } from '../../utils/topicFormat'
+
 export default function TopicMultiSelect({ topics, selectedIds, exclusive, onChange }) {
   const selectedSet = new Set(selectedIds)
 
@@ -39,7 +41,7 @@ export default function TopicMultiSelect({ topics, selectedIds, exclusive, onCha
                   : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
               }`}
             >
-              {t.name}
+              {formatTopic(t.topic_number, t.name)}
             </button>
           )
         })}

@@ -19,7 +19,7 @@ const EMPTY_FILTERS = {
   year: '',
   topic_ids: [],
   exclusive: false,
-  subtopic_keyword: '',
+  search: '',
 }
 
 // Map the UI filter object to api.questions.list arguments (same as BrowsePage).
@@ -33,7 +33,7 @@ function filtersToListArgs(filters, page) {
     year: filters.year || undefined,
     topic_ids: filters.topic_ids,
     exclusive: filters.exclusive,
-    subtopic_keyword: filters.subtopic_keyword || undefined,
+    search: filters.search || undefined,
     page,
     page_size: PAGE_SIZE,
   }
@@ -73,7 +73,7 @@ function filtersToSelectPayload(filters) {
     year: num(filters.year),
     topic_ids: filters.topic_ids || [],
     exclusive: !!filters.exclusive,
-    subtopic_keyword: filters.subtopic_keyword || null,
+    search: filters.search || null,
   }
 }
 
@@ -293,7 +293,7 @@ export default function GeneratePage() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
+      <main className="max-w-[90%] mx-auto px-6 py-6 space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />

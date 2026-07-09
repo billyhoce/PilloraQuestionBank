@@ -30,7 +30,7 @@ export default function PageThumbnail({ page, label, canMerge, onToggleMerge, on
                 : 'text-gray-400 border-gray-200 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            merge
+            Merge with prev
           </button>
         )}
       </div>

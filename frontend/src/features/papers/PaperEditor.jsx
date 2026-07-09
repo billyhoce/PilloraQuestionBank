@@ -172,7 +172,7 @@ export default function PaperEditor() {
     return <div className="flex justify-center py-16"><Spinner size="lg" /></div>
   }
   if (loadError) {
-    return <div className="max-w-5xl mx-auto"><ErrorBanner message={loadError} /></div>
+    return <div className="max-w-[90%] mx-auto"><ErrorBanner message={loadError} /></div>
   }
 
   const sortedQuestions = [...questions].sort((a, b) => a.question_number - b.question_number)
@@ -183,7 +183,7 @@ export default function PaperEditor() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-[90%] mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-lg font-semibold text-gray-900">
           Edit paper

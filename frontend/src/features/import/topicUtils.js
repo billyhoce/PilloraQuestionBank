@@ -2,9 +2,9 @@ export function buildTopicLookup(topics) {
   const subtopicById = new Map()
   const topicById = new Map()
   for (const t of topics || []) {
-    topicById.set(t.id, t.name)
+    topicById.set(t.id, { name: t.name, topic_number: t.topic_number })
     for (const s of t.subtopics || []) {
-      subtopicById.set(s.id, { name: s.name, topic_name: t.name })
+      subtopicById.set(s.id, { name: s.name, topic_name: t.name, topic_number: t.topic_number })
     }
   }
   return { subtopicById, topicById }

@@ -72,9 +72,13 @@ DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and
 GET    /api/questions             -- filter params: subject_id, stream_id, level_id, year,
                                      school_id, exam_type_id, topic_ids[] (repeatable),
                                      exclusive (bool — restrict to only the given topics),
-                                     subtopic_keyword (substring match on subtopic name),
+                                     search (free-text keyword, OR-matched case-insensitively
+                                     against topic, subtopic, school, subject, level, stream
+                                     and exam-type names; an all-digit keyword also matches
+                                     the paper year exactly),
                                      page, page_size
-                                  -- returns paginated question list with paper info, topic chips,
+                                  -- returns paginated question list with paper info, topic chips
+                                     ({ topic_name, topic_number, subtopic_names[] }),
                                      and a presigned first-page image URL
 GET    /api/questions/:id         -- full question detail: question pages + answer pages
                                      (each with a presigned S3 URL), topics
@@ -90,7 +94,7 @@ POST   /api/generate/select      -- auto-select a randomized set of questions su
                                     exclude_question_ids[] }. `filters` mirrors the Browse
                                     filter params (subject_id, stream_id, level_id, year,
                                     school_id, exam_type_id, topic_ids[], exclusive,
-                                    subtopic_keyword). Returns { items, total_marks,
+                                    search). Returns { items, total_marks,
                                     target_marks, exact, warning }.
 POST   /api/generate/paper       -- render ONE PDF variant from a manual selection.
                                     Body: { question_ids[] (min 1), variant:

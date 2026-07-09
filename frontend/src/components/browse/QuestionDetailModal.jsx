@@ -28,7 +28,7 @@ export default function QuestionDetailModal({ item, onClose }) {
   const { paper_info, question_number } = item
   const title = `${paper_info.school_name} ${paper_info.year} ${paper_info.exam_type_name} ${paper_info.paper_number} · Q${question_number}`
   const subtopicNames = detail
-    ? [...new Set(detail.topics.map(t => t.subtopic_name))]
+    ? [...new Set(detail.topics.flatMap(t => t.subtopic_names || []))]
     : []
 
   return (

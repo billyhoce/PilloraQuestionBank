@@ -1,16 +1,23 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db import get_db
 from app.models.orm import (
+    ExamType,
+    Level,
     Paper,
     Question,
     QuestionPage,
     QuestionSubtopic,
     QuestionTopic,
+    School,
+    Stream,
+    Subject,
     Subtopic,
+    Topic,
 )
 from app.schemas.questions import QuestionDetailResponse, QuestionListResponse
 from app.storage.s3_client import get_presigned_url
@@ -28,7 +35,7 @@ def _apply_filters(
     exam_type_id,
     topic_ids,
     exclusive,
-    subtopic_keyword,
+    search,
 ):
     if subject_id is not None:
         q = q.filter(Paper.subject_id == subject_id)
@@ -52,14 +59,26 @@ def _apply_filters(
                 ~Question.topics.any(QuestionTopic.topic_id.notin_(topic_ids))
             )
 
-    if subtopic_keyword:
-        kw = subtopic_keyword.strip()
+    if search:
+        kw = search.strip()
         if kw:
-            q = q.filter(
+            pattern = f"%{kw}%"
+            clauses = [
+                Question.topics.any(
+                    QuestionTopic.topic.has(Topic.name.ilike(pattern))
+                ),
                 Question.question_subtopics.any(
-                    QuestionSubtopic.subtopic.has(Subtopic.name.ilike(f"%{kw}%"))
-                )
-            )
+                    QuestionSubtopic.subtopic.has(Subtopic.name.ilike(pattern))
+                ),
+                Paper.school.has(School.name.ilike(pattern)),
+                Paper.subject.has(Subject.name.ilike(pattern)),
+                Paper.level.has(Level.name.ilike(pattern)),
+                Paper.stream.has(Stream.name.ilike(pattern)),
+                Paper.exam_type.has(ExamType.name.ilike(pattern)),
+            ]
+            if kw.isdigit():
+                clauses.append(Paper.year == int(kw))
+            q = q.filter(or_(*clauses))
 
     return q
 
@@ -99,6 +118,7 @@ def _topic_infos(question: Question) -> list[dict]:
     return [
         {
             "topic_name": qt.topic.name,
+            "topic_number": qt.topic.topic_number,
             "subtopic_names": subtopics_by_topic.get(qt.topic_id, []),
         }
         for qt in question.topics
@@ -142,7 +162,7 @@ def list_questions(
     exam_type_id: Optional[int] = None,
     topic_ids: List[int] = Query(default=[]),
     exclusive: bool = False,
-    subtopic_keyword: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -156,7 +176,7 @@ def list_questions(
         exam_type_id,
         topic_ids,
         exclusive,
-        subtopic_keyword,
+        search,
     )
 
     base = db.query(Question).join(Question.paper)

@@ -54,7 +54,7 @@ export default function PapersList() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-[90%] mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-lg font-semibold text-gray-900">Papers</h1>
         <Link
