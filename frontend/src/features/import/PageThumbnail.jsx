@@ -13,8 +13,7 @@ export default function PageThumbnail({ page, label, canMerge, onToggleMerge, on
         <img
           src={page.url}
           alt={label}
-          className="w-full object-contain bg-gray-100"
-          style={{ height: '220px' }}
+          className="w-full aspect-[210/297] object-contain bg-gray-100"
         />
       </button>
       <div className="px-2 py-1.5 flex items-center justify-between bg-gray-50 border-t border-gray-200">

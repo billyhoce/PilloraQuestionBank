@@ -43,3 +43,14 @@ describe('PageThumbnail merge button', () => {
     expect(screen.getByRole('button', { name: /merge with prev/i }).className).toContain('bg-blue-100')
   })
 })
+
+describe('PageThumbnail sizing', () => {
+  it('scales with the grid cell via an A4 aspect ratio instead of a fixed height', () => {
+    render(
+      <PageThumbnail page={page} label="Q1" canMerge={false} onToggleMerge={() => {}} onOpenLightbox={() => {}} />
+    )
+    const img = screen.getByRole('img', { name: 'Q1' })
+    expect(img.className).toContain('aspect-[210/297]')
+    expect(img.style.height).toBe('')
+  })
+})

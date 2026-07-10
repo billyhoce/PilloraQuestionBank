@@ -29,7 +29,7 @@ export default function PageGrid({ pages, dividerIdx, onToggleMerge, onSetDivide
 
   return (
     <>
-      <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-3 content-start overflow-y-auto max-h-[70vh] pb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 content-start overflow-y-auto max-h-[70vh] pb-4">
         {pages.map((page, i) => (
           <div className="relative group" key={page.temp_key}>
             <PageThumbnail
