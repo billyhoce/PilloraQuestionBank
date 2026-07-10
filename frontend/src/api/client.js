@@ -157,6 +157,7 @@ export const api = {
       append('school_id', filters.school_id)
       append('exam_type_id', filters.exam_type_id)
       append('year', filters.year)
+      append('paper_number', filters.paper_number)
       append('search', filters.search)
       if (filters.exclusive) params.append('exclusive', 'true')
       for (const id of filters.topic_ids || []) params.append('topic_ids', id)

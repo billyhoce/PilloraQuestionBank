@@ -21,7 +21,7 @@ Content pages span ~90% of the viewport: the page-level wrapper uses `max-w-[90%
 
 ## Topic Display Convention
 
-Topics are always displayed with their topic number as a `T{n}` prefix, e.g. **"T1 Algebra"** — on Browse question cards, the topic filter chips, the AI topic-labelling review, the paper editor's topic labels, and the add-topic combobox. Use the shared helper `formatTopic(topicNumber, name)` in `src/utils/topicFormat.js` (falls back to the bare name when no number is available). The admin Topics tab shows the number in its own editable column instead.
+Topics are always displayed with their topic number as a `T{n}:` prefix, e.g. **"T1: Algebra"** — on Browse question cards, the topic filter chips, the AI topic-labelling review, the paper editor's topic labels, and the add-topic combobox. Use the shared helper `formatTopic(topicNumber, name)` in `src/utils/topicFormat.js` (falls back to the bare name when no number is available). The admin Topics tab shows the number in its own editable column instead. The keyword search matches the `T{n}` token too (e.g. typing "T10" surfaces questions tagged topic number 10).
 
 ## Routes / Pages
 
@@ -105,8 +105,10 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - **Year** — single-select dropdown OR range
 - **School** — multi-select
 - **Exam Type** — multi-select
+- **Paper Number** — free-text input, case-insensitive exact match (values may contain letters, e.g. "1", "a")
 - **Topic** — multi-select, **scoped to selected Subject + Stream** (greyed out until both are chosen)
 - **Subtopic** — multi-select, **scoped to selected Topic(s)**
+- **Search** — free-text keyword box. Runs **live as the user types**, debounced ~300ms after the last keystroke (Enter or the Search button commit instantly); clearing the box returns to all questions. Matches topic/subtopic/tag/school/subject/level/school-level tier ("Secondary")/stream/exam-type names, the `T{n}` topic-number token, and — for an all-digit keyword — the paper year.
 
 ### Results View
 

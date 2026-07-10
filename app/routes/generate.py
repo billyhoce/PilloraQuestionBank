@@ -53,6 +53,7 @@ def select_questions(
         f.exclusive,
         f.tag_ids,
         f.search,
+        f.paper_number,
     )
     if payload.exclude_question_ids:
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))

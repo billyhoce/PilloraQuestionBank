@@ -22,8 +22,8 @@ const baseItem = {
 describe('QuestionCard topic chips', () => {
   it('renders topic chips as "T{n} {name}"', () => {
     render(<QuestionCard item={baseItem} onClick={() => {}} />)
-    expect(screen.getByText('T1 Algebra')).toBeInTheDocument()
-    expect(screen.getByText('T2 Geometry')).toBeInTheDocument()
+    expect(screen.getByText('T1: Algebra')).toBeInTheDocument()
+    expect(screen.getByText('T2: Geometry')).toBeInTheDocument()
   })
 
   it('renders subtopic names', () => {
@@ -40,7 +40,7 @@ describe('QuestionCard topic chips', () => {
       ],
     }
     render(<QuestionCard item={item} onClick={() => {}} />)
-    expect(screen.getAllByText('T1 Algebra')).toHaveLength(1)
+    expect(screen.getAllByText('T1: Algebra')).toHaveLength(1)
   })
 })
 

@@ -18,6 +18,7 @@ class GenerateFilters(BaseModel):
     exclusive: bool = False
     tag_ids: list[int] = []
     search: Optional[str] = None
+    paper_number: Optional[str] = None
 
 
 class SelectRequest(BaseModel):
