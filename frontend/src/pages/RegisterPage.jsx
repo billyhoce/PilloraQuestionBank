@@ -14,7 +14,7 @@ export default function RegisterPage() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  if (!loading && user) return <Navigate to="/admin/reference" replace />
+  if (!loading && user) return <Navigate to="/" replace />
 
   async function handleSubmit(e) {
     e.preventDefault()

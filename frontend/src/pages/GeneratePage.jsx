@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
@@ -81,7 +79,6 @@ function filtersToSelectPayload(filters) {
 }
 
 export default function GeneratePage() {
-  const { user } = useAuth()
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
@@ -105,6 +102,7 @@ export default function GeneratePage() {
 
   // PDF generation state
   const [headerText, setHeaderText] = useState('')
+  const [outputMode, setOutputMode] = useState('combined') // 'combined' | 'separate'
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
   const progressTimer = useRef(null)
@@ -262,16 +260,26 @@ export default function GeneratePage() {
     const ts = formatTimestamp(new Date())
     const ids = cart.map(it => it.id)
     try {
-      const [questionBlob, answerBlob] = await Promise.all([
-        api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText }),
-        api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '' }),
-      ])
-      stopProgress()
-      setGenProgress(100)
-      downloadBlob(questionBlob, `${ts}_question.pdf`)
-      // Small gap so the browser doesn't drop the second programmatic download.
-      setTimeout(() => downloadBlob(answerBlob, `${ts}_answer.pdf`), 600)
-      setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })
+      if (outputMode === 'combined') {
+        const blob = await api.generate.paper({
+          question_ids: ids, variant: 'combined', header_text: headerText,
+        })
+        stopProgress()
+        setGenProgress(100)
+        downloadBlob(blob, `${ts}_paper.pdf`)
+        setNotice({ type: 'success', text: 'Generated combined PDF.' })
+      } else {
+        const [questionBlob, answerBlob] = await Promise.all([
+          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText }),
+          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '' }),
+        ])
+        stopProgress()
+        setGenProgress(100)
+        downloadBlob(questionBlob, `${ts}_question.pdf`)
+        // Small gap so the browser doesn't drop the second programmatic download.
+        setTimeout(() => downloadBlob(answerBlob, `${ts}_answer.pdf`), 600)
+        setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })
+      }
     } catch (e) {
       stopProgress()
       setNotice({ type: 'warning', text: e?.message || 'PDF generation failed.' })
@@ -283,20 +291,7 @@ export default function GeneratePage() {
   const hasMore = items.length < total
 
   return (
-    <div className="min-h-screen bg-white">
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="text-lg font-semibold text-gray-900">PilloraQuestionBank</Link>
-          <span className="text-sm text-gray-400">/</span>
-          <span className="text-sm font-medium text-gray-700">Create Paper</span>
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <Link to="/" className="text-blue-600 hover:underline">Browse</Link>
-          {user ? <span className="text-gray-500">{user.email}</span> : null}
-        </div>
-      </header>
-
-      <main className="max-w-[90%] mx-auto px-6 py-6 space-y-6">
+    <div className="max-w-[90%] mx-auto space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />
@@ -473,6 +468,30 @@ export default function GeneratePage() {
                 />
               </div>
 
+              <div className="space-y-1 pt-1">
+                <span className="text-xs text-gray-600">Download as</span>
+                <div className="flex flex-col gap-1 text-xs text-gray-700">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="output-mode"
+                      checked={outputMode === 'combined'}
+                      onChange={() => setOutputMode('combined')}
+                    />
+                    1 combined PDF (answers after questions)
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="output-mode"
+                      checked={outputMode === 'separate'}
+                      onChange={() => setOutputMode('separate')}
+                    />
+                    Separate question &amp; answer PDFs
+                  </label>
+                </div>
+              </div>
+
               {generating ? (
                 <div className="space-y-1">
                   <div className="h-2 w-full bg-gray-200 rounded overflow-hidden">
@@ -497,7 +516,6 @@ export default function GeneratePage() {
             </div>
           </aside>
         </div>
-      </main>
 
       {selectedItem ? (
         <QuestionDetailModal item={selectedItem} onClose={() => setSelectedItem(null)} />

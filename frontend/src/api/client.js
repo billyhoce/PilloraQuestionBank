@@ -174,8 +174,8 @@ export const api = {
     // Auto-select a randomized set of questions summing near target_marks.
     // body: { filters, target_marks, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
-    // Render one PDF variant. body: { question_ids, variant, header_text }.
-    // Returns a Blob (binary) — bypasses `request`, which is JSON-only.
+    // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
+    // header_text }. Returns a Blob (binary) — bypasses `request`, which is JSON-only.
     paper: async (body) => {
       const res = await fetch('/api/generate/paper', {
         method: 'POST',

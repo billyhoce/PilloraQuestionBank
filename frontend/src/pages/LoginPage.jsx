@@ -12,15 +12,15 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  if (!loading && user) return <Navigate to="/admin/reference" replace />
+  if (!loading && user) return <Navigate to="/" replace />
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
     setSubmitting(true)
     try {
-      const me = await login(email, password)
-      navigate(me.role === 'admin' ? '/admin/reference' : '/login')
+      await login(email, password)
+      navigate('/')
     } catch (err) {
       setError(err.message || 'Login failed.')
     } finally {
@@ -35,8 +35,9 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <ErrorBanner message={error} />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
             <input
+              id="login-email"
               type="email"
               required
               value={email}
@@ -45,8 +46,9 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
             <input
+              id="login-password"
               type="password"
               required
               value={password}

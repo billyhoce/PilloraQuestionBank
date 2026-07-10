@@ -16,14 +16,14 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          <Route path="/" element={<BrowsePage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
-          <Route element={<ProtectedRoute />}>
-            <Route path="/generate" element={<GeneratePage />} />
-          </Route>
-          <Route element={<ProtectedRoute requiredRole="admin" />}>
-            <Route element={<AppShell />}>
+          <Route element={<AppShell />}>
+            <Route path="/" element={<BrowsePage />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/generate" element={<GeneratePage />} />
+            </Route>
+            <Route element={<ProtectedRoute requiredRole="admin" />}>
               <Route path="/admin/reference" element={<ReferencePage />} />
               <Route path="/admin/import" element={<ImportPage />} />
               <Route path="/admin/papers" element={<PapersPage />} />
