@@ -1,9 +1,12 @@
 """Tests for knapsack selection, PDF layout engine, and generation routes."""
+import io
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
+from pypdf import PdfReader
+
 from app.models.orm import Question
-from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan
+from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan, render_combined
 from app.services.generate import knapsack_select
 
 # The knapsack function, /api/generate/select, and the PDF layout engine +
@@ -224,6 +227,49 @@ def test_question_variant_has_no_block_gap():
 
 
 # ---------------------------------------------------------------------------
+# Layout engine — combined rendering
+# ---------------------------------------------------------------------------
+
+
+def _page_count(pdf: bytes) -> int:
+    return len(PdfReader(io.BytesIO(pdf)).pages)
+
+
+def test_render_returns_expected_page_count(minimal_webp_bytes):
+    # Refactor guard: single-plan render still produces one page per packed page.
+    # capacity=1000, gap=100 (fit_width=False): 800 + 100 + 800 > 1000 → 2 pages.
+    engine = _engine(capacity_px=1000)
+    plan = engine.compute_layout([_make_block("1", [800]), _make_block("2", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    assert _page_count(pdf) == 2
+
+
+def test_render_combined_appends_sections(minimal_webp_bytes):
+    # Section 1 packs onto one page (400 + 100 + 400 ≤ 1000); section 2 is one
+    # page — the combined PDF holds both, each section starting on a fresh page.
+    e1 = _engine(capacity_px=1000)
+    p1 = e1.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    e2 = _engine(capacity_px=1000)
+    p2 = e2.compute_layout([_make_block("2", [400])])
+    pdf = render_combined([(e1, p1), (e2, p2)], fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    assert _page_count(pdf) == 2
+
+
+def test_render_combined_matches_separate_renders(minimal_webp_bytes):
+    # Combined page count equals the sum of the separately rendered sections.
+    e1 = LayoutEngine(fit_width=True)
+    p1 = e1.compute_layout([_make_block("1", [800])], header_text="Header")
+    e2 = LayoutEngine(fit_width=False)
+    p2 = e2.compute_layout([_make_block("1", [800])])
+    fetch = lambda key: minimal_webp_bytes  # noqa: E731
+    separate = _page_count(e1.render(p1, fetch)) + _page_count(e2.render(p2, fetch))
+    combined = _page_count(render_combined([(e1, p1), (e2, p2)], fetch))
+    assert combined == separate == 2
+
+
+# ---------------------------------------------------------------------------
 # Routes — /api/generate/select (implemented)
 # ---------------------------------------------------------------------------
 
@@ -403,3 +449,90 @@ def test_generate_paper_answer_variant_skips_questions_without_answers(
     assert all(p.page_type == "answer" for p in blocks[0].pages)
     # Answer variant keeps native image size (flush-left, no centering).
     assert captured["fit_width"] is False
+
+
+def test_generate_paper_combined_returns_pdf(public_client, sample_paper, db_session, reference_data):
+    ids = _question_ids(db_session, sample_paper)
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", return_value=b"%PDF-1.4 fake pdf bytes"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "combined",
+            "header_text": "Test paper",
+        })
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert len(resp.content) > 0
+
+
+def test_generate_paper_combined_builds_question_then_answer_sections(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "combined",
+            "header_text": "Test paper",
+        })
+
+    assert resp.status_code == 200
+    sections = captured["sections"]
+    assert len(sections) == 2
+
+    q_engine, q_plan = sections[0]
+    assert q_engine.fit_width is True
+    assert q_plan.header_text == "Test paper"
+    assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
+
+    a_engine, a_plan = sections[1]
+    assert a_engine.fit_width is False
+    assert a_plan.header_text == ""
+    # Only Q2 has answer pages; it keeps its question number.
+    assert [b.label for b in a_plan.blocks] == ["2"]
+    assert all(p.page_type == "answer" for p in a_plan.blocks[0].pages)
+
+
+def test_generate_paper_combined_omits_empty_answer_section(
+    public_client, sample_paper, db_session, reference_data
+):
+    # Select only questions without answer pages (all but Q2) — no answer section.
+    qs = (
+        db_session.query(Question)
+        .filter_by(paper_id=sample_paper.id)
+        .order_by(Question.question_number)
+        .all()
+    )
+    ids = [q.id for q in qs if q.question_number != 2]
+    assert ids
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "combined"})
+
+    assert resp.status_code == 200
+    assert len(captured["sections"]) == 1
+    assert captured["sections"][0][0].fit_width is True
+
+
+def test_generate_paper_rejects_unknown_variant(public_client):
+    resp = public_client.post("/api/generate/paper", json={"question_ids": [1], "variant": "both"})
+    assert resp.status_code == 422

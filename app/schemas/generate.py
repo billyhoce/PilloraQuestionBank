@@ -36,12 +36,13 @@ class SelectResponse(BaseModel):
 
 
 class GeneratePaperRequest(BaseModel):
-    """Render one PDF variant from a manual selection of questions.
+    """Render a PDF from a manual selection of questions.
 
-    The frontend calls this twice (``variant='question'`` then ``'answer'``) to
-    produce the separate question and answer papers.
+    ``variant='question'`` and ``'answer'`` each render one paper (the frontend
+    calls twice for the separate-PDFs mode); ``'combined'`` renders both in a
+    single PDF, with the answer paper appended after the question paper.
     """
 
     question_ids: list[int] = Field(min_length=1)  # empty -> 422
-    variant: Literal["question", "answer"] = "question"
+    variant: Literal["question", "answer", "combined"] = "question"
     header_text: str = ""
