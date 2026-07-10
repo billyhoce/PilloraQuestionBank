@@ -1,3 +1,4 @@
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ from app.models.orm import (
     QuestionTag,
     QuestionTopic,
     School,
+    SchoolLevel,
     Stream,
     Subject,
     Subtopic,
@@ -39,6 +41,7 @@ def _apply_filters(
     exclusive,
     tag_ids,
     search,
+    paper_number=None,
 ):
     if subject_id is not None:
         q = q.filter(Paper.subject_id == subject_id)
@@ -67,6 +70,13 @@ def _apply_filters(
             Question.tags.any(QuestionTag.tag_id.in_(tag_ids))
         )
 
+    if paper_number:
+        pn = paper_number.strip()
+        if pn:
+            # Exact, case-insensitive match (no wildcards). Paper numbers are short
+            # strings that may contain letters, e.g. "1", "2", "a", "b".
+            q = q.filter(Paper.paper_number.ilike(pn))
+
     if search:
         kw = search.strip()
         if kw:
@@ -84,9 +94,25 @@ def _apply_filters(
                 Paper.school.has(School.name.ilike(pattern)),
                 Paper.subject.has(Subject.name.ilike(pattern)),
                 Paper.level.has(Level.name.ilike(pattern)),
+                Paper.level.has(
+                    Level.school_level.has(SchoolLevel.name.ilike(pattern))
+                ),
                 Paper.stream.has(Stream.name.ilike(pattern)),
+                Paper.stream.has(
+                    Stream.school_level.has(SchoolLevel.name.ilike(pattern))
+                ),
                 Paper.exam_type.has(ExamType.name.ilike(pattern)),
             ]
+            # A "T{n}" token (e.g. "T10") matches the topic number.
+            m = re.fullmatch(r"[Tt]\s*(\d+)", kw)
+            if m:
+                clauses.append(
+                    Question.topics.any(
+                        QuestionTopic.topic.has(
+                            Topic.topic_number == int(m.group(1))
+                        )
+                    )
+                )
             if kw.isdigit():
                 clauses.append(Paper.year == int(kw))
             q = q.filter(or_(*clauses))
@@ -186,6 +212,7 @@ def list_questions(
     exclusive: bool = False,
     tag_ids: List[int] = Query(default=[]),
     search: Optional[str] = None,
+    paper_number: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -201,6 +228,7 @@ def list_questions(
         exclusive,
         tag_ids,
         search,
+        paper_number,
     )
 
     base = db.query(Question).join(Question.paper)

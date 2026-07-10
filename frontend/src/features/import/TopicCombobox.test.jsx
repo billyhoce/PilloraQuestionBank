@@ -19,8 +19,8 @@ describe('TopicCombobox option labels', () => {
     render(<TopicCombobox topics={topics} selected={[]} onAdd={() => {}} />)
 
     await user.click(screen.getByRole('textbox'))
-    expect(screen.getByText('T1 Algebra')).toBeInTheDocument()
-    expect(screen.getByText('T2 Geometry')).toBeInTheDocument()
+    expect(screen.getByText('T1: Algebra')).toBeInTheDocument()
+    expect(screen.getByText('T2: Geometry')).toBeInTheDocument()
     expect(screen.getByText(/Linear Equations/)).toBeInTheDocument()
   })
 
@@ -29,7 +29,7 @@ describe('TopicCombobox option labels', () => {
     render(<TopicCombobox topics={topics} selected={[]} onAdd={() => {}} />)
 
     await user.type(screen.getByRole('textbox'), 'geo')
-    expect(screen.getByText('T2 Geometry')).toBeInTheDocument()
-    expect(screen.queryByText('T1 Algebra')).not.toBeInTheDocument()
+    expect(screen.getByText('T2: Geometry')).toBeInTheDocument()
+    expect(screen.queryByText('T1: Algebra')).not.toBeInTheDocument()
   })
 })

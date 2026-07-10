@@ -10,7 +10,7 @@ import ErrorBanner from '../components/ErrorBanner'
 
 const PAGE_SIZE = 50
 
-const SINGLE_KEYS = ['level_id', 'stream_id', 'subject_id', 'school_id', 'exam_type_id', 'year']
+const SINGLE_KEYS = ['level_id', 'stream_id', 'subject_id', 'school_id', 'exam_type_id', 'year', 'paper_number']
 
 function filtersFromParams(params) {
   return {
@@ -20,6 +20,7 @@ function filtersFromParams(params) {
     school_id: params.get('school_id') || '',
     exam_type_id: params.get('exam_type_id') || '',
     year: params.get('year') || '',
+    paper_number: params.get('paper_number') || '',
     topic_ids: params.getAll('topic_ids').map(v => Number(v)).filter(n => Number.isFinite(n)),
     exclusive: params.get('exclusive') === '1',
     tag_ids: params.getAll('tag_ids').map(v => Number(v)).filter(n => Number.isFinite(n)),
@@ -81,6 +82,7 @@ export default function BrowsePage() {
         school_id: filters.school_id || undefined,
         exam_type_id: filters.exam_type_id || undefined,
         year: filters.year || undefined,
+        paper_number: filters.paper_number || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
         tag_ids: filters.tag_ids,
@@ -118,6 +120,7 @@ export default function BrowsePage() {
         school_id: filters.school_id || undefined,
         exam_type_id: filters.exam_type_id || undefined,
         year: filters.year || undefined,
+        paper_number: filters.paper_number || undefined,
         topic_ids: filters.topic_ids,
         exclusive: filters.exclusive,
         tag_ids: filters.tag_ids,

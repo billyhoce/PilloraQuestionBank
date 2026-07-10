@@ -18,7 +18,7 @@ from app.models.orm import (
 # ---------------------------------------------------------------------------
 
 
-def _add_paper(db_session, rd, admin_user, year=2024, school=None) -> Paper:
+def _add_paper(db_session, rd, admin_user, year=2024, school=None, paper_number="1") -> Paper:
     paper = Paper(
         subject_id=rd["subject"].id,
         stream_id=rd["stream"].id,
@@ -26,7 +26,7 @@ def _add_paper(db_session, rd, admin_user, year=2024, school=None) -> Paper:
         school_id=(school or rd["school"]).id,
         exam_type_id=rd["exam_type"].id,
         year=year,
-        paper_number="1",
+        paper_number=paper_number,
         created_by=admin_user.id,
         created_at=datetime.now(UTC),
     )
@@ -388,6 +388,57 @@ def test_search_by_year(public_client, db_session, reference_data, admin_user):
     ids = [q["id"] for q in resp.json()["items"]]
     assert q_2019.id in ids
     assert q_2024.id not in ids
+
+
+def test_search_by_school_level_tier(public_client, db_session, reference_data, admin_user):
+    """The school-level tier name (e.g. 'Secondary') is searchable.
+
+    The fixture level is 'Sec 3' and its school-level tier is 'Secondary'; the
+    keyword 'secondary' matches only via the tier, not the level name.
+    """
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper)
+
+    resp = public_client.get("/api/questions?search=secondary")
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert q.id in ids
+
+
+def test_search_by_topic_number_token(public_client, db_session, reference_data, admin_user):
+    """A 'T{n}' token (e.g. 'T1') matches questions tagged that topic number."""
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q_topic1 = _add_question(db_session, paper, number=1)
+    q_no_topic = _add_question(db_session, paper, number=2)
+
+    # reference_data topic 'Algebra' has topic_number=1
+    db_session.add(QuestionTopic(question_id=q_topic1.id, topic_id=reference_data["topic"].id))
+    db_session.flush()
+
+    resp = public_client.get("/api/questions?search=T1")
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert q_topic1.id in ids
+    assert q_no_topic.id not in ids
+
+
+def test_filter_by_paper_number_exact_case_insensitive(public_client, db_session, reference_data, admin_user):
+    """paper_number filters by exact, case-insensitive match; letters supported."""
+    paper_1 = _add_paper(db_session, reference_data, admin_user, paper_number="1")
+    paper_a = _add_paper(db_session, reference_data, admin_user, paper_number="a")
+    q_1 = _add_question(db_session, paper_1, number=1)
+    q_a = _add_question(db_session, paper_a, number=2)
+
+    resp = public_client.get("/api/questions?paper_number=1")
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert q_1.id in ids
+    assert q_a.id not in ids
+
+    # Letters, case-insensitive: "A" matches paper "a".
+    resp = public_client.get("/api/questions?paper_number=A")
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert q_a.id in ids
+    assert q_1.id not in ids
 
 
 def test_search_no_match_returns_zero(public_client, db_session, reference_data, admin_user):

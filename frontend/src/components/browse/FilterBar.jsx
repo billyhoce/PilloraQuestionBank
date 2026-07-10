@@ -96,6 +96,19 @@ export default function FilterBar({ filters, onFilterChange }) {
     setKwInput(filters.search || '')
   }, [filters.search])
 
+  // Debounced live search: commit the typed keyword ~300ms after the last
+  // keystroke. The no-op guard against the committed filter value prevents a
+  // feedback loop with the resync effect above (and avoids re-firing when the
+  // input was set programmatically). Enter / the Search button still commit
+  // instantly via submitKw().
+  useEffect(() => {
+    const next = kwInput.trim()
+    if (next === (filters.search || '')) return
+    const t = setTimeout(() => onFilterChange({ search: next }), 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kwInput])
+
   const selectedLevel = levels.find(l => String(l.id) === String(filters.level_id))
   const selectedStream = streams.find(s => String(s.id) === String(filters.stream_id))
 
@@ -307,6 +320,16 @@ export default function FilterBar({ filters, onFilterChange }) {
               <option value="">All exam types</option>
               {examTypes.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
             </select>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-gray-500">Paper no.</span>
+            <input
+              type="text"
+              value={filters.paper_number || ''}
+              onChange={e => onFilterChange({ paper_number: e.target.value })}
+              placeholder="e.g. 1, a"
+              className="w-24 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </label>
         </div>
       </Row>
