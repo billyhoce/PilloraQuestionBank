@@ -196,8 +196,9 @@ answer pages. There is no server-side autofill-at-generate: the selection is alr
 
 Works in **300-DPI pixel space** (A4 = 2480×3508 px). Stored images are content-only (≤ 1760 px
 wide from ingestion); the engine builds the page margins itself. `LayoutEngine(page_capacity_px,
-fit_width)` — `page_capacity_px` is the usable vertical budget (page height minus top/bottom
-margins); `fit_width` selects the horizontal treatment per variant:
+fit_width, show_credit)` — `page_capacity_px` is the usable vertical budget (the **content band
+between the header and footer rule lines** — see [Page chrome](#page-chrome) — not the raw page
+height); `fit_width` selects the horizontal treatment per variant:
 
 - **`fit_width=True` (question paper):** each image is scaled (aspect preserved) to a fixed **1760 px
   content width** and drawn **centered** on the page — **360 px margin on each side** (1760 + 360 +
@@ -232,7 +233,7 @@ PDF — how the `combined` variant appends the answer paper after the question p
   bytes and vice-versa, so no image is fetched twice across the two requests.
 
 Dataclasses: `Block(label, source_label, pages, page_index)` and
-`LayoutPlan(page_count, blocks, header_text)`.
+`LayoutPlan(page_count, blocks, header_text, footer_label)`.
 
 **Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
 small grey provenance line just above its image — `source_label`, formatted
@@ -243,6 +244,24 @@ block's height so packing and rendering stay in sync, then draws the line and ad
 before the image. The route enables it for the `question` variant (and the `combined` PDF's
 question section) and leaves it off for the answer paper. Blocks with an empty `source_label`
 reserve no band.
+
+### Page chrome
+
+Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once per page:
+
+- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX`) and bottom
+  (`_FOOTER_LINE_Y_PX`), inset `_MARGIN_X_PX` on each side. The **content band sits between them**
+  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures.
+- **Logo** top-left, centered on the header rule — loaded from `app/pdf/assets/pillora_logo.png`
+  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is
+  **optional**: if absent/unreadable the page renders without it (no error).
+- **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule.
+- **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
+  bottom-right. The route sets the footer label per section (`Questions` / `Answers`).
+
+Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined`
+PDF the question and answer papers number independently. The free-text `header_text` instructions
+still render on the first content page, below the header rule.
 
 ### Library
 

@@ -35,6 +35,11 @@ def _source_label(q: Question) -> str:
     )
 
 
+def _footer_label(is_questions: bool) -> str:
+    """Text centered under the footer rule on every page of a section."""
+    return "Questions" if is_questions else "Answers"
+
+
 def _blocks_for(ordered: list[Question], variant: str) -> list[Block]:
     """Build one Block per question holding its ``variant`` pages, numbered by
     selection order. In the answer variant a question with no answer pages is
@@ -141,13 +146,17 @@ def generate_paper(
     # Answer paper: keep native size, flush to the left margin.
     if payload.variant == "combined":
         q_engine = LayoutEngine(fit_width=True, show_credit=True)
-        sections = [(q_engine, q_engine.compute_layout(
+        q_plan = q_engine.compute_layout(
             _blocks_for(ordered, "question"), header_text=payload.header_text
-        ))]
+        )
+        q_plan.footer_label = _footer_label(is_questions=True)
+        sections = [(q_engine, q_plan)]
         a_blocks = _blocks_for(ordered, "answer")
         if a_blocks:  # no trailing blank page when nothing has answers
             a_engine = LayoutEngine(fit_width=False)
-            sections.append((a_engine, a_engine.compute_layout(a_blocks)))
+            a_plan = a_engine.compute_layout(a_blocks)
+            a_plan.footer_label = _footer_label(is_questions=False)
+            sections.append((a_engine, a_plan))
         pdf = render_combined(sections, fetch_bytes=get_image_bytes)
     else:
         is_question = payload.variant == "question"
@@ -155,5 +164,6 @@ def generate_paper(
         engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
         header = payload.header_text if is_question else ""
         plan = engine.compute_layout(blocks, header_text=header)
+        plan.footer_label = _footer_label(is_questions=is_question)
         pdf = engine.render(plan, fetch_bytes=get_image_bytes)
     return Response(content=pdf, media_type="application/pdf")

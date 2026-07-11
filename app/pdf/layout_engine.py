@@ -17,9 +17,12 @@ Layout rules:
     created here, and the number is drawn into it, just left of the content.
 """
 import io
+import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from PIL import Image
+from reportlab.lib.colors import Color
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -28,9 +31,27 @@ from reportlab.pdfgen import canvas
 # follows from the A4 aspect ratio so px map 1:1 onto the page after scaling.
 PAGE_W_PX = 2480
 PAGE_H_PX = 3508
-_TOP_MARGIN_PX = 120
-_BOTTOM_MARGIN_PX = 120
-_DEFAULT_CAPACITY_PX = PAGE_H_PX - _TOP_MARGIN_PX - _BOTTOM_MARGIN_PX
+
+# Page chrome (drawn on every page): purple rule lines near the top and bottom,
+# the Pillora logo top-left, the website centered in the header, a footer label
+# centered below the footer line, and a page number bottom-right. The content
+# band sits between the two rule lines.
+PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
+WEBSITE = "www.pillora.com.sg"
+_MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
+_HEADER_LINE_Y_PX = 250                # header rule, px from the top
+_FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
+_CHROME_FONT = "Helvetica"
+_CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
+_CHROME_RULE_PX = 4                    # rule line thickness
+_LOGO_W_PX = 250                       # header logo width (aspect preserved)
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+LOGO_PATH = os.path.join(_ASSETS_DIR, "pillora_logo.png")
+
+# Content band: between the two rule lines, with a little breathing room.
+_CONTENT_TOP_PX = _HEADER_LINE_Y_PX + 60
+_CONTENT_BOTTOM_PX = _FOOTER_LINE_Y_PX - 60
+_DEFAULT_CAPACITY_PX = _CONTENT_BOTTOM_PX - _CONTENT_TOP_PX
 
 # Page margins. Both variants leave a 360px gutter on the left where the question
 # number sits. Question images are scaled to a fixed 1760px content width and sit
@@ -84,6 +105,24 @@ class LayoutPlan:
     page_count: int
     blocks: list[Block]
     header_text: str = ""
+    footer_label: str = ""   # centered under the footer rule on every page of this section
+
+
+@lru_cache(maxsize=2)
+def _load_logo(target_w_px: int = _LOGO_W_PX):
+    """Load the Pillora logo as ``(ImageReader, w_px, h_px)`` scaled to
+    ``target_w_px`` (aspect preserved), or ``None`` if the asset is missing/
+    unreadable — chrome then simply renders without a logo. Cached, so adding
+    or changing the logo file takes effect on process restart."""
+    try:
+        img = Image.open(LOGO_PATH)
+        img.load()
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        h_px = round(img.height * (target_w_px / img.width))
+        return ImageReader(img), target_w_px, h_px
+    except Exception:
+        return None
 
 
 class LayoutEngine:
@@ -149,6 +188,18 @@ class LayoutEngine:
         def y_pt(dist_from_top_px: float) -> float:
             return (PAGE_H_PX - dist_from_top_px) * scale
 
+        page_num = 1
+
+        def new_page() -> None:
+            """Close the current page and start a fresh one, re-drawing chrome."""
+            nonlocal page_num
+            c.showPage()
+            page_num += 1
+            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+
+        # Chrome (rules, logo, website, footer, page number) on every page.
+        self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+
         used = 0.0  # px consumed in the content area of the current page
 
         header_px = _header_height_px(plan.header_text)
@@ -160,7 +211,7 @@ class LayoutEngine:
             block_h = self._block_height_px(block)
             gap = self.block_gap_px if used > 0 else 0
             if used > 0 and used + gap + block_h > self.page_capacity_px:
-                c.showPage()
+                new_page()
                 used = 0.0
                 gap = 0
             used += gap
@@ -170,7 +221,7 @@ class LayoutEngine:
                 c.setFillGray(_CREDIT_GREY)
                 c.drawString(
                     _LEFT_MARGIN_PX * scale,
-                    y_pt(_TOP_MARGIN_PX + used + _CREDIT_FONT_PX),
+                    y_pt(_CONTENT_TOP_PX + used + _CREDIT_FONT_PX),
                     block.source_label,
                 )
                 c.setFillGray(0)
@@ -185,11 +236,11 @@ class LayoutEngine:
                     s_img *= self.page_capacity_px / eff_h
                     eff_h = float(self.page_capacity_px)
                 if used > 0 and used + eff_h > self.page_capacity_px:
-                    c.showPage()
+                    new_page()
                     used = 0.0
 
                 reader = self._image_reader(fetch_bytes(pg.image_key))
-                top = _TOP_MARGIN_PX + used
+                top = _CONTENT_TOP_PX + used
                 c.drawImage(
                     reader,
                     _LEFT_MARGIN_PX * scale,  # left edge at the 360px margin
@@ -226,9 +277,47 @@ class LayoutEngine:
         """Whether this block gets a provenance credit line drawn above it."""
         return self.show_credit and bool(block.source_label)
 
+    def _draw_chrome(self, c, page_num, footer_label, scale, y_pt) -> None:
+        """Draw the page furniture: purple rule lines, logo, website, footer
+        label, and page number. Called once per page (page 1 restarts each
+        section, so combined PDFs number the question and answer papers 1..N
+        independently)."""
+        left = _MARGIN_X_PX * scale
+        right = (PAGE_W_PX - _MARGIN_X_PX) * scale
+
+        # Rule lines.
+        c.setStrokeColor(PURPLE)
+        c.setLineWidth(_CHROME_RULE_PX * scale)
+        c.line(left, y_pt(_HEADER_LINE_Y_PX), right, y_pt(_HEADER_LINE_Y_PX))
+        c.line(left, y_pt(_FOOTER_LINE_Y_PX), right, y_pt(_FOOTER_LINE_Y_PX))
+
+        # Logo top-left, vertically centered on the header rule.
+        logo = _load_logo()
+        if logo is not None:
+            reader, w_px, h_px = logo
+            top_px = _HEADER_LINE_Y_PX - h_px / 2
+            c.drawImage(
+                reader,
+                left,
+                y_pt(top_px + h_px),
+                width=w_px * scale,
+                height=h_px * scale,
+                mask="auto",
+            )
+
+        # Website centered on the header rule; footer label + page number below
+        # the footer rule.
+        c.setFillGray(0)
+        c.setFont(_CHROME_FONT, _CHROME_FONT_PX * scale)
+        c.drawCentredString(PAGE_W_PX / 2 * scale, y_pt(_HEADER_LINE_Y_PX - 15), WEBSITE)
+        footer_baseline = y_pt(_FOOTER_LINE_Y_PX + _CHROME_FONT_PX + 20)
+        if footer_label:
+            c.drawCentredString(PAGE_W_PX / 2 * scale, footer_baseline, footer_label)
+        c.drawRightString(right, footer_baseline, f"Page {page_num}")
+
     def _draw_header(self, c, header_text, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)
-        top = _TOP_MARGIN_PX + _HEADER_FONT_PX
+        top = _CONTENT_TOP_PX + _HEADER_FONT_PX
         for line in (header_text.splitlines() or [header_text]):
             c.drawString(_LEFT_MARGIN_PX * scale, y_pt(top), line)
             top += _HEADER_LINE_PX

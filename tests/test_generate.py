@@ -242,6 +242,56 @@ def test_credit_variant_renders_pdf(minimal_webp_bytes):
     assert pdf[:4] == b"%PDF"
 
 
+# ---------------------------------------------------------------------------
+# Layout engine — page chrome (header/footer)
+# ---------------------------------------------------------------------------
+
+
+def test_chrome_renders_without_logo(minimal_webp_bytes, monkeypatch):
+    # Missing logo asset must not raise — chrome renders without it.
+    from app.pdf import layout_engine
+
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", "/no/such/logo.png")
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.footer_label = "Questions"
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_chrome_renders_with_logo(minimal_webp_bytes, tmp_path, monkeypatch):
+    # A present logo exercises the drawImage(logo) path.
+    from PIL import Image as PILImage
+
+    from app.pdf import layout_engine
+
+    logo = tmp_path / "pillora_logo.png"
+    PILImage.new("RGBA", (500, 200), (134, 59, 255, 255)).save(logo)
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", str(logo))
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_chrome_does_not_change_page_count(minimal_webp_bytes):
+    # Chrome is drawn on every page but never adds pages.
+    engine = _engine(capacity_px=1000)
+    plan = engine.compute_layout([_make_block("1", [800]), _make_block("2", [800])])
+    plan.footer_label = "Questions"
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert _page_count(pdf) == 2
+
+
+def test_layout_plan_footer_label_defaults_empty():
+    plan = LayoutEngine().compute_layout([])
+    assert plan.footer_label == ""
+
+
 def test_question_variant_has_no_block_gap():
     engine = LayoutEngine(fit_width=True)
     assert engine.block_gap_px == 0
@@ -565,11 +615,13 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     assert q_engine.fit_width is True
     assert q_engine.show_credit is True
     assert q_plan.header_text == "Test paper"
+    assert q_plan.footer_label == "Questions"
     assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
 
     a_engine, a_plan = sections[1]
     assert a_engine.fit_width is False
     assert a_engine.show_credit is False
+    assert a_plan.footer_label == "Answers"
     assert a_plan.header_text == ""
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]
