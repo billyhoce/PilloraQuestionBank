@@ -8,7 +8,7 @@
 - **Framework:** FastAPI (REST API; first-class Pydantic validation; first-class Anthropic SDK)
 - **PDF → Image:** **PyMuPDF** (`fitz`), rendered at 300 dpi. *(Not `pdf2image`/Poppler as originally planned — no system dependency required.)*
 - **Image processing:** Pillow (WebP encoder)
-- **PDF generation:** ReportLab (dependency installed; **engine not yet implemented**, see below)
+- **PDF generation:** ReportLab (see [Paper Generation Engine](#paper-generation-engine-implemented))
 - **Auth:** bcrypt for password hashing, JWT (httpOnly cookie) via `python-jose`
 
 ## Project Layout (Actual)
@@ -100,10 +100,12 @@ POST   /api/generate/select      -- auto-select a randomized set of questions su
                                     school_id, exam_type_id, topic_ids[], exclusive,
                                     paper_number, search). Returns { items, total_marks,
                                     target_marks, exact, warning }.
-POST   /api/generate/paper       -- render ONE PDF variant from a manual selection.
+POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
-                                    "question"|"answer", header_text }. Returns
-                                    application/pdf. Empty question_ids -> 422.
+                                    "question"|"answer"|"combined", header_text }.
+                                    "combined" returns one PDF with the answer
+                                    paper appended after the question paper.
+                                    Returns application/pdf. Empty question_ids -> 422.
 ```
 
 `POST /api/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite
@@ -111,9 +113,9 @@ POST   /api/generate/paper       -- render ONE PDF variant from a manual selecti
 pool, excludes any `exclude_question_ids`, then runs `knapsack_select`. It never returns a 404 — an
 empty result with a `warning` string keeps the live builder UI responsive.
 
-`POST /api/generate/paper` renders the question **or** answer paper (one variant per call — the
-frontend calls it twice to get both PDFs). Both require authentication (`get_current_user`), not
-admin. See [Paper Generation Engine](#paper-generation-engine-implemented) below.
+`POST /api/generate/paper` renders the question paper, the answer paper, or both combined into a
+single PDF, depending on `variant`. Both endpoints require authentication (`get_current_user`),
+not admin. See [Paper Generation Engine](#paper-generation-engine-implemented) below.
 
 ## Import Pipeline (Server Side)
 
@@ -170,9 +172,12 @@ running total, so autofill tops up an existing selection instead of replacing it
 ## Paper Generation Engine (Implemented)
 
 `POST /api/generate/paper` (`app/routes/generate.py::generate_paper`) turns a manual selection into
-a PDF. It generates **one variant per call** — the frontend calls it twice, `variant="question"`
-then `variant="answer"`, to produce the separate question and answer papers, which follow identical
-layout rules. There is no server-side autofill-at-generate: the selection is already resolved
+a PDF. `variant="question"` and `variant="answer"` each generate one paper per call — the frontend
+calls it twice in the separate-PDFs mode to produce the question and answer papers, which follow
+identical layout rules. `variant="combined"` (the frontend's default mode) generates **one PDF**
+holding the question paper followed by the answer paper, each section starting on a fresh page and
+keeping its own layout rules; the answer section is omitted entirely when no selected question has
+answer pages. There is no server-side autofill-at-generate: the selection is already resolved
 (manually or via `/generate/select`) before this endpoint is hit.
 
 ### Route behavior
@@ -183,7 +188,8 @@ layout rules. There is no server-side autofill-at-generate: the selection is alr
   answer keeps the number of its question. For `variant="answer"`, a question with no answer pages
   is **skipped**, but its number stays reserved so the remaining answers still match the question
   paper.
-- `header_text` is printed only on the question variant.
+- `header_text` is printed only on the question variant (in `combined`, only on the question
+  section's first page).
 - Returns `Response(pdf, media_type="application/pdf")`. Empty `question_ids` → 422 (schema).
 
 ### Layout engine (`app/pdf/layout_engine.py`)
@@ -203,6 +209,12 @@ margins); `fit_width` selects the horizontal treatment per variant:
 
 Both variants draw the question number into the **360 px left margin**, right-aligned just left of
 the image.
+
+Rendering is split so sections can share a document: `LayoutEngine.render_onto(canvas, plan,
+fetch_bytes)` draws a plan onto an existing ReportLab canvas (ending on a fresh page), and
+`render(plan, fetch_bytes)` wraps it for a standalone PDF. The module-level
+`render_combined(sections, fetch_bytes)` takes `(engine, plan)` pairs and renders them into one
+PDF — how the `combined` variant appends the answer paper after the question paper.
 
 - `compute_layout(blocks, header_text="") -> LayoutPlan`: greedy **packing** — keeps a running
   cursor and places each block (one question's pages for this variant) on the current page while it

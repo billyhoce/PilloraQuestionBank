@@ -36,6 +36,20 @@ Topics are always displayed with their topic number as a `T{n}:` prefix, e.g. **
 | `/admin/reference` | Reference data CRUD | Admin |
 | `/admin/users` | User management | Admin |
 
+## Navigation (App Shell)
+
+All main routes (`/`, `/generate`, `/admin/*`) render inside a shared `<AppShell />`
+(`src/components/AppShell.jsx`) — a role-aware menubar (`<NavBar />`) plus the page content.
+`/login` and `/register` stay outside the shell. The menubar is always fully visible for the
+user's role — there is no "Admin" button to unlock it:
+
+- **Everyone:** Question Bank (`/`), Generate Paper (`/generate` — signed-out clicks land on
+  `/login` via `ProtectedRoute`).
+- **Admins additionally:** Reference, Import, Papers.
+- **Top right:** signed-in users get an account button (their email) opening a dropdown
+  (`<UserMenu />`) with **Log out** (closes on outside click / Escape; logging out returns to
+  `/`). Signed-out visitors see a **Log in** link instead.
+
 ## Import Flow UI (Admin)
 
 The full UX sequence the admin walks through. Each step is a UI state in the same page (or a wizard).
@@ -49,7 +63,8 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Server returns image URLs for every page (see `POST /api/import/upload-pdf` in [BACKEND.md](./BACKEND.md)).
 
 ### Step 3 — Grid Preview
-- Render all returned page images as a thumbnail grid.
+- Render all returned page images as a thumbnail grid — **max 5 pages per row** (fewer on narrow
+  screens), thumbnails at an A4 aspect ratio so they scale with the cell width.
 - Click a thumbnail to open a **lightbox / zoom modal**.
 
 ### Step 4 — Auto-label Questions
@@ -120,9 +135,9 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 ## Paper Generation UI
 
 `/generate` (`src/pages/GeneratePage.jsx`), authenticated-only. A single page combining manual
-selection and marks-based autofill — not separate tabs. Reached via a "Create Paper" link in the
-Browse header. Layout: filtered results on the left, a sticky sidebar (autocreate panel + selection
-cart) on the right.
+selection and marks-based autofill — not separate tabs. Reached via the "Generate Paper" link in
+the shared menubar. Layout: filtered results on the left, a sticky sidebar (autocreate panel +
+selection cart) on the right.
 
 ### Filtered results (left)
 - Reuses the Browse `<FilterBar />` and `<QuestionCard />` (in `selectable` mode) plus paginated
@@ -147,16 +162,20 @@ cart) on the right.
 
 ### Generate PDF (right)
 - Optional **header / instructions** `<textarea>` printed on the first page of the question PDF.
-- **Generate PDF** button (enabled once the cart is non-empty). On click it calls
-  `api.generate.paper` **twice in parallel** — `variant: "question"` (with `header_text`) and
-  `variant: "answer"` — each returning a PDF `Blob` (a binary fetch that bypasses the JSON-only
-  `request` helper).
-- An **estimated progress bar** (client-side only, no backend streaming) eases toward ~90% while the
-  requests are in flight, then snaps to 100% on completion.
-- On success both blobs auto-download via a local `downloadBlob` helper, named
-  `{timestamp}_question.pdf` and `{timestamp}_answer.pdf` (one shared client-generated timestamp; a
-  short gap between the two so browsers don't drop the second download). Errors surface as an inline
-  notice. See [BACKEND.md](./BACKEND.md#paper-generation-engine-implemented).
+- A **"Download as"** radio selector chooses the output mode, defaulting to **1 combined PDF**:
+  - **Combined (default):** one call to `api.generate.paper` with `variant: "combined"` (and
+    `header_text`); the single blob downloads as `{timestamp}_paper.pdf` — question paper first,
+    answer paper appended behind it.
+  - **Separate:** calls `api.generate.paper` **twice in parallel** — `variant: "question"` (with
+    `header_text`) and `variant: "answer"` — downloading `{timestamp}_question.pdf` and
+    `{timestamp}_answer.pdf` (one shared client-generated timestamp; a short gap between the two so
+    browsers don't drop the second download).
+- Each call returns a PDF `Blob` (a binary fetch that bypasses the JSON-only `request` helper) and
+  auto-downloads via a local `downloadBlob` helper.
+- **Generate PDF** button (enabled once the cart is non-empty). An **estimated progress bar**
+  (client-side only, no backend streaming) eases toward ~90% while the requests are in flight, then
+  snaps to 100% on completion. Errors surface as an inline notice.
+  See [BACKEND.md](./BACKEND.md#paper-generation-engine-implemented).
 
 ## Admin CRUD UI
 
@@ -176,6 +195,9 @@ A simple management surface — list / create / edit / delete — for each of:
 
 ## Auth UI
 
-- `/login`, `/register`, logout button in app shell.
+- `/login`, `/register`; **Log out** lives in the menubar's account dropdown (`<UserMenu />`, see
+  [Navigation](#navigation-app-shell)).
+- After login (and for already-authenticated visits to `/login`/`/register`), **all roles redirect
+  to `/`** (Question Bank).
 - Role-aware routing: redirect non-admins away from `/admin/*`.
 - Persist session in `httpOnly` cookie (set by backend) — no token handling in JS.

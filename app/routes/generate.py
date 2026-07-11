@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models.orm import Question, User
-from app.pdf.layout_engine import Block, LayoutEngine
+from app.pdf.layout_engine import Block, LayoutEngine, render_combined
 from app.routes.auth import get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
@@ -24,6 +24,22 @@ def _source_label(q: Question) -> str:
     """Human-readable origin of a question, e.g. 'Raffles 2024 Sec 3 EOY Q5'."""
     p = q.paper
     return f"{p.school.name} {p.year} {p.level.name} {p.exam_type.name} Q{q.question_number}"
+
+
+def _blocks_for(ordered: list[Question], variant: str) -> list[Block]:
+    """Build one Block per question holding its ``variant`` pages, numbered by
+    selection order. In the answer variant a question with no answer pages is
+    skipped, but its number stays reserved."""
+    blocks: list[Block] = []
+    for idx, q in enumerate(ordered, start=1):
+        pages = sorted(
+            (pg for pg in q.pages if pg.page_type == variant),
+            key=lambda pg: pg.page_order,
+        )
+        if variant == "answer" and not pages:
+            continue  # reserve the number, but nothing to render
+        blocks.append(Block(label=str(idx), source_label=_source_label(q), pages=pages))
+    return blocks
 
 
 @router.post("/generate/select", response_model=SelectResponse)
@@ -94,12 +110,14 @@ def generate_paper(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Render one PDF variant (question or answer paper) from a manual selection.
+    """Render a PDF (question paper, answer paper, or both combined) from a
+    manual selection.
 
     Questions are laid out in ``question_ids`` order and numbered 1..N. The same
     numbers are used in both variants, so an answer keeps the number of its
     question even when earlier questions have no answer pages (those are skipped
-    in the answer variant, but their number is still reserved).
+    in the answer variant, but their number is still reserved). The ``combined``
+    variant renders the question paper followed by the answer paper in one PDF.
     """
     rows = (
         db.query(Question)
@@ -110,20 +128,22 @@ def generate_paper(
     by_id = {q.id: q for q in rows}
     ordered = [by_id[qid] for qid in payload.question_ids if qid in by_id]
 
-    blocks: list[Block] = []
-    for idx, q in enumerate(ordered, start=1):
-        pages = sorted(
-            (pg for pg in q.pages if pg.page_type == payload.variant),
-            key=lambda pg: pg.page_order,
-        )
-        if payload.variant == "answer" and not pages:
-            continue  # reserve the number, but nothing to render
-        blocks.append(Block(label=str(idx), source_label=_source_label(q), pages=pages))
-
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.
-    engine = LayoutEngine(fit_width=(payload.variant == "question"))
-    header = payload.header_text if payload.variant == "question" else ""
-    plan = engine.compute_layout(blocks, header_text=header)
-    pdf = engine.render(plan, fetch_bytes=get_image_bytes)
+    if payload.variant == "combined":
+        q_engine = LayoutEngine(fit_width=True)
+        sections = [(q_engine, q_engine.compute_layout(
+            _blocks_for(ordered, "question"), header_text=payload.header_text
+        ))]
+        a_blocks = _blocks_for(ordered, "answer")
+        if a_blocks:  # no trailing blank page when nothing has answers
+            a_engine = LayoutEngine(fit_width=False)
+            sections.append((a_engine, a_engine.compute_layout(a_blocks)))
+        pdf = render_combined(sections, fetch_bytes=get_image_bytes)
+    else:
+        blocks = _blocks_for(ordered, payload.variant)
+        engine = LayoutEngine(fit_width=(payload.variant == "question"))
+        header = payload.header_text if payload.variant == "question" else ""
+        plan = engine.compute_layout(blocks, header_text=header)
+        pdf = engine.render(plan, fetch_bytes=get_image_bytes)
     return Response(content=pdf, media_type="application/pdf")

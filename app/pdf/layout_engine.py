@@ -1,8 +1,10 @@
 """PDF layout engine — packs question (or answer) page-images onto A4 pages.
 
-The engine renders ONE PDF variant at a time. Callers invoke it twice — once with
-each question's ``question`` pages, once with its ``answer`` pages — to produce the
-separate question and answer papers, which follow identical layout rules.
+Each ``LayoutEngine`` lays out ONE PDF variant. Callers either invoke ``render``
+twice — once with each question's ``question`` pages, once with its ``answer``
+pages — to produce separate question and answer papers, or pass both plans to
+``render_combined`` to get a single PDF with the answer paper appended after the
+question paper. Both variants follow identical layout rules.
 
 Layout rules:
   * Blocks (one per question) are laid out in the order given.
@@ -114,9 +116,19 @@ class LayoutEngine:
 
     def render(self, plan: LayoutPlan, fetch_bytes) -> bytes:
         """Render the plan to PDF bytes. ``fetch_bytes(image_key) -> bytes``."""
-        scale = A4[0] / PAGE_W_PX  # points per px
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=A4)
+        self.render_onto(c, plan, fetch_bytes)
+        c.save()
+        return buf.getvalue()
+
+    def render_onto(self, c, plan: LayoutPlan, fetch_bytes) -> None:
+        """Draw the plan onto an existing canvas, ending on a fresh page.
+
+        Finishes with ``showPage()`` so a subsequent section (see
+        ``render_combined``) starts on its own page.
+        """
+        scale = A4[0] / PAGE_W_PX  # points per px
 
         def y_pt(dist_from_top_px: float) -> float:
             return (PAGE_H_PX - dist_from_top_px) * scale
@@ -175,8 +187,6 @@ class LayoutEngine:
                 used += eff_h
 
         c.showPage()
-        c.save()
-        return buf.getvalue()
 
     # -- helpers ------------------------------------------------------------
 
@@ -197,3 +207,14 @@ class LayoutEngine:
         if img.mode != "RGB":
             img = img.convert("RGB")
         return ImageReader(img)
+
+
+def render_combined(sections: list[tuple[LayoutEngine, LayoutPlan]], fetch_bytes) -> bytes:
+    """Render several (engine, plan) sections into one PDF, each starting on a
+    fresh page — e.g. the question paper followed by the answer paper."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    for engine, plan in sections:
+        engine.render_onto(c, plan, fetch_bytes)
+    c.save()
+    return buf.getvalue()

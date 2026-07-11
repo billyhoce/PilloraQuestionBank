@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
@@ -41,7 +40,6 @@ function paramsFromFilters(filters) {
 }
 
 export default function BrowsePage() {
-  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const filters = useMemo(() => filtersFromParams(searchParams), [searchParams])
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
@@ -149,25 +147,7 @@ export default function BrowsePage() {
   const hasMore = items.length < total
 
   return (
-    <div className="min-h-screen bg-white">
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <Link to="/" className="text-lg font-semibold text-gray-900">PilloraQuestionBank</Link>
-        <div className="flex items-center gap-3 text-sm">
-          {user ? (
-            <>
-              <Link to="/generate" className="text-blue-600 hover:underline">Create Paper</Link>
-              <span className="text-gray-500">{user.email}</span>
-              {user.role === 'admin' ? (
-                <Link to="/admin/reference" className="text-blue-600 hover:underline">Admin</Link>
-              ) : null}
-            </>
-          ) : (
-            <Link to="/login" className="text-blue-600 hover:underline">Log in</Link>
-          )}
-        </div>
-      </header>
-
-      <main className="max-w-[90%] mx-auto px-6 py-6 space-y-6">
+    <div className="max-w-[90%] mx-auto space-y-6">
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
 
         <ErrorBanner message={error} />
@@ -205,7 +185,6 @@ export default function BrowsePage() {
             </button>
           </div>
         ) : null}
-      </main>
 
       {selectedItem ? (
         <QuestionDetailModal
