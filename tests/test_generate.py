@@ -218,6 +218,30 @@ def test_answer_variant_adds_gap_between_blocks():
     assert [b.page_index for b in plan.blocks] == [0, 1]
 
 
+def test_credit_reserves_extra_block_height():
+    # show_credit adds a fixed band above each block, so the same block is taller
+    # under a credit-enabled engine than one without.
+    from app.pdf.layout_engine import _CREDIT_BAND_PX
+
+    block = _make_block("1", [800])
+    plain = LayoutEngine(fit_width=False, show_credit=False)
+    credited = LayoutEngine(fit_width=False, show_credit=True)
+    assert credited._block_height_px(block) == plain._block_height_px(block) + _CREDIT_BAND_PX
+
+
+def test_credit_skipped_when_source_label_empty():
+    block = _make_block("1", [800], source_label="")
+    credited = LayoutEngine(fit_width=False, show_credit=True)
+    assert credited._block_height_px(block) == 800  # no band reserved
+
+
+def test_credit_variant_renders_pdf(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True, show_credit=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+
+
 def test_question_variant_has_no_block_gap():
     engine = LayoutEngine(fit_width=True)
     assert engine.block_gap_px == 0
@@ -422,6 +446,52 @@ def test_generate_paper_renumbers_in_selection_order(public_client, sample_paper
     assert captured["fit_width"] is True
 
 
+def test_generate_paper_question_variant_credits_source(
+    public_client, sample_paper, db_session, reference_data
+):
+    # Question variant enables credits and labels each block with the slash format
+    # [School/Year/ExamType/P{paper_number}/Q{question_number}].
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_compute(self, blocks, header_text=""):
+        captured["blocks"] = blocks
+        captured["show_credit"] = self.show_credit
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "question"})
+
+    assert resp.status_code == 200
+    assert captured["show_credit"] is True
+    assert captured["blocks"][0].source_label == "[Raffles Institution/2024/EOY/P1/Q1]"
+
+
+def test_generate_paper_answer_variant_no_credit(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_compute(self, blocks, header_text=""):
+        captured["show_credit"] = self.show_credit
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "answer"})
+
+    assert resp.status_code == 200
+    assert captured["show_credit"] is False
+
+
 def test_generate_paper_answer_variant_skips_questions_without_answers(
     public_client, sample_paper, db_session, reference_data
 ):
@@ -493,11 +563,13 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
 
     q_engine, q_plan = sections[0]
     assert q_engine.fit_width is True
+    assert q_engine.show_credit is True
     assert q_plan.header_text == "Test paper"
     assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
 
     a_engine, a_plan = sections[1]
     assert a_engine.fit_width is False
+    assert a_engine.show_credit is False
     assert a_plan.header_text == ""
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]

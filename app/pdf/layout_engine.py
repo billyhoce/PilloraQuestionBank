@@ -51,6 +51,15 @@ _HEADER_FONT_PX = 42  # ~12pt at 300 DPI
 _HEADER_LINE_PX = 58
 _HEADER_PAD_PX = 40
 
+# Per-question provenance credit (question paper only). Drawn just above each
+# question in small grey type; the whole band is reserved in the block height so
+# packing and rendering agree.
+_CREDIT_FONT = "Helvetica"
+_CREDIT_FONT_PX = 34  # ~10pt at 300 DPI
+_CREDIT_GAP_PX = 18   # gap between the credit line and the image below it
+_CREDIT_BAND_PX = _CREDIT_FONT_PX + _CREDIT_GAP_PX  # vertical space one credit reserves
+_CREDIT_GREY = 0.35
+
 
 def _header_height_px(header_text: str) -> int:
     """Vertical band reserved for the header on the first page (0 if no header)."""
@@ -78,13 +87,20 @@ class LayoutPlan:
 
 
 class LayoutEngine:
-    def __init__(self, page_capacity_px: int = _DEFAULT_CAPACITY_PX, fit_width: bool = True):
+    def __init__(
+        self,
+        page_capacity_px: int = _DEFAULT_CAPACITY_PX,
+        fit_width: bool = True,
+        show_credit: bool = False,
+    ):
         # fit_width=True  -> scale image to a fixed 1760px content width, centered
         #                    on the page (question paper).
         # fit_width=False -> keep the image at native size, flush to the left
         #                    margin, with a gap between blocks (answer paper).
+        # show_credit     -> draw each block's source_label above it (question paper).
         self.page_capacity_px = page_capacity_px
         self.fit_width = fit_width
+        self.show_credit = show_credit
         self.block_gap_px = 0 if fit_width else _ANSWER_GAP_PX
 
     def _image_scale(self, pg) -> float:
@@ -149,6 +165,17 @@ class LayoutEngine:
                 gap = 0
             used += gap
 
+            if self._credit_for(block):
+                c.setFont(_CREDIT_FONT, _CREDIT_FONT_PX * scale)
+                c.setFillGray(_CREDIT_GREY)
+                c.drawString(
+                    _LEFT_MARGIN_PX * scale,
+                    y_pt(_TOP_MARGIN_PX + used + _CREDIT_FONT_PX),
+                    block.source_label,
+                )
+                c.setFillGray(0)
+                used += _CREDIT_BAND_PX
+
             first_page = True
             for pg in block.pages:
                 s_img = self._image_scale(pg)
@@ -191,7 +218,13 @@ class LayoutEngine:
     # -- helpers ------------------------------------------------------------
 
     def _block_height_px(self, block: Block) -> float:
-        return sum(pg.height_px * self._image_scale(pg) for pg in block.pages)
+        images = sum(pg.height_px * self._image_scale(pg) for pg in block.pages)
+        credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
+        return images + credit
+
+    def _credit_for(self, block: Block) -> bool:
+        """Whether this block gets a provenance credit line drawn above it."""
+        return self.show_credit and bool(block.source_label)
 
     def _draw_header(self, c, header_text, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)

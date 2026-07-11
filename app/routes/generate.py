@@ -21,9 +21,18 @@ router = APIRouter(prefix="/api", tags=["generation"])
 
 
 def _source_label(q: Question) -> str:
-    """Human-readable origin of a question, e.g. 'Raffles 2024 Sec 3 EOY Q5'."""
+    """Provenance credit for a question, drawn above it on the question paper.
+
+    Format: ``[School/Year/ExamType/P{paper_number}/Q{question_number}]`` — e.g.
+    ``[Bendemeer Secondary School/2024/Prelim/P2/Q6]``. Uses the question's
+    original number (not the renumbered position). ``paper_number`` is stored as
+    a bare ``"1"``/``"2"`` so a ``P`` prefix is added here.
+    """
     p = q.paper
-    return f"{p.school.name} {p.year} {p.level.name} {p.exam_type.name} Q{q.question_number}"
+    return (
+        f"[{p.school.name}/{p.year}/{p.exam_type.name}/"
+        f"P{p.paper_number}/Q{q.question_number}]"
+    )
 
 
 def _blocks_for(ordered: list[Question], variant: str) -> list[Block]:
@@ -131,7 +140,7 @@ def generate_paper(
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.
     if payload.variant == "combined":
-        q_engine = LayoutEngine(fit_width=True)
+        q_engine = LayoutEngine(fit_width=True, show_credit=True)
         sections = [(q_engine, q_engine.compute_layout(
             _blocks_for(ordered, "question"), header_text=payload.header_text
         ))]
@@ -141,9 +150,10 @@ def generate_paper(
             sections.append((a_engine, a_engine.compute_layout(a_blocks)))
         pdf = render_combined(sections, fetch_bytes=get_image_bytes)
     else:
+        is_question = payload.variant == "question"
         blocks = _blocks_for(ordered, payload.variant)
-        engine = LayoutEngine(fit_width=(payload.variant == "question"))
-        header = payload.header_text if payload.variant == "question" else ""
+        engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
+        header = payload.header_text if is_question else ""
         plan = engine.compute_layout(blocks, header_text=header)
         pdf = engine.render(plan, fetch_bytes=get_image_bytes)
     return Response(content=pdf, media_type="application/pdf")

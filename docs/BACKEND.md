@@ -232,9 +232,17 @@ PDF — how the `combined` variant appends the answer paper after the question p
   bytes and vice-versa, so no image is fetched twice across the two requests.
 
 Dataclasses: `Block(label, source_label, pages, page_index)` and
-`LayoutPlan(page_count, blocks, header_text)`. `source_label`
-(`{School} {Year} {Level} {ExamType} Q{original_number}`) is assembled per question but not yet
-drawn — kept for future use.
+`LayoutPlan(page_count, blocks, header_text)`.
+
+**Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
+small grey provenance line just above its image — `source_label`, formatted
+`[{School}/{Year}/{ExamType}/P{paper_number}/Q{original_number}]` (e.g.
+`[Bendemeer Secondary School/2024/Prelim/P2/Q6]`; `paper_number` is stored bare, so a `P` is
+prefixed). `LayoutEngine(show_credit=True)` reserves a fixed band (`_CREDIT_BAND_PX`) in each
+block's height so packing and rendering stay in sync, then draws the line and advances the cursor
+before the image. The route enables it for the `question` variant (and the `combined` PDF's
+question section) and leaves it off for the answer paper. Blocks with an empty `source_label`
+reserve no band.
 
 ### Library
 
