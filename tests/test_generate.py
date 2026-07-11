@@ -292,6 +292,57 @@ def test_layout_plan_footer_label_defaults_empty():
     assert plan.footer_label == ""
 
 
+# ---------------------------------------------------------------------------
+# Layout engine — cover page
+# ---------------------------------------------------------------------------
+
+
+def _cover(total_marks=42, is_questions=True):
+    from app.pdf.layout_engine import CoverSpec
+
+    return CoverSpec(
+        title="Topical Worksheets",
+        subtitle1="Secondary 3 Mathematics",
+        subtitle2="2024 Prelim",
+        body="Dear students,\n\nWork hard.\n\nTeacher Jia Xin",
+        total_marks=total_marks,
+        is_questions=is_questions,
+    )
+
+
+def test_cover_adds_one_page(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True)
+    blocks = [_make_block("1", [800])]
+    no_cover = engine.compute_layout(blocks)
+    with_cover = engine.compute_layout([_make_block("1", [800])])
+    with_cover.cover = _cover()
+    n0 = _page_count(engine.render(no_cover, fetch_bytes=lambda k: minimal_webp_bytes))
+    n1 = _page_count(engine.render(with_cover, fetch_bytes=lambda k: minimal_webp_bytes))
+    assert n1 == n0 + 1
+
+
+def test_cover_renders_without_logo(minimal_webp_bytes, monkeypatch):
+    from app.pdf import layout_engine
+
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", "/no/such/logo.png")
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_cover_empty_blocks_still_renders(minimal_webp_bytes):
+    # A cover with no questions is a single page.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert _page_count(pdf) == 1
+
+
 def test_question_variant_has_no_block_gap():
     engine = LayoutEngine(fit_width=True)
     assert engine.block_gap_px == 0
@@ -655,6 +706,84 @@ def test_generate_paper_combined_omits_empty_answer_section(
     assert resp.status_code == 200
     assert len(captured["sections"]) == 1
     assert captured["sections"][0][0].fit_width is True
+
+
+def test_generate_paper_attaches_cover_and_total_marks(
+    public_client, sample_paper, db_session, reference_data
+):
+    # Question variant: cover built with the paper total (5+3+2) and Questions.
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+            "cover_title": "My Paper",
+            "cover_subtitle2": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    plan = captured["plan"]
+    assert plan.cover is not None
+    assert plan.cover.total_marks == 10
+    assert plan.cover.is_questions is True
+    assert plan.cover.title == "My Paper"
+    assert plan.footer_label == "2024 Prelim Questions"
+
+
+def test_generate_paper_include_cover_false_omits_cover(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question", "include_cover": False,
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover is None
+
+
+def test_generate_paper_combined_covers_each_section(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "combined", "cover_subtitle2": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    (_, q_plan), (_, a_plan) = captured["sections"]
+    assert q_plan.cover.is_questions is True and q_plan.cover.total_marks == 10
+    assert a_plan.cover.is_questions is False and a_plan.cover.total_marks == 10
+    assert a_plan.footer_label == "2024 Prelim Answers"
 
 
 def test_generate_paper_rejects_unknown_variant(public_client):

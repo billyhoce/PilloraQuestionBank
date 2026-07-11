@@ -102,9 +102,15 @@ POST   /api/generate/select      -- auto-select a randomized set of questions su
                                     target_marks, exact, warning }.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
-                                    "question"|"answer"|"combined", header_text }.
+                                    "question"|"answer"|"combined", header_text,
+                                    include_cover, cover_title, cover_subtitle1,
+                                    cover_subtitle2, cover_body }.
                                     "combined" returns one PDF with the answer
                                     paper appended after the question paper.
+                                    Each page carries branded header/footer chrome;
+                                    the question paper credits each question's source;
+                                    a cover page (per section, with a marks box) is
+                                    included unless include_cover=false.
                                     Returns application/pdf. Empty question_ids -> 422.
 ```
 
@@ -232,8 +238,9 @@ PDF — how the `combined` variant appends the answer paper after the question p
   production `fetch_bytes` is `get_image_bytes`; the `variant="answer"` call only fetches answer
   bytes and vice-versa, so no image is fetched twice across the two requests.
 
-Dataclasses: `Block(label, source_label, pages, page_index)` and
-`LayoutPlan(page_count, blocks, header_text, footer_label)`.
+Dataclasses: `Block(label, source_label, pages, page_index)`,
+`LayoutPlan(page_count, blocks, header_text, footer_label, cover)`, and
+`CoverSpec(title, subtitle1, subtitle2, body, total_marks, is_questions)`.
 
 **Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
 small grey provenance line just above its image — `source_label`, formatted
@@ -262,6 +269,21 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
 Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined`
 PDF the question and answer papers number independently. The free-text `header_text` instructions
 still render on the first content page, below the header rule.
+
+### Cover page
+
+When `LayoutPlan.cover` is set (a `CoverSpec`), `render_onto` draws a branded cover as the
+section's **first page** (page 1), then content starts on page 2 (`_draw_cover` → `_draw_marks_box`
++ `_wrap`). The cover shows: the logo centered near the top; an editable **title**; **subtitle 1**
+with `" – Questions"`/`" – Answers"` appended per variant (`is_questions`); an editable **subtitle
+2**; the editable **letter body** (word-wrapped); a **marks box top-right** (`______ / {total}`);
+a copyright line; and the standard chrome. A cover-only section (no blocks) stays a single page.
+
+The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, builds a `CoverSpec`
+per section from the request's `cover_*` fields (question section `is_questions=True`, answer
+section `False`), and includes it unless `include_cover=false`. In `combined`, a cover is prepended
+to **each** section. Cover-text defaults live in `app/schemas/generate.py` (`DEFAULT_COVER_BODY`,
+`cover_title="Topical Worksheets"`), mirrored in the frontend so the fields are pre-filled/editable.
 
 ### Library
 

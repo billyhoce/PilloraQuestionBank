@@ -175,7 +175,8 @@ export const api = {
     // body: { filters, target_marks, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
     // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
-    // header_text }. Returns a Blob (binary) — bypasses `request`, which is JSON-only.
+    // header_text, include_cover, cover_title, cover_subtitle1, cover_subtitle2,
+    // cover_body }. Returns a Blob (binary) — bypasses `request`, which is JSON-only.
     paper: async (body) => {
       const res = await fetch('/api/generate/paper', {
         method: 'POST',

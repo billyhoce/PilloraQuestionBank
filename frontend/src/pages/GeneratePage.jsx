@@ -21,6 +21,23 @@ const EMPTY_FILTERS = {
   search: '',
 }
 
+// Default cover letter. Mirrors app/schemas/generate.py DEFAULT_COVER_BODY — the
+// textarea is pre-filled with this and sent as-is; keep the two copies in sync.
+const DEFAULT_COVER_BODY = `Dear students,
+
+Did you know that research shows students learn best when they focus on topical practice first before moving on to full-paper practice? Many students jump straight into full exam papers as practice without realising that they are losing marks in the SAME few areas every time.
+
+That is why I have compiled and vetted these topical worksheets, making sure they contain only exam-style questions.
+
+I recommend identifying your weaker topics and practising them using these topical worksheets before moving to timed full papers. If you need help figuring out your weaker areas, or need to clarify anything about any specific topic, come book a consultation session with me through my website, without having to sign up for any tuition package.
+
+For more resources such as Math and Science notes, topical worksheets, WA1–3/EOY papers, and textbook/workbook answers, please visit www.pillora.com.sg.
+
+You can do it! All the best :)
+
+Teacher Jia Xin
+Founder of Pillora Learning`
+
 // Map the UI filter object to api.questions.list arguments (same as BrowsePage).
 function filtersToListArgs(filters, page) {
   return {
@@ -103,6 +120,13 @@ export default function GeneratePage() {
   // PDF generation state
   const [headerText, setHeaderText] = useState('')
   const [outputMode, setOutputMode] = useState('combined') // 'combined' | 'separate'
+
+  // Cover page state (editable defaults)
+  const [includeCover, setIncludeCover] = useState(true)
+  const [coverTitle, setCoverTitle] = useState('Topical Worksheets')
+  const [coverSubtitle1, setCoverSubtitle1] = useState('')
+  const [coverSubtitle2, setCoverSubtitle2] = useState('')
+  const [coverBody, setCoverBody] = useState(DEFAULT_COVER_BODY)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
   const progressTimer = useRef(null)
@@ -259,10 +283,18 @@ export default function GeneratePage() {
 
     const ts = formatTimestamp(new Date())
     const ids = cart.map(it => it.id)
+    // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
+    const cover = {
+      include_cover: includeCover,
+      cover_title: coverTitle,
+      cover_subtitle1: coverSubtitle1,
+      cover_subtitle2: coverSubtitle2,
+      cover_body: coverBody,
+    }
     try {
       if (outputMode === 'combined') {
         const blob = await api.generate.paper({
-          question_ids: ids, variant: 'combined', header_text: headerText,
+          question_ids: ids, variant: 'combined', header_text: headerText, ...cover,
         })
         stopProgress()
         setGenProgress(100)
@@ -270,8 +302,8 @@ export default function GeneratePage() {
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
-          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText }),
-          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '' }),
+          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText, ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '', ...cover }),
         ])
         stopProgress()
         setGenProgress(100)
@@ -453,6 +485,52 @@ export default function GeneratePage() {
                   ))}
                 </ul>
               )}
+
+              <div className="space-y-2 pt-1 border-t border-gray-100">
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-700 pt-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeCover}
+                    onChange={e => setIncludeCover(e.target.checked)}
+                  />
+                  Include cover page
+                </label>
+                {includeCover ? (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={coverTitle}
+                      onChange={e => setCoverTitle(e.target.value)}
+                      placeholder="Title"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={coverSubtitle1}
+                      onChange={e => setCoverSubtitle1(e.target.value)}
+                      placeholder="Subtitle 1 — e.g. Secondary 3 Mathematics"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={coverSubtitle2}
+                      onChange={e => setCoverSubtitle2(e.target.value)}
+                      placeholder="Subtitle 2 — e.g. 2024 Prelim"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <textarea
+                      value={coverBody}
+                      onChange={e => setCoverBody(e.target.value)}
+                      rows={5}
+                      placeholder="Cover letter / message"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                    />
+                    <p className="text-[11px] text-gray-400">
+                      Marks box on the cover shows the paper total automatically.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="space-y-1 pt-1">
                 <label className="text-xs text-gray-600" htmlFor="header-text">

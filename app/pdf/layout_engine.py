@@ -53,6 +53,20 @@ _CONTENT_TOP_PX = _HEADER_LINE_Y_PX + 60
 _CONTENT_BOTTOM_PX = _FOOTER_LINE_Y_PX - 60
 _DEFAULT_CAPACITY_PX = _CONTENT_BOTTOM_PX - _CONTENT_TOP_PX
 
+# Cover page.
+_COVER_LOGO_W_PX = 350
+_COVER_TITLE_FONT_PX = 70
+_COVER_SUBTITLE_FONT_PX = 60
+_COVER_BODY_FONT_PX = 45
+_COVER_BODY_LINE_PX = 66        # line advance within the letter paragraph
+_COVER_BODY_W_PX = 1500         # wrap width for the letter paragraph
+_COVER_COPYRIGHT_FONT_PX = 40
+_COVER_COPYRIGHT = "© Pillora Learning — All worksheets are strictly for personal use."
+# Marks box (top-right of the cover content area).
+_MARKS_BOX_W_PX = 460
+_MARKS_BOX_H_PX = 150
+_MARKS_BOX_FONT_PX = 52
+
 # Page margins. Both variants leave a 360px gutter on the left where the question
 # number sits. Question images are scaled to a fixed 1760px content width and sit
 # centered on the page (1760 + 360 + 360 = 2480). Answer images keep their
@@ -101,11 +115,24 @@ class Block:
 
 
 @dataclass
+class CoverSpec:
+    """Editable cover-page content for one section (question or answer paper)."""
+
+    title: str            # e.g. "Topical Worksheets"
+    subtitle1: str        # topic/subject line; " – Questions/Answers" appended per variant
+    subtitle2: str        # e.g. "2024 Prelim"
+    body: str             # the letter paragraph (newline-separated)
+    total_marks: int      # shown in the top-right marks box
+    is_questions: bool    # True → "Questions", False → "Answers"
+
+
+@dataclass
 class LayoutPlan:
     page_count: int
     blocks: list[Block]
     header_text: str = ""
     footer_label: str = ""   # centered under the footer rule on every page of this section
+    cover: "CoverSpec | None" = None  # optional cover page rendered as the section's first page
 
 
 @lru_cache(maxsize=2)
@@ -197,8 +224,16 @@ class LayoutEngine:
             page_num += 1
             self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
 
-        # Chrome (rules, logo, website, footer, page number) on every page.
-        self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+        # Optional cover as the section's first page; content then starts on the
+        # next page (skipped when there is nothing to render, so a cover-only
+        # section is a single page). Otherwise draw chrome for the first content
+        # page directly.
+        if plan.cover is not None:
+            self._draw_cover(c, plan.cover, plan.footer_label, page_num, scale, y_pt)
+            if plan.blocks:
+                new_page()
+        else:
+            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
 
         used = 0.0  # px consumed in the content area of the current page
 
@@ -314,6 +349,102 @@ class LayoutEngine:
         if footer_label:
             c.drawCentredString(PAGE_W_PX / 2 * scale, footer_baseline, footer_label)
         c.drawRightString(right, footer_baseline, f"Page {page_num}")
+
+    def _draw_cover(self, c, cover, footer_label, page_num, scale, y_pt) -> None:
+        """Render the branded cover page: logo, title, subtitles, the letter
+        paragraph, a marks box top-right, a copyright line, and the standard
+        page chrome. Drawn as the section's first page."""
+        cx = PAGE_W_PX / 2 * scale
+        c.setFillGray(0)
+
+        # Logo centered near the top of the content band.
+        y = _CONTENT_TOP_PX + 40
+        logo = _load_logo(_COVER_LOGO_W_PX)
+        if logo is not None:
+            reader, w_px, h_px = logo
+            c.drawImage(
+                reader,
+                (PAGE_W_PX - w_px) / 2 * scale,
+                y_pt(y + h_px),
+                width=w_px * scale,
+                height=h_px * scale,
+                mask="auto",
+            )
+            y += h_px + 90
+        else:
+            y += 200
+
+        # Title + subtitles, centered.
+        variant_word = "Questions" if cover.is_questions else "Answers"
+        sub1 = f"{cover.subtitle1} – {variant_word}" if cover.subtitle1 else variant_word
+        c.setFont(_LABEL_FONT, _COVER_TITLE_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(y + _COVER_TITLE_FONT_PX), cover.title)
+        y += _COVER_TITLE_FONT_PX + 60
+        c.setFont(_LABEL_FONT, _COVER_SUBTITLE_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), sub1)
+        y += _COVER_SUBTITLE_FONT_PX + 30
+        if cover.subtitle2:
+            c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), cover.subtitle2)
+            y += _COVER_SUBTITLE_FONT_PX + 30
+
+        # Marks box, top-right of the content area.
+        self._draw_marks_box(c, cover.total_marks, scale, y_pt)
+
+        # Letter paragraph: wrapped, left-aligned, in a centered column below.
+        col_x = (PAGE_W_PX - _COVER_BODY_W_PX) / 2 * scale
+        by = y + 90
+        c.setFont(_HEADER_FONT, _COVER_BODY_FONT_PX * scale)
+        for line in cover.body.split("\n"):
+            if not line.strip():
+                by += _COVER_BODY_LINE_PX
+                continue
+            for wrapped in self._wrap(c, line, _COVER_BODY_FONT_PX, _COVER_BODY_W_PX, scale):
+                c.drawString(col_x, y_pt(by + _COVER_BODY_FONT_PX), wrapped)
+                by += _COVER_BODY_LINE_PX
+
+        # Copyright, just above the footer rule.
+        c.setFont(_HEADER_FONT, _COVER_COPYRIGHT_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(_CONTENT_BOTTOM_PX - 20), _COVER_COPYRIGHT)
+
+        self._draw_chrome(c, page_num, footer_label, scale, y_pt)
+
+    def _draw_marks_box(self, c, total_marks, scale, y_pt) -> None:
+        """A bordered score box top-right of the cover: ``____ / {total}``."""
+        right = PAGE_W_PX - _MARGIN_X_PX
+        left = right - _MARKS_BOX_W_PX
+        top = _CONTENT_TOP_PX
+        c.setStrokeColor(PURPLE)
+        c.setLineWidth(_CHROME_RULE_PX * scale)
+        c.rect(
+            left * scale,
+            y_pt(top + _MARKS_BOX_H_PX),
+            _MARKS_BOX_W_PX * scale,
+            _MARKS_BOX_H_PX * scale,
+        )
+        c.setFillGray(0)
+        c.setFont(_LABEL_FONT, _MARKS_BOX_FONT_PX * scale)
+        c.drawCentredString(
+            (left + _MARKS_BOX_W_PX / 2) * scale,
+            y_pt(top + _MARKS_BOX_H_PX / 2 + _MARKS_BOX_FONT_PX / 2),
+            f"______ / {total_marks}",
+        )
+
+    @staticmethod
+    def _wrap(c, text, font_px, max_w_px, scale) -> list[str]:
+        """Greedy word-wrap ``text`` to ``max_w_px`` at the current font size."""
+        max_w = max_w_px * scale
+        words = text.split(" ")
+        lines, cur = [], ""
+        for w in words:
+            trial = f"{cur} {w}".strip()
+            if c.stringWidth(trial, _HEADER_FONT, font_px * scale) <= max_w or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
 
     def _draw_header(self, c, header_text, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)

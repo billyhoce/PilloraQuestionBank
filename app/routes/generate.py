@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models.orm import Question, User
-from app.pdf.layout_engine import Block, LayoutEngine, render_combined
+from app.pdf.layout_engine import Block, CoverSpec, LayoutEngine, render_combined
 from app.routes.auth import get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
@@ -35,9 +35,25 @@ def _source_label(q: Question) -> str:
     )
 
 
-def _footer_label(is_questions: bool) -> str:
-    """Text centered under the footer rule on every page of a section."""
-    return "Questions" if is_questions else "Answers"
+def _footer_label(subtitle2: str, is_questions: bool) -> str:
+    """Text centered under the footer rule on every page of a section, e.g.
+    ``"2024 Prelim Questions"`` (or just ``"Questions"`` when no subtitle)."""
+    word = "Questions" if is_questions else "Answers"
+    return f"{subtitle2} {word}".strip()
+
+
+def _cover_for(payload: GeneratePaperRequest, total_marks: int, is_questions: bool) -> CoverSpec | None:
+    """Build the cover spec for a section, or ``None`` when covers are disabled."""
+    if not payload.include_cover:
+        return None
+    return CoverSpec(
+        title=payload.cover_title,
+        subtitle1=payload.cover_subtitle1,
+        subtitle2=payload.cover_subtitle2,
+        body=payload.cover_body,
+        total_marks=total_marks,
+        is_questions=is_questions,
+    )
 
 
 def _blocks_for(ordered: list[Question], variant: str) -> list[Block]:
@@ -144,18 +160,23 @@ def generate_paper(
 
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.
+    total_marks = sum(q.marks or 0 for q in ordered)
+    subtitle2 = payload.cover_subtitle2
+
     if payload.variant == "combined":
         q_engine = LayoutEngine(fit_width=True, show_credit=True)
         q_plan = q_engine.compute_layout(
             _blocks_for(ordered, "question"), header_text=payload.header_text
         )
-        q_plan.footer_label = _footer_label(is_questions=True)
+        q_plan.footer_label = _footer_label(subtitle2, is_questions=True)
+        q_plan.cover = _cover_for(payload, total_marks, is_questions=True)
         sections = [(q_engine, q_plan)]
         a_blocks = _blocks_for(ordered, "answer")
         if a_blocks:  # no trailing blank page when nothing has answers
             a_engine = LayoutEngine(fit_width=False)
             a_plan = a_engine.compute_layout(a_blocks)
-            a_plan.footer_label = _footer_label(is_questions=False)
+            a_plan.footer_label = _footer_label(subtitle2, is_questions=False)
+            a_plan.cover = _cover_for(payload, total_marks, is_questions=False)
             sections.append((a_engine, a_plan))
         pdf = render_combined(sections, fetch_bytes=get_image_bytes)
     else:
@@ -164,6 +185,7 @@ def generate_paper(
         engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
         header = payload.header_text if is_question else ""
         plan = engine.compute_layout(blocks, header_text=header)
-        plan.footer_label = _footer_label(is_questions=is_question)
+        plan.footer_label = _footer_label(subtitle2, is_questions=is_question)
+        plan.cover = _cover_for(payload, total_marks, is_questions=is_question)
         pdf = engine.render(plan, fetch_bytes=get_image_bytes)
     return Response(content=pdf, media_type="application/pdf")
