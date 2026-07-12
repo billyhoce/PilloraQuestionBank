@@ -21,23 +21,6 @@ const EMPTY_FILTERS = {
   search: '',
 }
 
-// Default cover letter. Mirrors app/schemas/generate.py DEFAULT_COVER_BODY — the
-// textarea is pre-filled with this and sent as-is; keep the two copies in sync.
-const DEFAULT_COVER_BODY = `Dear students,
-
-Did you know that research shows students learn best when they focus on topical practice first before moving on to full-paper practice? Many students jump straight into full exam papers as practice without realising that they are losing marks in the SAME few areas every time.
-
-That is why I have compiled and vetted these topical worksheets, making sure they contain only exam-style questions.
-
-I recommend identifying your weaker topics and practising them using these topical worksheets before moving to timed full papers. If you need help figuring out your weaker areas, or need to clarify anything about any specific topic, come book a consultation session with me through my website, without having to sign up for any tuition package.
-
-For more resources such as Math and Science notes, topical worksheets, WA1–3/EOY papers, and textbook/workbook answers, please visit www.pillora.com.sg.
-
-You can do it! All the best :)
-
-Teacher Jia Xin
-Founder of Pillora Learning`
-
 // Map the UI filter object to api.questions.list arguments (same as BrowsePage).
 function filtersToListArgs(filters, page) {
   return {
@@ -121,15 +104,33 @@ export default function GeneratePage() {
   const [headerText, setHeaderText] = useState('')
   const [outputMode, setOutputMode] = useState('combined') // 'combined' | 'separate'
 
-  // Cover page state (editable defaults)
+  // Cover page state (editable defaults). Title and body start as null =
+  // "defaults not loaded yet": the fields are pre-filled from
+  // GET /api/generate/cover-defaults (the single source of truth), and any
+  // field still null at generate time is omitted from the request so the
+  // backend default applies.
   const [includeCover, setIncludeCover] = useState(true)
-  const [coverTitle, setCoverTitle] = useState('Topical Worksheets')
+  const [coverTitle, setCoverTitle] = useState(null)
   const [coverSubtitle1, setCoverSubtitle1] = useState('')
   const [coverSubtitle2, setCoverSubtitle2] = useState('')
-  const [coverBody, setCoverBody] = useState(DEFAULT_COVER_BODY)
+  const [coverBody, setCoverBody] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
   const progressTimer = useRef(null)
+
+  // Pre-fill the cover title/body from the backend defaults. If the user has
+  // already typed into a field (no longer null), leave their text alone; if
+  // the fetch fails, the fields stay null and the backend defaults apply.
+  useEffect(() => {
+    const controller = new AbortController()
+    api.generate.coverDefaults(controller.signal)
+      .then(res => {
+        setCoverTitle(prev => prev ?? res.cover_title)
+        setCoverBody(prev => prev ?? res.cover_body)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -284,13 +285,15 @@ export default function GeneratePage() {
     const ts = formatTimestamp(new Date())
     const ids = cart.map(it => it.id)
     // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
+    // Title/body still null (defaults never loaded) are omitted so the backend
+    // defaults apply server-side.
     const cover = {
       include_cover: includeCover,
-      cover_title: coverTitle,
       cover_subtitle1: coverSubtitle1,
       cover_subtitle2: coverSubtitle2,
-      cover_body: coverBody,
     }
+    if (coverTitle !== null) cover.cover_title = coverTitle
+    if (coverBody !== null) cover.cover_body = coverBody
     try {
       if (outputMode === 'combined') {
         const blob = await api.generate.paper({
@@ -499,7 +502,7 @@ export default function GeneratePage() {
                   <div className="space-y-2">
                     <input
                       type="text"
-                      value={coverTitle}
+                      value={coverTitle ?? ''}
                       onChange={e => setCoverTitle(e.target.value)}
                       placeholder="Title"
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
@@ -519,7 +522,7 @@ export default function GeneratePage() {
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
                     />
                     <textarea
-                      value={coverBody}
+                      value={coverBody ?? ''}
                       onChange={e => setCoverBody(e.target.value)}
                       rows={5}
                       placeholder="Cover letter / message"

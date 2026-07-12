@@ -35,9 +35,12 @@ class SelectResponse(BaseModel):
     warning: Optional[str] = None
 
 
-# Default cover letter. Mirrored in the frontend (GeneratePage.jsx
-# DEFAULT_COVER_BODY) so the textarea is pre-filled and editable; the backend
-# copy keeps the API robust when a client omits the field. Keep the two in sync.
+# Canonical cover-page defaults. The frontend fetches these via
+# GET /api/generate/cover-defaults to pre-fill the editable fields, and they
+# double as the schema defaults so the API stays robust when a client omits
+# a field.
+DEFAULT_COVER_TITLE = "Topical Worksheets"
+
 DEFAULT_COVER_BODY = (
     "Dear students,\n"
     "\n"
@@ -81,7 +84,15 @@ class GeneratePaperRequest(BaseModel):
     variant: Literal["question", "answer", "combined"] = "question"
     header_text: str = ""
     include_cover: bool = True
-    cover_title: str = "Topical Worksheets"
+    cover_title: str = DEFAULT_COVER_TITLE
     cover_subtitle1: str = ""
     cover_subtitle2: str = ""
+    cover_body: str = DEFAULT_COVER_BODY
+
+
+class CoverDefaultsResponse(BaseModel):
+    """Canonical cover-page defaults, served to the frontend so the editable
+    fields are pre-filled without hardcoding a second copy of the text."""
+
+    cover_title: str = DEFAULT_COVER_TITLE
     cover_body: str = DEFAULT_COVER_BODY

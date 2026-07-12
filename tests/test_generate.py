@@ -395,6 +395,31 @@ def test_render_combined_matches_separate_renders(minimal_webp_bytes):
 
 
 # ---------------------------------------------------------------------------
+# Routes — /api/generate/cover-defaults
+# ---------------------------------------------------------------------------
+
+
+def test_cover_defaults_requires_auth(client):
+    resp = client.get("/api/generate/cover-defaults")
+    assert resp.status_code == 401
+
+
+def test_cover_defaults_match_paper_request_defaults(public_client):
+    """The served defaults are the same values GeneratePaperRequest falls back
+    to, so a client pre-filling from this endpoint and one omitting the fields
+    produce identical covers."""
+    from app.schemas.generate import GeneratePaperRequest
+
+    resp = public_client.get("/api/generate/cover-defaults")
+    assert resp.status_code == 200
+    data = resp.json()
+    defaults = GeneratePaperRequest(question_ids=[1])
+    assert data["cover_title"] == defaults.cover_title
+    assert data["cover_body"] == defaults.cover_body
+    assert data["cover_body"].startswith("Dear students,")
+
+
+# ---------------------------------------------------------------------------
 # Routes — /api/generate/select (implemented)
 # ---------------------------------------------------------------------------
 
