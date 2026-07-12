@@ -282,8 +282,10 @@ a copyright line; and the standard chrome. A cover-only section (no blocks) stay
 The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, builds a `CoverSpec`
 per section from the request's `cover_*` fields (question section `is_questions=True`, answer
 section `False`), and includes it unless `include_cover=false`. In `combined`, a cover is prepended
-to **each** section. Cover-text defaults live in `app/schemas/generate.py` (`DEFAULT_COVER_BODY`,
-`cover_title="Topical Worksheets"`), mirrored in the frontend so the fields are pre-filled/editable.
+to **each** section. Cover-text defaults live in `app/schemas/generate.py` (`DEFAULT_COVER_TITLE`,
+`DEFAULT_COVER_BODY`) — the single source of truth. They double as the request-schema defaults and
+are served by `GET /api/generate/cover-defaults` so the frontend can pre-fill the editable fields
+without keeping its own copy.
 
 ### Library
 

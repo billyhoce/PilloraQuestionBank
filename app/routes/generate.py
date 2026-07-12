@@ -13,7 +13,12 @@ from app.routes.questions import (
     _apply_filters,
     serialize_list_item,
 )
-from app.schemas.generate import GeneratePaperRequest, SelectRequest, SelectResponse
+from app.schemas.generate import (
+    CoverDefaultsResponse,
+    GeneratePaperRequest,
+    SelectRequest,
+    SelectResponse,
+)
 from app.services.generate import knapsack_select
 from app.storage.s3_client import get_image_bytes
 
@@ -70,6 +75,13 @@ def _blocks_for(ordered: list[Question], variant: str) -> list[Block]:
             continue  # reserve the number, but nothing to render
         blocks.append(Block(label=str(idx), source_label=_source_label(q), pages=pages))
     return blocks
+
+
+@router.get("/generate/cover-defaults", response_model=CoverDefaultsResponse)
+def cover_defaults(current_user: User = Depends(get_current_user)):
+    """Serve the canonical cover-page defaults so the frontend can pre-fill the
+    editable cover fields from a single source of truth."""
+    return CoverDefaultsResponse()
 
 
 @router.post("/generate/select", response_model=SelectResponse)
