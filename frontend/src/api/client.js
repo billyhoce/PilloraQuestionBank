@@ -172,7 +172,8 @@ export const api = {
 
   generate: {
     // Canonical cover-page defaults ({ cover_title, cover_body }) used to
-    // pre-fill the editable cover fields.
+    // pre-fill the editable cover fields. cover_body is rich-text HTML
+    // (paragraphs + bold/italic/underline/link).
     coverDefaults: (signal) => request('GET', '/api/generate/cover-defaults', undefined, signal),
     // Auto-select a randomized set of questions summing near target_marks.
     // body: { filters, target_marks, exclude_question_ids }

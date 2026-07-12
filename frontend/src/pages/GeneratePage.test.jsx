@@ -20,12 +20,30 @@ vi.mock('../api/client', () => {
       papers: { years: vi.fn().mockResolvedValue([]) },
       questions: { list: vi.fn() },
       generate: {
+        coverDefaults: vi.fn(),
         select: vi.fn(),
         paper: vi.fn(),
       },
     },
   }
 })
+
+// The TipTap editor doesn't run reliably under jsdom; these tests target the
+// page's request behavior, so stand in a plain textarea with the same contract.
+vi.mock('../components/generate/CoverBodyEditor', () => ({
+  default: ({ value, onChange }) => (
+    <textarea
+      aria-label="Cover letter / message"
+      value={value ?? ''}
+      onChange={e => onChange(e.target.value)}
+    />
+  ),
+}))
+
+const COVER_DEFAULTS = {
+  cover_title: 'Topical Worksheets',
+  cover_body: '<p>Dear students,</p><p>Practise well.</p>',
+}
 
 const item = {
   id: 1,
@@ -52,6 +70,7 @@ describe('GeneratePage PDF output mode', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.questions.list.mockResolvedValue({ items: [item], total: 1 })
+    api.generate.coverDefaults.mockResolvedValue(COVER_DEFAULTS)
     api.generate.paper.mockResolvedValue(new Blob(['%PDF'], { type: 'application/pdf' }))
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:fake')
     globalThis.URL.revokeObjectURL = vi.fn()
@@ -65,12 +84,19 @@ describe('GeneratePage PDF output mode', () => {
 
   it('makes a single combined request by default', async () => {
     const user = await renderWithCartItem()
+    // Wait for the fetched cover defaults to land so the payload is deterministic.
+    await screen.findByDisplayValue(COVER_DEFAULTS.cover_body)
     await user.click(screen.getByRole('button', { name: /generate pdf/i }))
     await waitFor(() => expect(api.generate.paper).toHaveBeenCalledTimes(1))
     expect(api.generate.paper).toHaveBeenCalledWith({
       question_ids: [1],
       variant: 'combined',
       header_text: '',
+      include_cover: true,
+      cover_title: COVER_DEFAULTS.cover_title,
+      cover_subtitle1: '',
+      cover_subtitle2: '',
+      cover_body: COVER_DEFAULTS.cover_body,
     })
   })
 
@@ -81,5 +107,16 @@ describe('GeneratePage PDF output mode', () => {
     await waitFor(() => expect(api.generate.paper).toHaveBeenCalledTimes(2))
     const variants = api.generate.paper.mock.calls.map(([body]) => body.variant)
     expect(variants).toEqual(['question', 'answer'])
+  })
+
+  it('omits cover title/body when the defaults fetch fails', async () => {
+    api.generate.coverDefaults.mockRejectedValue(new Error('network'))
+    const user = await renderWithCartItem()
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+    await waitFor(() => expect(api.generate.paper).toHaveBeenCalledTimes(1))
+    const [body] = api.generate.paper.mock.calls[0]
+    expect(body).not.toHaveProperty('cover_title')
+    expect(body).not.toHaveProperty('cover_body')
+    expect(body.include_cover).toBe(true)
   })
 })

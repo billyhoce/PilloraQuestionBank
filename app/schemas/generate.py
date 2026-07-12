@@ -41,29 +41,25 @@ class SelectResponse(BaseModel):
 # a field.
 DEFAULT_COVER_TITLE = "Topical Worksheets"
 
+# Rich-text HTML limited to the marks the cover renderer supports
+# (<p>/<br>/<b>/<i>/<u>/<a href>; see app/pdf/cover_body.py).
 DEFAULT_COVER_BODY = (
-    "Dear students,\n"
-    "\n"
-    "Did you know that research shows students learn best when they focus on topical practice "
+    "<p>Dear students,</p>"
+    "<p>Did you know that research shows students learn best when they focus on topical practice "
     "first before moving on to full-paper practice? Many students jump straight into full exam "
     "papers as practice without realising that they are losing marks in the SAME few areas every "
-    "time.\n"
-    "\n"
-    "That is why I have compiled and vetted these topical worksheets, making sure they contain "
-    "only exam-style questions.\n"
-    "\n"
-    "I recommend identifying your weaker topics and practising them using these topical worksheets "
-    "before moving to timed full papers. If you need help figuring out your weaker areas, or need "
-    "to clarify anything about any specific topic, come book a consultation session with me "
-    "through my website, without having to sign up for any tuition package.\n"
-    "\n"
-    "For more resources such as Math and Science notes, topical worksheets, WA1–3/EOY papers, and "
-    "textbook/workbook answers, please visit www.pillora.com.sg.\n"
-    "\n"
-    "You can do it! All the best :)\n"
-    "\n"
-    "Teacher Jia Xin\n"
-    "Founder of Pillora Learning"
+    "time.</p>"
+    "<p>That is why I have compiled and vetted these topical worksheets, making sure they contain "
+    "only exam-style questions.</p>"
+    "<p>I recommend identifying your weaker topics and practising them using these topical "
+    "worksheets before moving to timed full papers. If you need help figuring out your weaker "
+    "areas, or need to clarify anything about any specific topic, come book a consultation "
+    "session with me through my website, without having to sign up for any tuition package.</p>"
+    "<p>For more resources such as Math and Science notes, topical worksheets, WA1–3/EOY papers, "
+    'and textbook/workbook answers, please visit '
+    '<a href="https://www.pillora.com.sg">www.pillora.com.sg</a>.</p>'
+    "<p>You can do it! All the best :)</p>"
+    "<p>Teacher Jia Xin<br>Founder of Pillora Learning</p>"
 )
 
 
@@ -77,7 +73,9 @@ class GeneratePaperRequest(BaseModel):
     The cover fields drive an optional branded cover page (one per section). The
     marks box on the cover shows the paper total, computed server-side from the
     selected questions. ``cover_subtitle1`` is the topic/subject line; the engine
-    appends " – Questions" / " – Answers" per variant.
+    appends " – Questions" / " – Answers" per variant. ``cover_body`` is
+    rich-text HTML (or legacy plain text), sanitized to the supported subset by
+    ``app/pdf/cover_body.py`` before rendering.
     """
 
     question_ids: list[int] = Field(min_length=1)  # empty -> 422
