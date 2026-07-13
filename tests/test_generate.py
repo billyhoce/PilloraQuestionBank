@@ -343,6 +343,49 @@ def test_cover_empty_blocks_still_renders(minimal_webp_bytes):
     assert _page_count(pdf) == 1
 
 
+def _page_link_uris(pdf: bytes, page_index: int) -> list[str]:
+    """URI targets of the link annotations on one page of the PDF."""
+    page = PdfReader(io.BytesIO(pdf)).pages[page_index]
+    uris = []
+    for annot in page.get("/Annots") or []:
+        action = annot.get_object().get("/A")
+        if action and action.get("/URI"):
+            uris.append(str(action["/URI"]))
+    return uris
+
+
+def test_cover_body_html_link_is_clickable(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    plan.cover.body = (
+        "<p>Dear students,</p>"
+        '<p>Visit <a href="https://example.com/consult">my website</a> to book.</p>'
+    )
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert "https://example.com/consult" in _page_link_uris(pdf, 0)
+
+
+def test_cover_body_rich_text_renders(minimal_webp_bytes):
+    # Bold/italic/underline marks and empty paragraphs render without error.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([])
+    plan.cover = _cover()
+    plan.cover.body = "<p><b>Bold</b> <i>italic</i> <u>underline</u></p><p></p><p>End</p>"
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert _page_count(pdf) == 1
+
+
+def test_every_page_has_clickable_website_chrome(minimal_webp_bytes):
+    # The www.pillora.com.sg header chrome links out on cover and content pages.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    for page_index in range(_page_count(pdf)):
+        assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
+
+
 def test_question_variant_has_no_block_gap():
     engine = LayoutEngine(fit_width=True)
     assert engine.block_gap_px == 0
@@ -416,7 +459,8 @@ def test_cover_defaults_match_paper_request_defaults(public_client):
     defaults = GeneratePaperRequest(question_ids=[1])
     assert data["cover_title"] == defaults.cover_title
     assert data["cover_body"] == defaults.cover_body
-    assert data["cover_body"].startswith("Dear students,")
+    assert "Dear students," in data["cover_body"]
+    assert '<a href="https://www.pillora.com.sg">' in data["cover_body"]
 
 
 # ---------------------------------------------------------------------------

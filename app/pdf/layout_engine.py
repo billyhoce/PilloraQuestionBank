@@ -24,8 +24,12 @@ from functools import lru_cache
 from PIL import Image
 from reportlab.lib.colors import Color
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+
+from app.pdf.cover_body import to_paragraphs
 
 # A4 @ 300 DPI. PAGE_W_PX matches the standardized image canvas width; PAGE_H_PX
 # follows from the A4 aspect ratio so px map 1:1 onto the page after scaling.
@@ -38,6 +42,7 @@ PAGE_H_PX = 3508
 # band sits between the two rule lines.
 PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
 WEBSITE = "www.pillora.com.sg"
+WEBSITE_URL = "https://www.pillora.com.sg"
 _MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
 _HEADER_LINE_Y_PX = 250                # header rule, px from the top
 _FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
@@ -121,7 +126,8 @@ class CoverSpec:
     title: str            # e.g. "Topical Worksheets"
     subtitle1: str        # topic/subject line; " – Questions/Answers" appended per variant
     subtitle2: str        # e.g. "2024 Prelim"
-    body: str             # the letter paragraph (newline-separated)
+    body: str             # the letter: rich-text HTML (<p>/<b>/<i>/<u>/<a href>,
+                          # sanitized by app/pdf/cover_body.py) or legacy plain text
     total_marks: int      # shown in the top-right marks box
     is_questions: bool    # True → "Questions", False → "Answers"
 
@@ -344,7 +350,15 @@ class LayoutEngine:
         # the footer rule.
         c.setFillGray(0)
         c.setFont(_CHROME_FONT, _CHROME_FONT_PX * scale)
-        c.drawCentredString(PAGE_W_PX / 2 * scale, y_pt(_HEADER_LINE_Y_PX - 15), WEBSITE)
+        cx = PAGE_W_PX / 2 * scale
+        website_baseline = y_pt(_HEADER_LINE_Y_PX - 15)
+        c.drawCentredString(cx, website_baseline, WEBSITE)
+        w = c.stringWidth(WEBSITE, _CHROME_FONT, _CHROME_FONT_PX * scale)
+        c.linkURL(
+            WEBSITE_URL,
+            (cx - w / 2, website_baseline, cx + w / 2, website_baseline + _CHROME_FONT_PX * scale),
+            relative=0,
+        )
         footer_baseline = y_pt(_FOOTER_LINE_Y_PX + _CHROME_FONT_PX + 20)
         if footer_label:
             c.drawCentredString(PAGE_W_PX / 2 * scale, footer_baseline, footer_label)
@@ -390,17 +404,27 @@ class LayoutEngine:
         # Marks box, top-right of the content area.
         self._draw_marks_box(c, cover.total_marks, scale, y_pt)
 
-        # Letter paragraph: wrapped, left-aligned, in a centered column below.
+        # Letter body: sanitized rich text (see app/pdf/cover_body.py) rendered
+        # as Platypus Paragraphs in a centered column — Paragraph handles the
+        # word-wrap and emits clickable link annotations for <a href> markup.
         col_x = (PAGE_W_PX - _COVER_BODY_W_PX) / 2 * scale
+        col_w = _COVER_BODY_W_PX * scale
         by = y + 90
-        c.setFont(_HEADER_FONT, _COVER_BODY_FONT_PX * scale)
-        for line in cover.body.split("\n"):
-            if not line.strip():
+        style = ParagraphStyle(
+            "cover_body",
+            fontName=_HEADER_FONT,
+            fontSize=_COVER_BODY_FONT_PX * scale,
+            leading=_COVER_BODY_LINE_PX * scale,
+        )
+        for markup in to_paragraphs(cover.body):
+            if not markup:  # empty <p></p> -> blank-line gap
                 by += _COVER_BODY_LINE_PX
                 continue
-            for wrapped in self._wrap(c, line, _COVER_BODY_FONT_PX, _COVER_BODY_W_PX, scale):
-                c.drawString(col_x, y_pt(by + _COVER_BODY_FONT_PX), wrapped)
-                by += _COVER_BODY_LINE_PX
+            para = Paragraph(markup, style)
+            _, h = para.wrap(col_w, y_pt(0))
+            para.drawOn(c, col_x, y_pt(by) - h)
+            # Advance past the paragraph, plus one blank line between paragraphs.
+            by += h / scale + _COVER_BODY_LINE_PX
 
         # Copyright, just above the footer rule.
         c.setFont(_HEADER_FONT, _COVER_COPYRIGHT_FONT_PX * scale)
@@ -428,23 +452,6 @@ class LayoutEngine:
             y_pt(top + _MARKS_BOX_H_PX / 2 + _MARKS_BOX_FONT_PX / 2),
             f"______ / {total_marks}",
         )
-
-    @staticmethod
-    def _wrap(c, text, font_px, max_w_px, scale) -> list[str]:
-        """Greedy word-wrap ``text`` to ``max_w_px`` at the current font size."""
-        max_w = max_w_px * scale
-        words = text.split(" ")
-        lines, cur = [], ""
-        for w in words:
-            trial = f"{cur} {w}".strip()
-            if c.stringWidth(trial, _HEADER_FONT, font_px * scale) <= max_w or not cur:
-                cur = trial
-            else:
-                lines.append(cur)
-                cur = w
-        if cur:
-            lines.append(cur)
-        return lines
 
     def _draw_header(self, c, header_text, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)

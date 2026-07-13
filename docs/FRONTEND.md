@@ -163,12 +163,16 @@ selection cart) on the right.
 ### Generate PDF (right)
 - **Cover page** controls: an **"Include cover page"** checkbox (on by default) revealing editable
   **title**, **subtitle 1** (topic/subject), **subtitle 2** (e.g. "2024 Prelim"), and a **letter
-  body** `<textarea>`. Title and body are pre-filled from `GET /api/generate/cover-defaults` (the
-  backend's `app/schemas/generate.py` defaults are the single source of truth); if that fetch
-  fails, the fields are simply omitted from the request so the backend defaults still apply. These
-  map to `include_cover, cover_title, cover_subtitle1, cover_subtitle2, cover_body` in the request
-  body and are sent on **every** call (the answer PDF's cover reads "Answers"). The cover's marks
-  box is filled server-side from the selected questions' total.
+  body** edited in a rich-text editor (`CoverBodyEditor`, TipTap v3). The editor is deliberately
+  limited to what the PDF cover renderer supports: paragraphs plus **bold / italic / underline /
+  link** (a small toolbar; link URLs via prompt) — headings, lists, etc. are disabled. `cover_body`
+  is sent as HTML and sanitized server-side (`app/pdf/cover_body.py`); links come out clickable in
+  the PDF. Title and body are pre-filled from `GET /api/generate/cover-defaults` (the backend's
+  `app/schemas/generate.py` defaults are the single source of truth); if that fetch fails, the
+  fields are simply omitted from the request so the backend defaults still apply. These map to
+  `include_cover, cover_title, cover_subtitle1, cover_subtitle2, cover_body` in the request body
+  and are sent on **every** call (the answer PDF's cover reads "Answers"). The cover's marks box
+  is filled server-side from the selected questions' total.
 - Optional **header / instructions** `<textarea>` printed on the first page of the question PDF.
 - A **"Download as"** radio selector chooses the output mode, defaulting to **1 combined PDF**:
   - **Combined (default):** one call to `api.generate.paper` with `variant: "combined"` (and

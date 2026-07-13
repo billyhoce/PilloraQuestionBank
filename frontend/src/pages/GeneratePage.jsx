@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
+import CoverBodyEditor from '../components/generate/CoverBodyEditor'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 
@@ -108,7 +109,8 @@ export default function GeneratePage() {
   // "defaults not loaded yet": the fields are pre-filled from
   // GET /api/generate/cover-defaults (the single source of truth), and any
   // field still null at generate time is omitted from the request so the
-  // backend default applies.
+  // backend default applies. coverBody holds rich-text HTML (paragraphs plus
+  // bold/italic/underline/link), edited via CoverBodyEditor.
   const [includeCover, setIncludeCover] = useState(true)
   const [coverTitle, setCoverTitle] = useState(null)
   const [coverSubtitle1, setCoverSubtitle1] = useState('')
@@ -521,13 +523,7 @@ export default function GeneratePage() {
                       placeholder="Subtitle 2 — e.g. 2024 Prelim"
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
                     />
-                    <textarea
-                      value={coverBody ?? ''}
-                      onChange={e => setCoverBody(e.target.value)}
-                      rows={5}
-                      placeholder="Cover letter / message"
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
-                    />
+                    <CoverBodyEditor value={coverBody} onChange={setCoverBody} />
                     <p className="text-[11px] text-gray-400">
                       Marks box on the cover shows the paper total automatically.
                     </p>

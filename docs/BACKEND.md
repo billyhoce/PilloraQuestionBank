@@ -262,7 +262,8 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
 - **Logo** top-left, centered on the header rule — loaded from `app/pdf/assets/pillora_logo.png`
   (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is
   **optional**: if absent/unreadable the page renders without it (no error).
-- **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule.
+- **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
+  link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
 - **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
   bottom-right. The route sets the footer label per section (`Questions` / `Answers`).
 
@@ -273,11 +274,20 @@ still render on the first content page, below the header rule.
 ### Cover page
 
 When `LayoutPlan.cover` is set (a `CoverSpec`), `render_onto` draws a branded cover as the
-section's **first page** (page 1), then content starts on page 2 (`_draw_cover` → `_draw_marks_box`
-+ `_wrap`). The cover shows: the logo centered near the top; an editable **title**; **subtitle 1**
-with `" – Questions"`/`" – Answers"` appended per variant (`is_questions`); an editable **subtitle
-2**; the editable **letter body** (word-wrapped); a **marks box top-right** (`______ / {total}`);
-a copyright line; and the standard chrome. A cover-only section (no blocks) stays a single page.
+section's **first page** (page 1), then content starts on page 2 (`_draw_cover` →
+`_draw_marks_box`). The cover shows: the logo centered near the top; an editable **title**;
+**subtitle 1** with `" – Questions"`/`" – Answers"` appended per variant (`is_questions`); an
+editable **subtitle 2**; the editable **letter body**; a **marks box top-right**
+(`______ / {total}`); a copyright line; and the standard chrome. A cover-only section (no blocks)
+stays a single page.
+
+The letter body is **rich text**: HTML limited to paragraphs plus bold / italic / underline /
+link. `app/pdf/cover_body.py` (`to_paragraphs`) whitelists exactly that subset — unknown tags are
+stripped (text kept), all text is escaped, `href`s are restricted to `http(s)`/`mailto` (bare
+`www.` gets `https://` prefixed), and the emitted markup is always balanced. The result feeds
+Platypus `Paragraph` objects, which handle the word-wrap and emit **clickable link annotations**
+in the PDF (links render blue + underlined). Plain text with no tags is accepted as the legacy
+newline-separated format, so older API clients keep working.
 
 The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, builds a `CoverSpec`
 per section from the request's `cover_*` fields (question section `is_questions=True`, answer
