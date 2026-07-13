@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { formatTopic } from '../../utils/topicFormat'
 
 export default function TopicMultiSelect({ topics, selectedIds, exclusive, onChange }) {
   const selectedSet = new Set(selectedIds)
+  const [showTip, setShowTip] = useState(false)
 
   function toggle(id) {
     const next = new Set(selectedSet)
@@ -55,11 +57,22 @@ export default function TopicMultiSelect({ topics, selectedIds, exclusive, onCha
           className="rounded border-gray-300"
         />
         Exclusive only
-        <span
-          className="inline-flex items-center justify-center w-4 h-4 text-xs rounded-full border border-gray-400 text-gray-500 cursor-help"
-          title="Show only questions that cover just your selected topics and nothing else."
-        >
-          ?
+        <span className="relative inline-flex">
+          <button
+            type="button"
+            aria-label="What does Exclusive only do?"
+            onMouseEnter={() => setShowTip(true)}
+            onMouseLeave={() => setShowTip(false)}
+            onClick={e => { e.preventDefault(); e.stopPropagation(); setShowTip(v => !v) }}
+            className="inline-flex items-center justify-center w-4 h-4 text-xs rounded-full border border-gray-400 text-gray-500 cursor-pointer"
+          >
+            ?
+          </button>
+          {showTip && (
+            <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 z-10 rounded bg-gray-800 text-white text-xs font-normal px-2 py-1 shadow-lg">
+              Show only questions that cover just your selected topics and nothing else.
+            </span>
+          )}
         </span>
       </label>
     </div>
