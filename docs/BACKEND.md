@@ -102,9 +102,15 @@ POST   /api/generate/select      -- auto-select a randomized set of questions su
                                     target_marks, exact, warning }.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
-                                    "question"|"answer"|"combined", header_text }.
+                                    "question"|"answer"|"combined", header_text,
+                                    include_cover, cover_title, cover_subtitle1,
+                                    cover_subtitle2, cover_body }.
                                     "combined" returns one PDF with the answer
                                     paper appended after the question paper.
+                                    Each page carries branded header/footer chrome;
+                                    the question paper credits each question's source;
+                                    a cover page (per section, with a marks box) is
+                                    included unless include_cover=false.
                                     Returns application/pdf. Empty question_ids -> 422.
 ```
 
@@ -196,8 +202,9 @@ answer pages. There is no server-side autofill-at-generate: the selection is alr
 
 Works in **300-DPI pixel space** (A4 = 2480×3508 px). Stored images are content-only (≤ 1760 px
 wide from ingestion); the engine builds the page margins itself. `LayoutEngine(page_capacity_px,
-fit_width)` — `page_capacity_px` is the usable vertical budget (page height minus top/bottom
-margins); `fit_width` selects the horizontal treatment per variant:
+fit_width, show_credit)` — `page_capacity_px` is the usable vertical budget (the **content band
+between the header and footer rule lines** — see [Page chrome](#page-chrome) — not the raw page
+height); `fit_width` selects the horizontal treatment per variant:
 
 - **`fit_width=True` (question paper):** each image is scaled (aspect preserved) to a fixed **1760 px
   content width** and drawn **centered** on the page — **360 px margin on each side** (1760 + 360 +
@@ -231,10 +238,64 @@ PDF — how the `combined` variant appends the answer paper after the question p
   production `fetch_bytes` is `get_image_bytes`; the `variant="answer"` call only fetches answer
   bytes and vice-versa, so no image is fetched twice across the two requests.
 
-Dataclasses: `Block(label, source_label, pages, page_index)` and
-`LayoutPlan(page_count, blocks, header_text)`. `source_label`
-(`{School} {Year} {Level} {ExamType} Q{original_number}`) is assembled per question but not yet
-drawn — kept for future use.
+Dataclasses: `Block(label, source_label, pages, page_index)`,
+`LayoutPlan(page_count, blocks, header_text, footer_label, cover)`, and
+`CoverSpec(title, subtitle1, subtitle2, body, total_marks, is_questions)`.
+
+**Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
+small grey provenance line just above its image — `source_label`, formatted
+`[{School}/{Year}/{ExamType}/P{paper_number}/Q{original_number}]` (e.g.
+`[Bendemeer Secondary School/2024/Prelim/P2/Q6]`; `paper_number` is stored bare, so a `P` is
+prefixed). `LayoutEngine(show_credit=True)` reserves a fixed band (`_CREDIT_BAND_PX`) in each
+block's height so packing and rendering stay in sync, then draws the line and advances the cursor
+before the image. The route enables it for the `question` variant (and the `combined` PDF's
+question section) and leaves it off for the answer paper. Blocks with an empty `source_label`
+reserve no band.
+
+### Page chrome
+
+Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once per page:
+
+- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX`) and bottom
+  (`_FOOTER_LINE_Y_PX`), inset `_MARGIN_X_PX` on each side. The **content band sits between them**
+  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures.
+- **Logo** top-left, centered on the header rule — loaded from `app/pdf/assets/pillora_logo.png`
+  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is
+  **optional**: if absent/unreadable the page renders without it (no error).
+- **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
+  link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
+- **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
+  bottom-right. The route sets the footer label per section (`Questions` / `Answers`).
+
+Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined`
+PDF the question and answer papers number independently. The free-text `header_text` instructions
+still render on the first content page, below the header rule.
+
+### Cover page
+
+When `LayoutPlan.cover` is set (a `CoverSpec`), `render_onto` draws a branded cover as the
+section's **first page** (page 1), then content starts on page 2 (`_draw_cover` →
+`_draw_marks_box`). The cover shows: the logo centered near the top; an editable **title**;
+**subtitle 1** with `" – Questions"`/`" – Answers"` appended per variant (`is_questions`); an
+editable **subtitle 2**; the editable **letter body**; a **marks box top-right**
+(`______ / {total}`); a copyright line; and the standard chrome. A cover-only section (no blocks)
+stays a single page.
+
+The letter body is **rich text**: HTML limited to paragraphs plus bold / italic / underline /
+link. `app/pdf/cover_body.py` (`to_paragraphs`) whitelists exactly that subset — unknown tags are
+stripped (text kept), all text is escaped, `href`s are restricted to `http(s)`/`mailto` (bare
+`www.` gets `https://` prefixed), and the emitted markup is always balanced. The result feeds
+Platypus `Paragraph` objects, which handle the word-wrap and emit **clickable link annotations**
+in the PDF (links render blue + underlined). Plain text with no tags is accepted as the legacy
+newline-separated format, so older API clients keep working.
+
+The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, builds a `CoverSpec`
+per section from the request's `cover_*` fields (question section `is_questions=True`, answer
+section `False`), and includes it unless `include_cover=false`. In `combined`, a cover is prepended
+to **each** section. Cover-text defaults live in `app/schemas/generate.py` (`DEFAULT_COVER_TITLE`,
+`DEFAULT_COVER_BODY`) — the single source of truth. They double as the request-schema defaults and
+are served by `GET /api/generate/cover-defaults` so the frontend can pre-fill the editable fields
+without keeping its own copy.
 
 ### Library
 

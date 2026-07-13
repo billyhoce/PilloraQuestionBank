@@ -17,20 +17,60 @@ Layout rules:
     created here, and the number is drawn into it, just left of the content.
 """
 import io
+import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from PIL import Image
+from reportlab.lib.colors import Color
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+
+from app.pdf.cover_body import to_paragraphs
 
 # A4 @ 300 DPI. PAGE_W_PX matches the standardized image canvas width; PAGE_H_PX
 # follows from the A4 aspect ratio so px map 1:1 onto the page after scaling.
 PAGE_W_PX = 2480
 PAGE_H_PX = 3508
-_TOP_MARGIN_PX = 120
-_BOTTOM_MARGIN_PX = 120
-_DEFAULT_CAPACITY_PX = PAGE_H_PX - _TOP_MARGIN_PX - _BOTTOM_MARGIN_PX
+
+# Page chrome (drawn on every page): purple rule lines near the top and bottom,
+# the Pillora logo top-left, the website centered in the header, a footer label
+# centered below the footer line, and a page number bottom-right. The content
+# band sits between the two rule lines.
+PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
+WEBSITE = "www.pillora.com.sg"
+WEBSITE_URL = "https://www.pillora.com.sg"
+_MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
+_HEADER_LINE_Y_PX = 250                # header rule, px from the top
+_FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
+_CHROME_FONT = "Helvetica"
+_CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
+_CHROME_RULE_PX = 4                    # rule line thickness
+_LOGO_W_PX = 250                       # header logo width (aspect preserved)
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+LOGO_PATH = os.path.join(_ASSETS_DIR, "pillora_logo.png")
+
+# Content band: between the two rule lines, with a little breathing room.
+_CONTENT_TOP_PX = _HEADER_LINE_Y_PX + 60
+_CONTENT_BOTTOM_PX = _FOOTER_LINE_Y_PX - 60
+_DEFAULT_CAPACITY_PX = _CONTENT_BOTTOM_PX - _CONTENT_TOP_PX
+
+# Cover page.
+_COVER_LOGO_W_PX = 350
+_COVER_TITLE_FONT_PX = 70
+_COVER_SUBTITLE_FONT_PX = 60
+_COVER_BODY_FONT_PX = 45
+_COVER_BODY_LINE_PX = 66        # line advance within the letter paragraph
+_COVER_BODY_W_PX = 1500         # wrap width for the letter paragraph
+_COVER_COPYRIGHT_FONT_PX = 40
+_COVER_COPYRIGHT = "© Pillora Learning — All worksheets are strictly for personal use."
+# Marks box (top-right of the cover content area).
+_MARKS_BOX_W_PX = 460
+_MARKS_BOX_H_PX = 150
+_MARKS_BOX_FONT_PX = 52
 
 # Page margins. Both variants leave a 360px gutter on the left where the question
 # number sits. Question images are scaled to a fixed 1760px content width and sit
@@ -50,6 +90,15 @@ _HEADER_FONT = "Helvetica"
 _HEADER_FONT_PX = 42  # ~12pt at 300 DPI
 _HEADER_LINE_PX = 58
 _HEADER_PAD_PX = 40
+
+# Per-question provenance credit (question paper only). Drawn just above each
+# question in small grey type; the whole band is reserved in the block height so
+# packing and rendering agree.
+_CREDIT_FONT = "Helvetica"
+_CREDIT_FONT_PX = 34  # ~10pt at 300 DPI
+_CREDIT_GAP_PX = 18   # gap between the credit line and the image below it
+_CREDIT_BAND_PX = _CREDIT_FONT_PX + _CREDIT_GAP_PX  # vertical space one credit reserves
+_CREDIT_GREY = 0.35
 
 
 def _header_height_px(header_text: str) -> int:
@@ -71,20 +120,59 @@ class Block:
 
 
 @dataclass
+class CoverSpec:
+    """Editable cover-page content for one section (question or answer paper)."""
+
+    title: str            # e.g. "Topical Worksheets"
+    subtitle1: str        # topic/subject line; " – Questions/Answers" appended per variant
+    subtitle2: str        # e.g. "2024 Prelim"
+    body: str             # the letter: rich-text HTML (<p>/<b>/<i>/<u>/<a href>,
+                          # sanitized by app/pdf/cover_body.py) or legacy plain text
+    total_marks: int      # shown in the top-right marks box
+    is_questions: bool    # True → "Questions", False → "Answers"
+
+
+@dataclass
 class LayoutPlan:
     page_count: int
     blocks: list[Block]
     header_text: str = ""
+    footer_label: str = ""   # centered under the footer rule on every page of this section
+    cover: "CoverSpec | None" = None  # optional cover page rendered as the section's first page
+
+
+@lru_cache(maxsize=2)
+def _load_logo(target_w_px: int = _LOGO_W_PX):
+    """Load the Pillora logo as ``(ImageReader, w_px, h_px)`` scaled to
+    ``target_w_px`` (aspect preserved), or ``None`` if the asset is missing/
+    unreadable — chrome then simply renders without a logo. Cached, so adding
+    or changing the logo file takes effect on process restart."""
+    try:
+        img = Image.open(LOGO_PATH)
+        img.load()
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        h_px = round(img.height * (target_w_px / img.width))
+        return ImageReader(img), target_w_px, h_px
+    except Exception:
+        return None
 
 
 class LayoutEngine:
-    def __init__(self, page_capacity_px: int = _DEFAULT_CAPACITY_PX, fit_width: bool = True):
+    def __init__(
+        self,
+        page_capacity_px: int = _DEFAULT_CAPACITY_PX,
+        fit_width: bool = True,
+        show_credit: bool = False,
+    ):
         # fit_width=True  -> scale image to a fixed 1760px content width, centered
         #                    on the page (question paper).
         # fit_width=False -> keep the image at native size, flush to the left
         #                    margin, with a gap between blocks (answer paper).
+        # show_credit     -> draw each block's source_label above it (question paper).
         self.page_capacity_px = page_capacity_px
         self.fit_width = fit_width
+        self.show_credit = show_credit
         self.block_gap_px = 0 if fit_width else _ANSWER_GAP_PX
 
     def _image_scale(self, pg) -> float:
@@ -133,6 +221,26 @@ class LayoutEngine:
         def y_pt(dist_from_top_px: float) -> float:
             return (PAGE_H_PX - dist_from_top_px) * scale
 
+        page_num = 1
+
+        def new_page() -> None:
+            """Close the current page and start a fresh one, re-drawing chrome."""
+            nonlocal page_num
+            c.showPage()
+            page_num += 1
+            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+
+        # Optional cover as the section's first page; content then starts on the
+        # next page (skipped when there is nothing to render, so a cover-only
+        # section is a single page). Otherwise draw chrome for the first content
+        # page directly.
+        if plan.cover is not None:
+            self._draw_cover(c, plan.cover, plan.footer_label, page_num, scale, y_pt)
+            if plan.blocks:
+                new_page()
+        else:
+            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+
         used = 0.0  # px consumed in the content area of the current page
 
         header_px = _header_height_px(plan.header_text)
@@ -144,10 +252,21 @@ class LayoutEngine:
             block_h = self._block_height_px(block)
             gap = self.block_gap_px if used > 0 else 0
             if used > 0 and used + gap + block_h > self.page_capacity_px:
-                c.showPage()
+                new_page()
                 used = 0.0
                 gap = 0
             used += gap
+
+            if self._credit_for(block):
+                c.setFont(_CREDIT_FONT, _CREDIT_FONT_PX * scale)
+                c.setFillGray(_CREDIT_GREY)
+                c.drawString(
+                    _LEFT_MARGIN_PX * scale,
+                    y_pt(_CONTENT_TOP_PX + used + _CREDIT_FONT_PX),
+                    block.source_label,
+                )
+                c.setFillGray(0)
+                used += _CREDIT_BAND_PX
 
             first_page = True
             for pg in block.pages:
@@ -158,11 +277,11 @@ class LayoutEngine:
                     s_img *= self.page_capacity_px / eff_h
                     eff_h = float(self.page_capacity_px)
                 if used > 0 and used + eff_h > self.page_capacity_px:
-                    c.showPage()
+                    new_page()
                     used = 0.0
 
                 reader = self._image_reader(fetch_bytes(pg.image_key))
-                top = _TOP_MARGIN_PX + used
+                top = _CONTENT_TOP_PX + used
                 c.drawImage(
                     reader,
                     _LEFT_MARGIN_PX * scale,  # left edge at the 360px margin
@@ -191,11 +310,152 @@ class LayoutEngine:
     # -- helpers ------------------------------------------------------------
 
     def _block_height_px(self, block: Block) -> float:
-        return sum(pg.height_px * self._image_scale(pg) for pg in block.pages)
+        images = sum(pg.height_px * self._image_scale(pg) for pg in block.pages)
+        credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
+        return images + credit
+
+    def _credit_for(self, block: Block) -> bool:
+        """Whether this block gets a provenance credit line drawn above it."""
+        return self.show_credit and bool(block.source_label)
+
+    def _draw_chrome(self, c, page_num, footer_label, scale, y_pt) -> None:
+        """Draw the page furniture: purple rule lines, logo, website, footer
+        label, and page number. Called once per page (page 1 restarts each
+        section, so combined PDFs number the question and answer papers 1..N
+        independently)."""
+        left = _MARGIN_X_PX * scale
+        right = (PAGE_W_PX - _MARGIN_X_PX) * scale
+
+        # Rule lines.
+        c.setStrokeColor(PURPLE)
+        c.setLineWidth(_CHROME_RULE_PX * scale)
+        c.line(left, y_pt(_HEADER_LINE_Y_PX), right, y_pt(_HEADER_LINE_Y_PX))
+        c.line(left, y_pt(_FOOTER_LINE_Y_PX), right, y_pt(_FOOTER_LINE_Y_PX))
+
+        # Logo top-left, vertically centered on the header rule.
+        logo = _load_logo()
+        if logo is not None:
+            reader, w_px, h_px = logo
+            top_px = _HEADER_LINE_Y_PX - h_px / 2
+            c.drawImage(
+                reader,
+                left,
+                y_pt(top_px + h_px),
+                width=w_px * scale,
+                height=h_px * scale,
+                mask="auto",
+            )
+
+        # Website centered on the header rule; footer label + page number below
+        # the footer rule.
+        c.setFillGray(0)
+        c.setFont(_CHROME_FONT, _CHROME_FONT_PX * scale)
+        cx = PAGE_W_PX / 2 * scale
+        website_baseline = y_pt(_HEADER_LINE_Y_PX - 15)
+        c.drawCentredString(cx, website_baseline, WEBSITE)
+        w = c.stringWidth(WEBSITE, _CHROME_FONT, _CHROME_FONT_PX * scale)
+        c.linkURL(
+            WEBSITE_URL,
+            (cx - w / 2, website_baseline, cx + w / 2, website_baseline + _CHROME_FONT_PX * scale),
+            relative=0,
+        )
+        footer_baseline = y_pt(_FOOTER_LINE_Y_PX + _CHROME_FONT_PX + 20)
+        if footer_label:
+            c.drawCentredString(PAGE_W_PX / 2 * scale, footer_baseline, footer_label)
+        c.drawRightString(right, footer_baseline, f"Page {page_num}")
+
+    def _draw_cover(self, c, cover, footer_label, page_num, scale, y_pt) -> None:
+        """Render the branded cover page: logo, title, subtitles, the letter
+        paragraph, a marks box top-right, a copyright line, and the standard
+        page chrome. Drawn as the section's first page."""
+        cx = PAGE_W_PX / 2 * scale
+        c.setFillGray(0)
+
+        # Logo centered near the top of the content band.
+        y = _CONTENT_TOP_PX + 40
+        logo = _load_logo(_COVER_LOGO_W_PX)
+        if logo is not None:
+            reader, w_px, h_px = logo
+            c.drawImage(
+                reader,
+                (PAGE_W_PX - w_px) / 2 * scale,
+                y_pt(y + h_px),
+                width=w_px * scale,
+                height=h_px * scale,
+                mask="auto",
+            )
+            y += h_px + 90
+        else:
+            y += 200
+
+        # Title + subtitles, centered.
+        variant_word = "Questions" if cover.is_questions else "Answers"
+        sub1 = f"{cover.subtitle1} – {variant_word}" if cover.subtitle1 else variant_word
+        c.setFont(_LABEL_FONT, _COVER_TITLE_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(y + _COVER_TITLE_FONT_PX), cover.title)
+        y += _COVER_TITLE_FONT_PX + 60
+        c.setFont(_LABEL_FONT, _COVER_SUBTITLE_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), sub1)
+        y += _COVER_SUBTITLE_FONT_PX + 30
+        if cover.subtitle2:
+            c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), cover.subtitle2)
+            y += _COVER_SUBTITLE_FONT_PX + 30
+
+        # Marks box, top-right of the content area.
+        self._draw_marks_box(c, cover.total_marks, scale, y_pt)
+
+        # Letter body: sanitized rich text (see app/pdf/cover_body.py) rendered
+        # as Platypus Paragraphs in a centered column — Paragraph handles the
+        # word-wrap and emits clickable link annotations for <a href> markup.
+        col_x = (PAGE_W_PX - _COVER_BODY_W_PX) / 2 * scale
+        col_w = _COVER_BODY_W_PX * scale
+        by = y + 90
+        style = ParagraphStyle(
+            "cover_body",
+            fontName=_HEADER_FONT,
+            fontSize=_COVER_BODY_FONT_PX * scale,
+            leading=_COVER_BODY_LINE_PX * scale,
+        )
+        for markup in to_paragraphs(cover.body):
+            if not markup:  # empty <p></p> -> blank-line gap
+                by += _COVER_BODY_LINE_PX
+                continue
+            para = Paragraph(markup, style)
+            _, h = para.wrap(col_w, y_pt(0))
+            para.drawOn(c, col_x, y_pt(by) - h)
+            # Advance past the paragraph, plus one blank line between paragraphs.
+            by += h / scale + _COVER_BODY_LINE_PX
+
+        # Copyright, just above the footer rule.
+        c.setFont(_HEADER_FONT, _COVER_COPYRIGHT_FONT_PX * scale)
+        c.drawCentredString(cx, y_pt(_CONTENT_BOTTOM_PX - 20), _COVER_COPYRIGHT)
+
+        self._draw_chrome(c, page_num, footer_label, scale, y_pt)
+
+    def _draw_marks_box(self, c, total_marks, scale, y_pt) -> None:
+        """A bordered score box top-right of the cover: ``____ / {total}``."""
+        right = PAGE_W_PX - _MARGIN_X_PX
+        left = right - _MARKS_BOX_W_PX
+        top = _CONTENT_TOP_PX
+        c.setStrokeColor(PURPLE)
+        c.setLineWidth(_CHROME_RULE_PX * scale)
+        c.rect(
+            left * scale,
+            y_pt(top + _MARKS_BOX_H_PX),
+            _MARKS_BOX_W_PX * scale,
+            _MARKS_BOX_H_PX * scale,
+        )
+        c.setFillGray(0)
+        c.setFont(_LABEL_FONT, _MARKS_BOX_FONT_PX * scale)
+        c.drawCentredString(
+            (left + _MARKS_BOX_W_PX / 2) * scale,
+            y_pt(top + _MARKS_BOX_H_PX / 2 + _MARKS_BOX_FONT_PX / 2),
+            f"______ / {total_marks}",
+        )
 
     def _draw_header(self, c, header_text, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)
-        top = _TOP_MARGIN_PX + _HEADER_FONT_PX
+        top = _CONTENT_TOP_PX + _HEADER_FONT_PX
         for line in (header_text.splitlines() or [header_text]):
             c.drawString(_LEFT_MARGIN_PX * scale, y_pt(top), line)
             top += _HEADER_LINE_PX

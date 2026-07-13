@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
+import CoverBodyEditor from '../components/generate/CoverBodyEditor'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 
@@ -103,9 +104,35 @@ export default function GeneratePage() {
   // PDF generation state
   const [headerText, setHeaderText] = useState('')
   const [outputMode, setOutputMode] = useState('combined') // 'combined' | 'separate'
+
+  // Cover page state (editable defaults). Title and body start as null =
+  // "defaults not loaded yet": the fields are pre-filled from
+  // GET /api/generate/cover-defaults (the single source of truth), and any
+  // field still null at generate time is omitted from the request so the
+  // backend default applies. coverBody holds rich-text HTML (paragraphs plus
+  // bold/italic/underline/link), edited via CoverBodyEditor.
+  const [includeCover, setIncludeCover] = useState(true)
+  const [coverTitle, setCoverTitle] = useState(null)
+  const [coverSubtitle1, setCoverSubtitle1] = useState('')
+  const [coverSubtitle2, setCoverSubtitle2] = useState('')
+  const [coverBody, setCoverBody] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
   const progressTimer = useRef(null)
+
+  // Pre-fill the cover title/body from the backend defaults. If the user has
+  // already typed into a field (no longer null), leave their text alone; if
+  // the fetch fails, the fields stay null and the backend defaults apply.
+  useEffect(() => {
+    const controller = new AbortController()
+    api.generate.coverDefaults(controller.signal)
+      .then(res => {
+        setCoverTitle(prev => prev ?? res.cover_title)
+        setCoverBody(prev => prev ?? res.cover_body)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -259,10 +286,20 @@ export default function GeneratePage() {
 
     const ts = formatTimestamp(new Date())
     const ids = cart.map(it => it.id)
+    // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
+    // Title/body still null (defaults never loaded) are omitted so the backend
+    // defaults apply server-side.
+    const cover = {
+      include_cover: includeCover,
+      cover_subtitle1: coverSubtitle1,
+      cover_subtitle2: coverSubtitle2,
+    }
+    if (coverTitle !== null) cover.cover_title = coverTitle
+    if (coverBody !== null) cover.cover_body = coverBody
     try {
       if (outputMode === 'combined') {
         const blob = await api.generate.paper({
-          question_ids: ids, variant: 'combined', header_text: headerText,
+          question_ids: ids, variant: 'combined', header_text: headerText, ...cover,
         })
         stopProgress()
         setGenProgress(100)
@@ -270,8 +307,8 @@ export default function GeneratePage() {
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
-          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText }),
-          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '' }),
+          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText, ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '', ...cover }),
         ])
         stopProgress()
         setGenProgress(100)
@@ -453,6 +490,46 @@ export default function GeneratePage() {
                   ))}
                 </ul>
               )}
+
+              <div className="space-y-2 pt-1 border-t border-gray-100">
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-700 pt-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeCover}
+                    onChange={e => setIncludeCover(e.target.checked)}
+                  />
+                  Include cover page
+                </label>
+                {includeCover ? (
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={coverTitle ?? ''}
+                      onChange={e => setCoverTitle(e.target.value)}
+                      placeholder="Title"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={coverSubtitle1}
+                      onChange={e => setCoverSubtitle1(e.target.value)}
+                      placeholder="Subtitle 1 — e.g. Secondary 3 Mathematics"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={coverSubtitle2}
+                      onChange={e => setCoverSubtitle2(e.target.value)}
+                      placeholder="Subtitle 2 — e.g. 2024 Prelim"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                    <CoverBodyEditor value={coverBody} onChange={setCoverBody} />
+                    <p className="text-[11px] text-gray-400">
+                      Marks box on the cover shows the paper total automatically.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="space-y-1 pt-1">
                 <label className="text-xs text-gray-600" htmlFor="header-text">

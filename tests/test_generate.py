@@ -218,6 +218,174 @@ def test_answer_variant_adds_gap_between_blocks():
     assert [b.page_index for b in plan.blocks] == [0, 1]
 
 
+def test_credit_reserves_extra_block_height():
+    # show_credit adds a fixed band above each block, so the same block is taller
+    # under a credit-enabled engine than one without.
+    from app.pdf.layout_engine import _CREDIT_BAND_PX
+
+    block = _make_block("1", [800])
+    plain = LayoutEngine(fit_width=False, show_credit=False)
+    credited = LayoutEngine(fit_width=False, show_credit=True)
+    assert credited._block_height_px(block) == plain._block_height_px(block) + _CREDIT_BAND_PX
+
+
+def test_credit_skipped_when_source_label_empty():
+    block = _make_block("1", [800], source_label="")
+    credited = LayoutEngine(fit_width=False, show_credit=True)
+    assert credited._block_height_px(block) == 800  # no band reserved
+
+
+def test_credit_variant_renders_pdf(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True, show_credit=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+
+
+# ---------------------------------------------------------------------------
+# Layout engine — page chrome (header/footer)
+# ---------------------------------------------------------------------------
+
+
+def test_chrome_renders_without_logo(minimal_webp_bytes, monkeypatch):
+    # Missing logo asset must not raise — chrome renders without it.
+    from app.pdf import layout_engine
+
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", "/no/such/logo.png")
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.footer_label = "Questions"
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_chrome_renders_with_logo(minimal_webp_bytes, tmp_path, monkeypatch):
+    # A present logo exercises the drawImage(logo) path.
+    from PIL import Image as PILImage
+
+    from app.pdf import layout_engine
+
+    logo = tmp_path / "pillora_logo.png"
+    PILImage.new("RGBA", (500, 200), (134, 59, 255, 255)).save(logo)
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", str(logo))
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_chrome_does_not_change_page_count(minimal_webp_bytes):
+    # Chrome is drawn on every page but never adds pages.
+    engine = _engine(capacity_px=1000)
+    plan = engine.compute_layout([_make_block("1", [800]), _make_block("2", [800])])
+    plan.footer_label = "Questions"
+    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
+    assert _page_count(pdf) == 2
+
+
+def test_layout_plan_footer_label_defaults_empty():
+    plan = LayoutEngine().compute_layout([])
+    assert plan.footer_label == ""
+
+
+# ---------------------------------------------------------------------------
+# Layout engine — cover page
+# ---------------------------------------------------------------------------
+
+
+def _cover(total_marks=42, is_questions=True):
+    from app.pdf.layout_engine import CoverSpec
+
+    return CoverSpec(
+        title="Topical Worksheets",
+        subtitle1="Secondary 3 Mathematics",
+        subtitle2="2024 Prelim",
+        body="Dear students,\n\nWork hard.\n\nTeacher Jia Xin",
+        total_marks=total_marks,
+        is_questions=is_questions,
+    )
+
+
+def test_cover_adds_one_page(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True)
+    blocks = [_make_block("1", [800])]
+    no_cover = engine.compute_layout(blocks)
+    with_cover = engine.compute_layout([_make_block("1", [800])])
+    with_cover.cover = _cover()
+    n0 = _page_count(engine.render(no_cover, fetch_bytes=lambda k: minimal_webp_bytes))
+    n1 = _page_count(engine.render(with_cover, fetch_bytes=lambda k: minimal_webp_bytes))
+    assert n1 == n0 + 1
+
+
+def test_cover_renders_without_logo(minimal_webp_bytes, monkeypatch):
+    from app.pdf import layout_engine
+
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", "/no/such/logo.png")
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_cover_empty_blocks_still_renders(minimal_webp_bytes):
+    # A cover with no questions is a single page.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert _page_count(pdf) == 1
+
+
+def _page_link_uris(pdf: bytes, page_index: int) -> list[str]:
+    """URI targets of the link annotations on one page of the PDF."""
+    page = PdfReader(io.BytesIO(pdf)).pages[page_index]
+    uris = []
+    for annot in page.get("/Annots") or []:
+        action = annot.get_object().get("/A")
+        if action and action.get("/URI"):
+            uris.append(str(action["/URI"]))
+    return uris
+
+
+def test_cover_body_html_link_is_clickable(minimal_webp_bytes):
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    plan.cover.body = (
+        "<p>Dear students,</p>"
+        '<p>Visit <a href="https://example.com/consult">my website</a> to book.</p>'
+    )
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert "https://example.com/consult" in _page_link_uris(pdf, 0)
+
+
+def test_cover_body_rich_text_renders(minimal_webp_bytes):
+    # Bold/italic/underline marks and empty paragraphs render without error.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([])
+    plan.cover = _cover()
+    plan.cover.body = "<p><b>Bold</b> <i>italic</i> <u>underline</u></p><p></p><p>End</p>"
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert _page_count(pdf) == 1
+
+
+def test_every_page_has_clickable_website_chrome(minimal_webp_bytes):
+    # The www.pillora.com.sg header chrome links out on cover and content pages.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover()
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    for page_index in range(_page_count(pdf)):
+        assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
+
+
 def test_question_variant_has_no_block_gap():
     engine = LayoutEngine(fit_width=True)
     assert engine.block_gap_px == 0
@@ -267,6 +435,32 @@ def test_render_combined_matches_separate_renders(minimal_webp_bytes):
     separate = _page_count(e1.render(p1, fetch)) + _page_count(e2.render(p2, fetch))
     combined = _page_count(render_combined([(e1, p1), (e2, p2)], fetch))
     assert combined == separate == 2
+
+
+# ---------------------------------------------------------------------------
+# Routes — /api/generate/cover-defaults
+# ---------------------------------------------------------------------------
+
+
+def test_cover_defaults_requires_auth(client):
+    resp = client.get("/api/generate/cover-defaults")
+    assert resp.status_code == 401
+
+
+def test_cover_defaults_match_paper_request_defaults(public_client):
+    """The served defaults are the same values GeneratePaperRequest falls back
+    to, so a client pre-filling from this endpoint and one omitting the fields
+    produce identical covers."""
+    from app.schemas.generate import GeneratePaperRequest
+
+    resp = public_client.get("/api/generate/cover-defaults")
+    assert resp.status_code == 200
+    data = resp.json()
+    defaults = GeneratePaperRequest(question_ids=[1])
+    assert data["cover_title"] == defaults.cover_title
+    assert data["cover_body"] == defaults.cover_body
+    assert "Dear students," in data["cover_body"]
+    assert '<a href="https://www.pillora.com.sg">' in data["cover_body"]
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +616,52 @@ def test_generate_paper_renumbers_in_selection_order(public_client, sample_paper
     assert captured["fit_width"] is True
 
 
+def test_generate_paper_question_variant_credits_source(
+    public_client, sample_paper, db_session, reference_data
+):
+    # Question variant enables credits and labels each block with the slash format
+    # [School/Year/ExamType/P{paper_number}/Q{question_number}].
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_compute(self, blocks, header_text=""):
+        captured["blocks"] = blocks
+        captured["show_credit"] = self.show_credit
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "question"})
+
+    assert resp.status_code == 200
+    assert captured["show_credit"] is True
+    assert captured["blocks"][0].source_label == "[Raffles Institution/2024/EOY/P1/Q1]"
+
+
+def test_generate_paper_answer_variant_no_credit(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_compute(self, blocks, header_text=""):
+        captured["show_credit"] = self.show_credit
+        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "compute_layout", spy_compute),
+        patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "answer"})
+
+    assert resp.status_code == 200
+    assert captured["show_credit"] is False
+
+
 def test_generate_paper_answer_variant_skips_questions_without_answers(
     public_client, sample_paper, db_session, reference_data
 ):
@@ -493,11 +733,15 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
 
     q_engine, q_plan = sections[0]
     assert q_engine.fit_width is True
+    assert q_engine.show_credit is True
     assert q_plan.header_text == "Test paper"
+    assert q_plan.footer_label == "Questions"
     assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
 
     a_engine, a_plan = sections[1]
     assert a_engine.fit_width is False
+    assert a_engine.show_credit is False
+    assert a_plan.footer_label == "Answers"
     assert a_plan.header_text == ""
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]
@@ -531,6 +775,84 @@ def test_generate_paper_combined_omits_empty_answer_section(
     assert resp.status_code == 200
     assert len(captured["sections"]) == 1
     assert captured["sections"][0][0].fit_width is True
+
+
+def test_generate_paper_attaches_cover_and_total_marks(
+    public_client, sample_paper, db_session, reference_data
+):
+    # Question variant: cover built with the paper total (5+3+2) and Questions.
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+            "cover_title": "My Paper",
+            "cover_subtitle2": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    plan = captured["plan"]
+    assert plan.cover is not None
+    assert plan.cover.total_marks == 10
+    assert plan.cover.is_questions is True
+    assert plan.cover.title == "My Paper"
+    assert plan.footer_label == "2024 Prelim Questions"
+
+
+def test_generate_paper_include_cover_false_omits_cover(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question", "include_cover": False,
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover is None
+
+
+def test_generate_paper_combined_covers_each_section(
+    public_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "combined", "cover_subtitle2": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    (_, q_plan), (_, a_plan) = captured["sections"]
+    assert q_plan.cover.is_questions is True and q_plan.cover.total_marks == 10
+    assert a_plan.cover.is_questions is False and a_plan.cover.total_marks == 10
+    assert a_plan.footer_label == "2024 Prelim Answers"
 
 
 def test_generate_paper_rejects_unknown_variant(public_client):
