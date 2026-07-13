@@ -55,6 +55,12 @@ export default function TopicMultiSelect({ topics, selectedIds, exclusive, onCha
           className="rounded border-gray-300"
         />
         Exclusive only
+        <span
+          className="inline-flex items-center justify-center w-4 h-4 text-xs rounded-full border border-gray-400 text-gray-500 cursor-help"
+          title="Show only questions that cover just your selected topics and nothing else."
+        >
+          ?
+        </span>
       </label>
     </div>
   )
