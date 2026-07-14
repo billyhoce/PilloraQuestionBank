@@ -131,7 +131,9 @@ export default function TopicMultiSelect({ topics, selectedIds, exclusive, onCha
           style={{
             top: coords?.top ?? 0,
             left: coords?.left ?? 0,
-            maxWidth: 280,
+            width: 'max-content',
+            maxWidth: 260,
+            textWrap: 'balance',
             visibility: coords ? 'visible' : 'hidden',
           }}
           className="fixed z-[9999] rounded border border-gray-200 bg-white text-gray-800 text-xs font-normal px-2.5 py-1.5 shadow-lg whitespace-normal break-words"
