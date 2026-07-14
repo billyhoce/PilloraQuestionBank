@@ -4,6 +4,7 @@ import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
 import CoverBodyEditor from '../components/generate/CoverBodyEditor'
+import InfoTooltip from '../components/InfoTooltip'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 import { buildPdfFilename } from '../utils/pdfFilename'
@@ -90,6 +91,7 @@ export default function GeneratePage() {
   // Autocreate panel state
   const [targetMarks, setTargetMarks] = useState('')
   const [autoMode, setAutoMode] = useState('replace') // 'replace' | 'add'
+  const [pickingAlgorithm, setPickingAlgorithm] = useState('random') // 'random' | 'in-order'
   const [autoLoading, setAutoLoading] = useState(false)
   const [notice, setNotice] = useState(null) // { type: 'warning' | 'success', text }
 
@@ -233,6 +235,7 @@ export default function GeneratePage() {
         filters: filtersToSelectPayload(filters),
         target_marks: requestTarget,
         exclude_question_ids: excludeIds,
+        algorithm: pickingAlgorithm,
       })
       const newItems = res.items || []
       if (autoMode === 'replace') {
@@ -371,12 +374,12 @@ export default function GeneratePage() {
           </section>
 
           {/* Selection cart + autocreate */}
-          <aside className="lg:sticky lg:top-6 lg:self-start space-y-4">
+          <aside className="lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-3rem)] lg:overflow-y-auto space-y-4 pr-1">
             {/* Autocreate panel */}
             <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
               <h2 className="text-sm font-semibold text-gray-900">Autocreate Paper</h2>
               <p className="text-xs text-gray-500">
-                Auto-pick a randomized set of questions from the current filters, summing near your target marks.
+                Auto-pick a set of questions from the current filters, summing near your target marks.
               </p>
               <div className="flex items-center gap-2">
                 <label className="text-xs text-gray-600" htmlFor="target-marks">Target marks</label>
@@ -409,6 +412,36 @@ export default function GeneratePage() {
                   />
                   Add to selection
                 </label>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 text-xs font-medium text-gray-700">
+                  Picking Algorithm
+                  <InfoTooltip label="What does Picking Algorithm do?">
+                    <strong>In-order</strong> deterministically picks from the top of the filtered
+                    list, so the same filters always give the same questions.{' '}
+                    <strong>Random</strong> picks a different fitting set each time you autocreate.
+                  </InfoTooltip>
+                </div>
+                <div className="flex gap-3 text-xs text-gray-700">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="picking-algorithm"
+                      checked={pickingAlgorithm === 'in-order'}
+                      onChange={() => setPickingAlgorithm('in-order')}
+                    />
+                    In-order
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="picking-algorithm"
+                      checked={pickingAlgorithm === 'random'}
+                      onChange={() => setPickingAlgorithm('random')}
+                    />
+                    Random
+                  </label>
+                </div>
               </div>
               <button
                 type="button"
@@ -461,7 +494,7 @@ export default function GeneratePage() {
                   Add questions from the list, or use Autocreate above.
                 </p>
               ) : (
-                <ul className="space-y-2 max-h-[50vh] overflow-y-auto">
+                <ul className="space-y-2">
                   {cart.map(it => (
                     <li key={it.id} className="flex items-start justify-between gap-2 text-xs border-b border-gray-100 pb-2">
                       <div className="min-w-0">

@@ -7,7 +7,7 @@ from pypdf import PdfReader
 
 from app.models.orm import Question
 from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan, render_combined
-from app.services.generate import knapsack_select
+from app.services.generate import in_order_select, knapsack_select
 
 # The knapsack function, /api/generate/select, and the PDF layout engine +
 # /api/generate/paper route are all implemented — every test here runs for real.
@@ -111,6 +111,62 @@ def test_knapsack_randomized_produces_variety():
         assert sum(q.marks for q in result) == 8
         seen.add(frozenset(q.id for q in result))
     assert len(seen) > 1
+
+
+# ---------------------------------------------------------------------------
+# In-order select — deterministic pure-function tests
+# ---------------------------------------------------------------------------
+
+
+def test_in_order_exact_match():
+    questions = [_make_question(1, 5), _make_question(2, 3), _make_question(3, 2)]
+    result = in_order_select(questions, target_marks=8)
+    assert sum(q.marks for q in result) == 8
+
+
+def test_in_order_picks_from_the_top():
+    # Greedy from the top: 5 + 3 reaches the target exactly, so id 3 is not used.
+    questions = [_make_question(1, 5), _make_question(2, 3), _make_question(3, 8)]
+    result = in_order_select(questions, target_marks=8)
+    assert [q.id for q in result] == [1, 2]
+
+
+def test_in_order_is_deterministic():
+    # Unlike the randomized knapsack, in-order always returns the SAME subset for
+    # the same pool/target (a greedy walk from the top — need not be an exact hit).
+    questions = [_make_question(i, m) for i, m in enumerate([1, 2, 3, 4, 5, 6, 7], start=1)]
+    first = [q.id for q in in_order_select(questions, target_marks=8)]
+    assert first  # non-empty
+    for _ in range(20):
+        assert [q.id for q in in_order_select(questions, target_marks=8)] == first
+
+
+def test_in_order_no_exact_match_returns_closest():
+    # No subset of [5, 7, 3] taken in order sums to 6; closest is within 1.
+    questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
+    result = in_order_select(questions, target_marks=6)
+    assert abs(sum(q.marks for q in result) - 6) <= 1
+
+
+def test_in_order_empty_pool_returns_empty():
+    assert in_order_select([], target_marks=10) == []
+
+
+def test_in_order_target_zero_returns_empty():
+    questions = [_make_question(1, 5), _make_question(2, 3)]
+    assert in_order_select(questions, target_marks=0) == []
+
+
+def test_in_order_null_marks_questions_excluded():
+    questions = [_make_question(1, 5), _make_question(2, None), _make_question(3, 3)]
+    result = in_order_select(questions, target_marks=3)
+    assert all(q.marks is not None for q in result)
+    assert 2 not in [q.id for q in result]
+
+
+def test_in_order_all_null_marks_returns_empty():
+    questions = [_make_question(1, None), _make_question(2, None)]
+    assert in_order_select(questions, target_marks=5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +605,31 @@ def test_generate_select_inexact_returns_warning(public_client, sample_paper, re
     assert data["total_marks"] == 10
 
 
+def test_generate_select_in_order_is_stable(public_client, sample_paper, reference_data):
+    """The in-order algorithm returns the same questions on repeated calls."""
+    body = {
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 5,  # multiple subsets can total 5; in-order must be stable
+        "algorithm": "in-order",
+    }
+    first = public_client.post("/api/generate/select", json=body)
+    assert first.status_code == 200
+    first_ids = [it["id"] for it in first.json()["items"]]
+    for _ in range(5):
+        again = public_client.post("/api/generate/select", json=body)
+        assert [it["id"] for it in again.json()["items"]] == first_ids
+
+
+def test_generate_select_defaults_to_random_algorithm(public_client, sample_paper, reference_data):
+    """Omitting `algorithm` still works (defaults to the random knapsack)."""
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_marks": 10,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["total_marks"] == 10
+
+
 # ---------------------------------------------------------------------------
 # Routes — /api/generate/paper PDF export (deferred: PDF phase)
 # ---------------------------------------------------------------------------
@@ -620,7 +701,7 @@ def test_generate_paper_question_variant_credits_source(
     public_client, sample_paper, db_session, reference_data
 ):
     # Question variant enables credits and labels each block with the slash format
-    # [School/Year/ExamType/P{paper_number}/Q{question_number}].
+    # [School/Year/ExamType/{paper_number}/Q{question_number}].
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
@@ -638,7 +719,7 @@ def test_generate_paper_question_variant_credits_source(
 
     assert resp.status_code == 200
     assert captured["show_credit"] is True
-    assert captured["blocks"][0].source_label == "[Raffles Institution/2024/EOY/P1/Q1]"
+    assert captured["blocks"][0].source_label == "[Raffles Institution/2024/EOY/1/Q1]"
 
 
 def test_generate_paper_answer_variant_no_credit(

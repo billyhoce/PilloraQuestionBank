@@ -25,6 +25,9 @@ class SelectRequest(BaseModel):
     filters: GenerateFilters = GenerateFilters()
     target_marks: int
     exclude_question_ids: list[int] = []
+    # Picking algorithm: "random" (randomized-restart greedy, a different paper
+    # each run) or "in-order" (deterministic pass from the top of the pool).
+    algorithm: Literal["random", "in-order"] = "random"
 
 
 class SelectResponse(BaseModel):

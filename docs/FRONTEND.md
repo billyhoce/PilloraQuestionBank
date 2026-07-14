@@ -125,9 +125,10 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
   - **Exclusive only** — a checkbox beside the topic chips that restricts results to questions
     covering **only** the selected topics and nothing else (maps to the `exclusive` API param — see
     [BACKEND.md](./BACKEND.md)). Disabled until at least one topic is selected, and auto-cleared
-    when the topic selection is emptied. A help "?" badge next to it shows an explanatory tooltip on
-    hover, pins it open on click, and dismisses it on outside-click / Escape / scroll; the tooltip
-    is portal-rendered so it can't be clipped by the filter card.
+    when the topic selection is emptied. A help "?" badge next to it (the shared `InfoTooltip.jsx`)
+    shows an explanatory tooltip on hover, pins it open on click, and dismisses it on
+    outside-click / Escape / scroll; the tooltip is portal-rendered so it can't be clipped by the
+    filter card.
 - **Subtopic** — multi-select, **scoped to selected Topic(s)**
 - **Search** — free-text keyword box. Runs **live as the user types**, debounced ~300ms after the last keystroke (Enter or the Search button commit instantly); clearing the box returns to all questions. Matches topic/subtopic/tag/school/subject/level/school-level tier ("Secondary")/stream/exam-type names, the `T{n}` topic-number token, and — for an all-digit keyword — the paper year.
 
@@ -143,7 +144,9 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 `/generate` (`src/pages/GeneratePage.jsx`), authenticated-only. A single page combining manual
 selection and marks-based autofill — not separate tabs. Reached via the "Generate Paper" link in
 the shared menubar. Layout: filtered results on the left, a sticky sidebar (autocreate panel +
-selection cart) on the right.
+selection cart) on the right. The sidebar fills the viewport height
+(`lg:h-[calc(100vh-3rem)] lg:overflow-y-auto`) and scrolls as a single region, so a long cart
+scrolls the sidebar rather than the page.
 
 ### Filtered results (left)
 - Reuses the Browse `<FilterBar />` and `<QuestionCard />` (in `selectable` mode) plus paginated
@@ -156,13 +159,17 @@ selection cart) on the right.
   **total marks**, and a warning when any selected question has no marks set. "Clear" empties it.
 
 ### Autocreate panel (right)
-- A **target marks** number input plus a **Replace selection / Add to selection** radio.
+- A **target marks** number input, a **Replace selection / Add to selection** radio, and a
+  **Picking Algorithm** radio (**In-order / Random**, defaulting to Random) with an `<InfoTooltip />`
+  explaining the difference (Random varies each run; In-order deterministically picks from the top of
+  the filtered list).
 - "Autocreate Paper" calls `POST /api/generate/select` with
-  `{ filters, target_marks, exclude_question_ids }`:
+  `{ filters, target_marks, exclude_question_ids, algorithm }`:
   - **Replace** — sends the raw target; the response items become the new cart.
   - **Add** — sends `target_marks - cartTotalMarks` and the current cart ids as
     `exclude_question_ids`, so the picked questions top up the existing selection (guards against a
     non-positive remaining target).
+  - **algorithm** — `"random"` or `"in-order"`, from the Picking Algorithm radio.
 - Surfaces the server's `warning` (e.g. inexact total, no matches) or a success summary as an inline
   notice.
 

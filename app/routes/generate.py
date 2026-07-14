@@ -19,7 +19,7 @@ from app.schemas.generate import (
     SelectRequest,
     SelectResponse,
 )
-from app.services.generate import knapsack_select
+from app.services.generate import in_order_select, knapsack_select
 from app.storage.s3_client import get_image_bytes
 
 router = APIRouter(prefix="/api", tags=["generation"])
@@ -28,15 +28,15 @@ router = APIRouter(prefix="/api", tags=["generation"])
 def _source_label(q: Question) -> str:
     """Provenance credit for a question, drawn above it on the question paper.
 
-    Format: ``[School/Year/ExamType/P{paper_number}/Q{question_number}]`` — e.g.
-    ``[Bendemeer Secondary School/2024/Prelim/P2/Q6]``. Uses the question's
+    Format: ``[School/Year/ExamType/{paper_number}/Q{question_number}]`` — e.g.
+    ``[Bendemeer Secondary School/2024/Prelim/2/Q6]``. Uses the question's
     original number (not the renumbered position). ``paper_number`` is stored as
-    a bare ``"1"``/``"2"`` so a ``P`` prefix is added here.
+    a bare ``"1"``/``"2"`` and is rendered as-is.
     """
     p = q.paper
     return (
         f"[{p.school.name}/{p.year}/{p.exam_type.name}/"
-        f"P{p.paper_number}/Q{q.question_number}]"
+        f"{p.paper_number}/Q{q.question_number}]"
     )
 
 
@@ -90,12 +90,13 @@ def select_questions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Auto-select a randomized set of questions summing near ``target_marks``.
+    """Auto-select a set of questions summing near ``target_marks``.
 
     Reuses the Browse filter suite to build the candidate pool, excludes any
-    already-chosen questions, then runs the randomized knapsack. Returns the
-    selected questions (never a 404 — an empty result with a warning keeps the
-    live builder UI responsive).
+    already-chosen questions, then runs the chosen picking algorithm
+    (``"random"`` randomized knapsack or ``"in-order"`` deterministic pass).
+    Returns the selected questions (never a 404 — an empty result with a warning
+    keeps the live builder UI responsive).
     """
     f = payload.filters
     base = db.query(Question).join(Question.paper)
@@ -122,7 +123,10 @@ def select_questions(
         .all()
     )
 
-    selected = knapsack_select(candidates, payload.target_marks)
+    if payload.algorithm == "in-order":
+        selected = in_order_select(candidates, payload.target_marks)
+    else:
+        selected = knapsack_select(candidates, payload.target_marks)
     total_marks = sum(q.marks for q in selected)
     exact = total_marks == payload.target_marks
 

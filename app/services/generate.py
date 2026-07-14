@@ -1,10 +1,15 @@
 """Generate service — question selection for paper generation.
 
-``knapsack_select`` picks a randomized subset of questions whose marks sum as
-close as possible to a target. It is a randomized-restart greedy rather than an
-exact optimizer: at v1 scale a simple iterative approach is fine, and the
-randomness is a feature — the same filters/target produce a *different* paper
-each time, while exact-match totals are still reliably found across restarts.
+Two picking algorithms are offered:
+
+- ``knapsack_select`` picks a randomized subset of questions whose marks sum as
+  close as possible to a target. It is a randomized-restart greedy rather than an
+  exact optimizer: at v1 scale a simple iterative approach is fine, and the
+  randomness is a feature — the same filters/target produce a *different* paper
+  each time, while exact-match totals are still reliably found across restarts.
+- ``in_order_select`` is the deterministic counterpart: a single greedy pass over
+  the pool in its given (id) order, so identical filters/target always yield the
+  same questions.
 """
 import random
 
@@ -68,5 +73,45 @@ def knapsack_select(questions: list, target_marks: int) -> list:
         consider(subset, total)
         if best_distance == 0:
             break
+
+    return best_subset
+
+
+def in_order_select(questions: list, target_marks: int) -> list:
+    """Deterministically select a subset of ``questions`` summing near
+    ``target_marks``.
+
+    A single greedy pass over the pool in its given order (the caller supplies it
+    ordered by ``Question.id``): accumulate from the top until the running total
+    reaches or exceeds the target, tracking the prefix whose total is closest to
+    the target. No shuffling, restarts, or tie-break randomness — the same
+    filtered pool and target always return the same questions. Mirrors
+    ``knapsack_select``'s under/overshoot preference. Questions with null or
+    non-positive marks are ignored. Returns ``[]`` for a non-positive target or
+    when nothing is selectable.
+    """
+    if target_marks <= 0:
+        return []
+
+    pool = [q for q in questions if q.marks is not None and q.marks > 0]
+    if not pool:
+        return []
+
+    best_subset: list = []
+    best_distance = target_marks  # distance of the empty subset (sum 0)
+    subset: list = []
+    total = 0
+    for q in pool:
+        if total >= target_marks:
+            break
+        # The subset before adding this question stays under the target; keep it
+        # if it is the closest under-total seen so far (first-found wins on ties).
+        if abs(total - target_marks) < best_distance:
+            best_subset = list(subset)
+            best_distance = abs(total - target_marks)
+        subset.append(q)
+        total += q.marks
+    if abs(total - target_marks) < best_distance:
+        best_subset = list(subset)
 
     return best_subset

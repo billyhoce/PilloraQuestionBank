@@ -120,3 +120,37 @@ describe('GeneratePage PDF output mode', () => {
     expect(body.include_cover).toBe(true)
   })
 })
+
+describe('GeneratePage picking algorithm', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.questions.list.mockResolvedValue({ items: [item], total: 1 })
+    api.generate.coverDefaults.mockResolvedValue(COVER_DEFAULTS)
+    api.generate.select.mockResolvedValue({ items: [item], total_marks: 5, target_marks: 5, exact: true, warning: null })
+  })
+
+  it('defaults the Picking Algorithm to Random', async () => {
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    expect(await screen.findByRole('radio', { name: /^random$/i })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /^in-order$/i })).not.toBeChecked()
+  })
+
+  it('sends the chosen algorithm to the select endpoint', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.click(await screen.findByRole('radio', { name: /^in-order$/i }))
+    await user.type(screen.getByLabelText(/target marks/i), '5')
+    await user.click(screen.getByRole('button', { name: /autocreate paper/i }))
+    await waitFor(() => expect(api.generate.select).toHaveBeenCalledTimes(1))
+    const [body] = api.generate.select.mock.calls[0]
+    expect(body.algorithm).toBe('in-order')
+  })
+})

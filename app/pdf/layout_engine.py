@@ -95,7 +95,7 @@ _HEADER_PAD_PX = 40
 # question in small grey type; the whole band is reserved in the block height so
 # packing and rendering agree.
 _CREDIT_FONT = "Helvetica"
-_CREDIT_FONT_PX = 34  # ~10pt at 300 DPI
+_CREDIT_FONT_PX = 40  # ~11.5pt at 300 DPI
 _CREDIT_GAP_PX = 18   # gap between the credit line and the image below it
 _CREDIT_BAND_PX = _CREDIT_FONT_PX + _CREDIT_GAP_PX  # vertical space one credit reserves
 _CREDIT_GREY = 0.35
