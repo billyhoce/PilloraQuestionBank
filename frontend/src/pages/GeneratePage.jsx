@@ -6,6 +6,7 @@ import QuestionDetailModal from '../components/browse/QuestionDetailModal'
 import CoverBodyEditor from '../components/generate/CoverBodyEditor'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
+import { buildPdfFilename } from '../utils/pdfFilename'
 
 const PAGE_SIZE = 50
 
@@ -38,15 +39,6 @@ function filtersToListArgs(filters, page) {
     page,
     page_size: PAGE_SIZE,
   }
-}
-
-// Timestamp for download filenames, e.g. "2026-07-04_16-45-30".
-function formatTimestamp(d) {
-  const p = (n) => String(n).padStart(2, '0')
-  return (
-    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
-    `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
-  )
 }
 
 // Trigger a browser download of a Blob under the given filename.
@@ -83,6 +75,13 @@ export default function GeneratePage() {
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
+
+  // Reference data used only to resolve filter IDs into names for the
+  // downloaded PDF filename (see buildPdfFilename).
+  const [levels, setLevels] = useState([])
+  const [streams, setStreams] = useState([])
+  const [subjects, setSubjects] = useState([])
+  const [topicOptions, setTopicOptions] = useState([])
 
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
@@ -133,6 +132,44 @@ export default function GeneratePage() {
       .catch(() => {})
     return () => controller.abort()
   }, [])
+
+  // Load the reference lists once; used to turn the active filter IDs into
+  // human-readable names for the download filename.
+  useEffect(() => {
+    Promise.all([api.levels.list(), api.streams.list(), api.subjects.list()])
+      .then(([lv, st, su]) => {
+        setLevels(lv || [])
+        setStreams(st || [])
+        setSubjects(su || [])
+      })
+      .catch(() => {})
+  }, [])
+
+  // Topics only exist for a specific subject + stream pair (same rule as the
+  // Topic filter). Refresh the option list whenever that pair changes.
+  useEffect(() => {
+    if (filters.subject_id && filters.stream_id) {
+      api.topics.list(filters.subject_id, filters.stream_id)
+        .then(data => setTopicOptions(data || []))
+        .catch(() => setTopicOptions([]))
+    } else {
+      setTopicOptions([])
+    }
+  }, [filters.subject_id, filters.stream_id])
+
+  // Resolve the active filters into the name context buildPdfFilename expects.
+  const filenameContext = useMemo(() => {
+    const byId = (list, id) => list.find(x => String(x.id) === String(id))
+    const selectedTopics = (filters.topic_ids || [])
+      .map(id => byId(topicOptions, id))
+      .filter(Boolean)
+    return {
+      level: byId(levels, filters.level_id)?.name || null,
+      stream: byId(streams, filters.stream_id)?.name || null,
+      subject: byId(subjects, filters.subject_id)?.name || null,
+      topics: selectedTopics,
+    }
+  }, [levels, streams, subjects, topicOptions, filters.level_id, filters.stream_id, filters.subject_id, filters.topic_ids])
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -284,7 +321,6 @@ export default function GeneratePage() {
       setGenProgress(p => (p < 90 ? p + Math.max(1, (90 - p) * 0.08) : p))
     }, 200)
 
-    const ts = formatTimestamp(new Date())
     const ids = cart.map(it => it.id)
     // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
     // Title/body still null (defaults never loaded) are omitted so the backend
@@ -303,7 +339,7 @@ export default function GeneratePage() {
         })
         stopProgress()
         setGenProgress(100)
-        downloadBlob(blob, `${ts}_paper.pdf`)
+        downloadBlob(blob, buildPdfFilename({ variant: 'combined', context: filenameContext }))
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
@@ -312,9 +348,12 @@ export default function GeneratePage() {
         ])
         stopProgress()
         setGenProgress(100)
-        downloadBlob(questionBlob, `${ts}_question.pdf`)
+        downloadBlob(questionBlob, buildPdfFilename({ variant: 'question', context: filenameContext }))
         // Small gap so the browser doesn't drop the second programmatic download.
-        setTimeout(() => downloadBlob(answerBlob, `${ts}_answer.pdf`), 600)
+        setTimeout(
+          () => downloadBlob(answerBlob, buildPdfFilename({ variant: 'answer', context: filenameContext })),
+          600,
+        )
         setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })
       }
     } catch (e) {
