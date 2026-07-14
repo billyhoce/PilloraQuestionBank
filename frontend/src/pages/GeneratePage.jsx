@@ -91,7 +91,7 @@ export default function GeneratePage() {
   // Autocreate panel state
   const [targetMarks, setTargetMarks] = useState('')
   const [autoMode, setAutoMode] = useState('replace') // 'replace' | 'add'
-  const [pickingAlgorithm, setPickingAlgorithm] = useState('random') // 'random' | 'in-order'
+  const [pickingAlgorithm, setPickingAlgorithm] = useState('in-order') // 'random' | 'in-order'
   const [autoLoading, setAutoLoading] = useState(false)
   const [notice, setNotice] = useState(null) // { type: 'warning' | 'success', text }
 
