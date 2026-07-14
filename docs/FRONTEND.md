@@ -152,6 +152,10 @@ scrolls the sidebar rather than the page.
 - Reuses the Browse `<FilterBar />` and `<QuestionCard />` (in `selectable` mode) plus paginated
   "Load more". Each card shows an `+ Add` / `✓ Added` toggle and the question's marks.
 - Clicking a card's preview opens the shared `<QuestionDetailModal />`.
+- A **Select All** button (in the results header) adds up to **`SELECT_ALL_LIMIT` = 50** questions
+  matching the current filters to the cart (merged/de-duped). It refetches page 1 via
+  `api.questions.list`; when the filter's `total` exceeds 50 it adds the first 50 and shows a
+  "that's the Select All limit" warning (the button label also reads "Select All (first 50)").
 
 ### Manual selection cart (right)
 - Adding/removing questions maintains a **selection cart** — full list-item objects, de-duped by id.
@@ -159,19 +163,23 @@ scrolls the sidebar rather than the page.
   **total marks**, and a warning when any selected question has no marks set. "Clear" empties it.
 
 ### Autocreate panel (right)
-- A **target marks** number input, a **Replace selection / Add to selection** radio, and a
-  **Picking Algorithm** radio (**In-order / Random**, defaulting to Random) with an `<InfoTooltip />`
-  explaining the difference (Random varies each run; In-order deterministically picks from the top of
-  the filtered list).
+- A **"Select by"** dropdown — **Number of questions** (default) or **Marks** — plus a number input
+  whose label follows the choice, a **Replace selection / Add to selection** radio, and a **Picking
+  Algorithm** radio (**In-order / Random**) with an `<InfoTooltip />` explaining the difference. The
+  panel defaults to **Random + Number of questions**.
 - "Autocreate Paper" calls `POST /api/generate/select` with
-  `{ filters, target_marks, exclude_question_ids, algorithm }`:
+  `{ filters, target_type, target_value, exclude_question_ids, algorithm }`:
+  - **target_type** — `"count"` or `"marks"`, from the Select-by dropdown; **target_value** is the
+    number input.
   - **Replace** — sends the raw target; the response items become the new cart.
-  - **Add** — sends `target_marks - cartTotalMarks` and the current cart ids as
-    `exclude_question_ids`, so the picked questions top up the existing selection (guards against a
-    non-positive remaining target).
-  - **algorithm** — `"random"` or `"in-order"`, from the Picking Algorithm radio.
-- Surfaces the server's `warning` (e.g. inexact total, no matches) or a success summary as an inline
-  notice.
+  - **Add** — sends `target_value - cartTotalMarks` (marks) or `target_value - cart.length` (count)
+    and the current cart ids as `exclude_question_ids`, so the picked questions top up the existing
+    selection (guards against a non-positive remaining target).
+  - **algorithm** — `"random"` or `"in-order"`, from the Picking Algorithm radio. For a marks target,
+    In-order stops just before exceeding the total and Random gets as close as it can; for a count
+    target, In-order takes the first N and Random takes N at random.
+- Surfaces the server's `warning` (e.g. inexact total, too few matches, no matches) or a success
+  summary as an inline notice.
 
 ### Generate PDF (right)
 - **Cover page** controls: an **"Include cover page"** checkbox (on by default) revealing editable

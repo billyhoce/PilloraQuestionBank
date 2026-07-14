@@ -121,15 +121,15 @@ describe('GeneratePage PDF output mode', () => {
   })
 })
 
-describe('GeneratePage picking algorithm', () => {
+describe('GeneratePage autocreate target & algorithm', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.questions.list.mockResolvedValue({ items: [item], total: 1 })
     api.generate.coverDefaults.mockResolvedValue(COVER_DEFAULTS)
-    api.generate.select.mockResolvedValue({ items: [item], total_marks: 5, target_marks: 5, exact: true, warning: null })
+    api.generate.select.mockResolvedValue({ items: [item], total_marks: 5, count: 1, exact: true, warning: null })
   })
 
-  it('defaults the Picking Algorithm to Random', async () => {
+  it('defaults to Random + selecting by number of questions', async () => {
     render(
       <MemoryRouter>
         <GeneratePage />
@@ -137,20 +137,75 @@ describe('GeneratePage picking algorithm', () => {
     )
     expect(await screen.findByRole('radio', { name: /^random$/i })).toBeChecked()
     expect(screen.getByRole('radio', { name: /^in-order$/i })).not.toBeChecked()
+    expect(screen.getByLabelText(/select by/i)).toHaveValue('count')
+    expect(screen.getByLabelText(/number of questions/i)).toBeInTheDocument()
   })
 
-  it('sends the chosen algorithm to the select endpoint', async () => {
+  it('sends target_type "count" and algorithm "random" by default', async () => {
     const user = userEvent.setup()
     render(
       <MemoryRouter>
         <GeneratePage />
       </MemoryRouter>
     )
-    await user.click(await screen.findByRole('radio', { name: /^in-order$/i }))
-    await user.type(screen.getByLabelText(/target marks/i), '5')
+    await user.type(await screen.findByLabelText(/number of questions/i), '5')
     await user.click(screen.getByRole('button', { name: /autocreate paper/i }))
     await waitFor(() => expect(api.generate.select).toHaveBeenCalledTimes(1))
     const [body] = api.generate.select.mock.calls[0]
+    expect(body.target_type).toBe('count')
+    expect(body.target_value).toBe(5)
+    expect(body.algorithm).toBe('random')
+  })
+
+  it('sends target_type "marks" and algorithm "in-order" when chosen', async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.selectOptions(await screen.findByLabelText(/select by/i), 'marks')
+    await user.click(screen.getByRole('radio', { name: /^in-order$/i }))
+    await user.type(screen.getByLabelText(/target marks/i), '20')
+    await user.click(screen.getByRole('button', { name: /autocreate paper/i }))
+    await waitFor(() => expect(api.generate.select).toHaveBeenCalledTimes(1))
+    const [body] = api.generate.select.mock.calls[0]
+    expect(body.target_type).toBe('marks')
+    expect(body.target_value).toBe(20)
     expect(body.algorithm).toBe('in-order')
+  })
+})
+
+describe('GeneratePage Select All', () => {
+  const itemB = { ...item, id: 2, question_number: 4 }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.generate.coverDefaults.mockResolvedValue(COVER_DEFAULTS)
+  })
+
+  it('adds matching questions to the cart', async () => {
+    const user = userEvent.setup()
+    api.questions.list.mockResolvedValue({ items: [item, itemB], total: 2 })
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.click(await screen.findByRole('button', { name: /select all/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: /selection \(2\)/i })).toBeInTheDocument())
+    expect(screen.getByText(/added 2 questions/i)).toBeInTheDocument()
+  })
+
+  it('warns when there are more matches than the limit', async () => {
+    const user = userEvent.setup()
+    api.questions.list.mockResolvedValue({ items: [item, itemB], total: 120 })
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.click(await screen.findByRole('button', { name: /select all/i }))
+    await waitFor(() => expect(screen.getByText(/select all limit/i)).toBeInTheDocument())
   })
 })

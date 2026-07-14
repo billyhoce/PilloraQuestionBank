@@ -19,7 +19,7 @@ from app.schemas.generate import (
     SelectRequest,
     SelectResponse,
 )
-from app.services.generate import in_order_select, knapsack_select
+from app.services.generate import count_select, in_order_select, knapsack_select
 from app.storage.s3_client import get_image_bytes
 
 router = APIRouter(prefix="/api", tags=["generation"])
@@ -90,13 +90,14 @@ def select_questions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Auto-select a set of questions summing near ``target_marks``.
+    """Auto-select a set of questions for the given target and algorithm.
 
-    Reuses the Browse filter suite to build the candidate pool, excludes any
-    already-chosen questions, then runs the chosen picking algorithm
-    (``"random"`` randomized knapsack or ``"in-order"`` deterministic pass).
-    Returns the selected questions (never a 404 — an empty result with a warning
-    keeps the live builder UI responsive).
+    Reuses the Browse filter suite to build the candidate pool and excludes any
+    already-chosen questions. The target is either a marks total
+    (``target_type="marks"``) or a question count (``target_type="count"``),
+    picked with the chosen algorithm (``"random"`` or ``"in-order"``). Returns the
+    selected questions (never a 404 — an empty result with a warning keeps the
+    live builder UI responsive).
     """
     f = payload.filters
     base = db.query(Question).join(Question.paper)
@@ -123,28 +124,45 @@ def select_questions(
         .all()
     )
 
-    if payload.algorithm == "in-order":
-        selected = in_order_select(candidates, payload.target_marks)
+    if payload.target_type == "count":
+        selected = count_select(
+            candidates, payload.target_value, randomize=(payload.algorithm == "random")
+        )
+    elif payload.algorithm == "in-order":
+        selected = in_order_select(candidates, payload.target_value)
     else:
-        selected = knapsack_select(candidates, payload.target_marks)
-    total_marks = sum(q.marks for q in selected)
-    exact = total_marks == payload.target_marks
+        selected = knapsack_select(candidates, payload.target_value)
+
+    total_marks = sum(q.marks or 0 for q in selected)
+    count = len(selected)
+    exact = (count == payload.target_value) if payload.target_type == "count" \
+        else (total_marks == payload.target_value)
 
     warning = None
     if not candidates:
         warning = "No questions match the current filters."
     elif not selected:
-        warning = "No questions with marks match the current filters."
-    elif not exact:
         warning = (
-            f"Could not reach exactly {payload.target_marks} marks. "
-            f"Closest achievable is {total_marks} marks."
+            "No questions with marks match the current filters."
+            if payload.target_type == "marks"
+            else "No questions match the current filters."
         )
+    elif not exact:
+        if payload.target_type == "count":
+            warning = (
+                f"Could not select {payload.target_value} questions. "
+                f"Only {count} match the current filters."
+            )
+        else:
+            warning = (
+                f"Could not reach exactly {payload.target_value} marks. "
+                f"Closest achievable is {total_marks} marks."
+            )
 
     return {
         "items": [serialize_list_item(q) for q in selected],
         "total_marks": total_marks,
-        "target_marks": payload.target_marks,
+        "count": count,
         "exact": exact,
         "warning": warning,
     }

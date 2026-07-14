@@ -7,7 +7,7 @@ from pypdf import PdfReader
 
 from app.models.orm import Question
 from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan, render_combined
-from app.services.generate import in_order_select, knapsack_select
+from app.services.generate import count_select, in_order_select, knapsack_select
 
 # The knapsack function, /api/generate/select, and the PDF layout engine +
 # /api/generate/paper route are all implemented — every test here runs for real.
@@ -121,6 +121,8 @@ def test_knapsack_randomized_produces_variety():
 def test_in_order_exact_match():
     questions = [_make_question(1, 5), _make_question(2, 3), _make_question(3, 2)]
     result = in_order_select(questions, target_marks=8)
+    # 5 + 3 lands exactly on 8; the 2-mark question would keep it at 10 (over), so stop.
+    assert [q.id for q in result] == [1, 2]
     assert sum(q.marks for q in result) == 8
 
 
@@ -129,6 +131,15 @@ def test_in_order_picks_from_the_top():
     questions = [_make_question(1, 5), _make_question(2, 3), _make_question(3, 8)]
     result = in_order_select(questions, target_marks=8)
     assert [q.id for q in result] == [1, 2]
+
+
+def test_in_order_stops_at_first_overflow_never_exceeds():
+    # From the top: 5 fits (5); the next (7) would overshoot 6, so stop. Never
+    # returns a total above the target — no closest-overshoot fallback.
+    questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
+    result = in_order_select(questions, target_marks=6)
+    assert [q.id for q in result] == [1]
+    assert sum(q.marks for q in result) <= 6
 
 
 def test_in_order_is_deterministic():
@@ -141,13 +152,6 @@ def test_in_order_is_deterministic():
         assert [q.id for q in in_order_select(questions, target_marks=8)] == first
 
 
-def test_in_order_no_exact_match_returns_closest():
-    # No subset of [5, 7, 3] taken in order sums to 6; closest is within 1.
-    questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
-    result = in_order_select(questions, target_marks=6)
-    assert abs(sum(q.marks for q in result) - 6) <= 1
-
-
 def test_in_order_empty_pool_returns_empty():
     assert in_order_select([], target_marks=10) == []
 
@@ -157,16 +161,56 @@ def test_in_order_target_zero_returns_empty():
     assert in_order_select(questions, target_marks=0) == []
 
 
-def test_in_order_null_marks_questions_excluded():
-    questions = [_make_question(1, 5), _make_question(2, None), _make_question(3, 3)]
-    result = in_order_select(questions, target_marks=3)
-    assert all(q.marks is not None for q in result)
-    assert 2 not in [q.id for q in result]
+def test_in_order_null_marks_questions_skipped():
+    # The null-mark question is ignored; the 3-mark one after it is still reachable.
+    questions = [_make_question(1, 2), _make_question(2, None), _make_question(3, 3)]
+    result = in_order_select(questions, target_marks=5)
+    assert [q.id for q in result] == [1, 3]
 
 
 def test_in_order_all_null_marks_returns_empty():
     questions = [_make_question(1, None), _make_question(2, None)]
     assert in_order_select(questions, target_marks=5) == []
+
+
+# ---------------------------------------------------------------------------
+# Count select — fixed number of questions
+# ---------------------------------------------------------------------------
+
+
+def test_count_in_order_takes_first_n():
+    questions = [_make_question(i, i) for i in range(1, 6)]
+    result = count_select(questions, 3, randomize=False)
+    assert [q.id for q in result] == [1, 2, 3]
+
+
+def test_count_in_order_ignores_marks():
+    # Count mode selects regardless of marks (unlike the marks selectors).
+    questions = [_make_question(1, None), _make_question(2, 0), _make_question(3, 5)]
+    result = count_select(questions, 2, randomize=False)
+    assert [q.id for q in result] == [1, 2]
+
+
+def test_count_random_returns_correct_number_from_pool():
+    questions = [_make_question(i, i) for i in range(1, 11)]
+    result = count_select(questions, 4, randomize=True)
+    ids = [q.id for q in result]
+    assert len(result) == 4
+    assert len(set(ids)) == 4  # no duplicates
+    assert set(ids).issubset({q.id for q in questions})
+
+
+def test_count_more_than_pool_returns_all():
+    questions = [_make_question(1, 1), _make_question(2, 2)]
+    assert len(count_select(questions, 10, randomize=False)) == 2
+    assert len(count_select(questions, 10, randomize=True)) == 2
+
+
+def test_count_non_positive_or_empty_returns_empty():
+    questions = [_make_question(1, 1)]
+    assert count_select(questions, 0, randomize=False) == []
+    assert count_select(questions, -1, randomize=True) == []
+    assert count_select([], 3, randomize=False) == []
 
 
 # ---------------------------------------------------------------------------
@@ -525,19 +569,22 @@ def test_cover_defaults_match_paper_request_defaults(public_client):
 
 
 def test_generate_select_requires_auth(client):
-    resp = client.post("/api/generate/select", json={"filters": {}, "target_marks": 10})
+    resp = client.post("/api/generate/select", json={
+        "filters": {}, "target_type": "marks", "target_value": 10,
+    })
     assert resp.status_code == 401
 
 
 def test_generate_select_returns_selection(public_client, sample_paper, reference_data):
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
-        "target_marks": 10,  # 5 + 3 + 2 = 10, exact
+        "target_type": "marks",
+        "target_value": 10,  # 5 + 3 + 2 = 10, exact
     })
     assert resp.status_code == 200
     data = resp.json()
     assert data["total_marks"] == 10
-    assert data["target_marks"] == 10
+    assert data["count"] == 3
     assert data["exact"] is True
     assert data["warning"] is None
     assert len(data["items"]) == 3
@@ -548,7 +595,8 @@ def test_generate_select_excludes_ids(public_client, sample_paper, db_session, r
     excluded = [q.id for q in qs if q.marks == 5]  # the 5-mark question
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
-        "target_marks": 5,  # remaining pool is 3 + 2 = 5
+        "target_type": "marks",
+        "target_value": 5,  # remaining pool is 3 + 2 = 5
         "exclude_question_ids": excluded,
     })
     assert resp.status_code == 200
@@ -562,7 +610,8 @@ def test_generate_select_excludes_ids(public_client, sample_paper, db_session, r
 def test_generate_select_no_match_returns_warning(public_client):
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": 99999},  # no such subject
-        "target_marks": 10,
+        "target_type": "marks",
+        "target_value": 10,
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -575,7 +624,8 @@ def test_generate_select_accepts_search_filter(public_client, sample_paper, refe
     # Matching keyword (school name) — pool is the sample paper's questions
     resp = public_client.post("/api/generate/select", json={
         "filters": {"search": "raffles"},
-        "target_marks": 5,
+        "target_type": "marks",
+        "target_value": 5,
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -585,7 +635,8 @@ def test_generate_select_accepts_search_filter(public_client, sample_paper, refe
     # Non-matching keyword — empty pool
     resp = public_client.post("/api/generate/select", json={
         "filters": {"search": "zzz-no-such-thing"},
-        "target_marks": 5,
+        "target_type": "marks",
+        "target_value": 5,
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -596,7 +647,8 @@ def test_generate_select_accepts_search_filter(public_client, sample_paper, refe
 def test_generate_select_inexact_returns_warning(public_client, sample_paper, reference_data):
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
-        "target_marks": 100,  # unreachable; best is all questions = 10
+        "target_type": "marks",
+        "target_value": 100,  # unreachable; best is all questions = 10
     })
     assert resp.status_code == 200
     data = resp.json()
@@ -609,7 +661,8 @@ def test_generate_select_in_order_is_stable(public_client, sample_paper, referen
     """The in-order algorithm returns the same questions on repeated calls."""
     body = {
         "filters": {"subject_id": reference_data["subject"].id},
-        "target_marks": 5,  # multiple subsets can total 5; in-order must be stable
+        "target_type": "marks",
+        "target_value": 5,  # multiple subsets can total 5; in-order must be stable
         "algorithm": "in-order",
     }
     first = public_client.post("/api/generate/select", json=body)
@@ -624,10 +677,57 @@ def test_generate_select_defaults_to_random_algorithm(public_client, sample_pape
     """Omitting `algorithm` still works (defaults to the random knapsack)."""
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
-        "target_marks": 10,
+        "target_type": "marks",
+        "target_value": 10,
     })
     assert resp.status_code == 200
     assert resp.json()["total_marks"] == 10
+
+
+def test_generate_select_count_in_order_takes_first_n(public_client, sample_paper, db_session, reference_data):
+    """Count mode + in-order returns the first N questions by id."""
+    all_ids = sorted(q.id for q in db_session.query(Question).filter_by(paper_id=sample_paper.id).all())
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "count",
+        "target_value": 2,
+        "algorithm": "in-order",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["exact"] is True
+    assert [it["id"] for it in data["items"]] == all_ids[:2]
+
+
+def test_generate_select_count_random_returns_requested_number(public_client, sample_paper, reference_data):
+    """Count mode + random returns the requested number of distinct questions."""
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "count",
+        "target_value": 2,
+        "algorithm": "random",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = [it["id"] for it in data["items"]]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+
+
+def test_generate_select_count_more_than_available_warns(public_client, sample_paper, reference_data):
+    """Requesting more questions than exist returns all with a warning."""
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "count",
+        "target_value": 99,  # only 3 exist
+        "algorithm": "in-order",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 3
+    assert data["exact"] is False
+    assert data["warning"] is not None
 
 
 # ---------------------------------------------------------------------------
