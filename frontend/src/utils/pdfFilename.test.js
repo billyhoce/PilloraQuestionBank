@@ -21,10 +21,10 @@ describe('buildPdfFilename', () => {
     )
   })
 
-  it('falls back to a title-less name when the title is blank', () => {
-    expect(buildPdfFilename({ variant: 'combined', title: '' })).toBe('Pillora_Ques and Ans.pdf')
-    expect(buildPdfFilename({ variant: 'question', title: '   ' })).toBe('Pillora_Questions.pdf')
-    expect(buildPdfFilename({ variant: 'answer' })).toBe('Pillora_Answers.pdf')
+  it('falls back to the default cover title when the title is blank', () => {
+    expect(buildPdfFilename({ variant: 'combined', title: '' })).toBe('Pillora_Topical Worksheets_Ques and Ans.pdf')
+    expect(buildPdfFilename({ variant: 'question', title: '   ' })).toBe('Pillora_Topical Worksheets_Questions.pdf')
+    expect(buildPdfFilename({ variant: 'answer' })).toBe('Pillora_Topical Worksheets_Answers.pdf')
   })
 
   it('defaults an unknown variant to the combined label', () => {

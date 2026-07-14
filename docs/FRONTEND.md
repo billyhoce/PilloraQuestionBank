@@ -203,8 +203,9 @@ Pillora_<Title>_<Type>.pdf
 - `<Type>` is `Ques and Ans` (combined), `Questions`, or `Answers`.
 - Only the Title is used — no filters, topics, or subtitles. The Title is trimmed and stripped of
   filesystem-invalid characters (`\ / : * ? " < > |`).
-- **Fallback** — when the Title is blank, it is omitted entirely: `Pillora_<Type>.pdf`
-  (e.g. `Pillora_Questions.pdf`).
+- A Title is **always** present: when the field is blank (or not yet loaded), it falls back to the
+  default cover title (`DEFAULT_COVER_TITLE` in `app/schemas/generate.py` — `Topical Worksheets`),
+  so the filename matches the title stamped on the cover.
 - **Generate PDF** button (enabled once the cart is non-empty). An **estimated progress bar**
   (client-side only, no backend streaming) eases toward ~90% while the requests are in flight, then
   snaps to 100% on completion. Errors surface as an inline notice.

@@ -6,8 +6,9 @@
  * <PDFType> is `Ques and Ans` (combined), `Questions`, or `Answers`.
  *
  * The Title is trimmed and stripped of characters that are invalid in
- * filenames. When the Title is blank, it is omitted entirely, giving a
- * shorter form, e.g. `Pillora_Questions.pdf`.
+ * filenames. The filename always includes a Title: when the field is blank
+ * (or not yet loaded), it falls back to the default cover title the backend
+ * stamps on the page, so the filename matches the cover.
  */
 
 const PDF_TYPE_LABEL = {
@@ -15,6 +16,10 @@ const PDF_TYPE_LABEL = {
   question: 'Questions',
   answer: 'Answers',
 }
+
+// Mirrors DEFAULT_COVER_TITLE in app/schemas/generate.py — the title the
+// backend puts on the cover when none is supplied.
+const DEFAULT_TITLE = 'Topical Worksheets'
 
 // Drop characters that are invalid in filenames and trim surrounding space.
 function sanitizeTitle(value) {
@@ -28,15 +33,13 @@ function sanitizeTitle(value) {
  *
  * @param {Object} params
  * @param {'combined'|'question'|'answer'} params.variant - which PDF this is.
- * @param {string} [params.title] - the worksheet (cover) title.
+ * @param {string} [params.title] - the worksheet (cover) title. Falls back to
+ *   the default cover title when blank so a Title is always present.
  * @returns {string} filename ending in `.pdf`.
  */
 export function buildPdfFilename({ variant, title }) {
   const type = PDF_TYPE_LABEL[variant] || 'Ques and Ans'
-  const cleanTitle = sanitizeTitle(title)
+  const cleanTitle = sanitizeTitle(title) || DEFAULT_TITLE
 
-  if (!cleanTitle) {
-    return `Pillora_${type}.pdf`
-  }
   return `Pillora_${cleanTitle}_${type}.pdf`
 }
