@@ -76,13 +76,6 @@ export default function GeneratePage() {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
 
-  // Reference data used only to resolve filter IDs into names for the
-  // downloaded PDF filename (see buildPdfFilename).
-  const [levels, setLevels] = useState([])
-  const [streams, setStreams] = useState([])
-  const [subjects, setSubjects] = useState([])
-  const [topicOptions, setTopicOptions] = useState([])
-
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -132,44 +125,6 @@ export default function GeneratePage() {
       .catch(() => {})
     return () => controller.abort()
   }, [])
-
-  // Load the reference lists once; used to turn the active filter IDs into
-  // human-readable names for the download filename.
-  useEffect(() => {
-    Promise.all([api.levels.list(), api.streams.list(), api.subjects.list()])
-      .then(([lv, st, su]) => {
-        setLevels(lv || [])
-        setStreams(st || [])
-        setSubjects(su || [])
-      })
-      .catch(() => {})
-  }, [])
-
-  // Topics only exist for a specific subject + stream pair (same rule as the
-  // Topic filter). Refresh the option list whenever that pair changes.
-  useEffect(() => {
-    if (filters.subject_id && filters.stream_id) {
-      api.topics.list(filters.subject_id, filters.stream_id)
-        .then(data => setTopicOptions(data || []))
-        .catch(() => setTopicOptions([]))
-    } else {
-      setTopicOptions([])
-    }
-  }, [filters.subject_id, filters.stream_id])
-
-  // Resolve the active filters into the name context buildPdfFilename expects.
-  const filenameContext = useMemo(() => {
-    const byId = (list, id) => list.find(x => String(x.id) === String(id))
-    const selectedTopics = (filters.topic_ids || [])
-      .map(id => byId(topicOptions, id))
-      .filter(Boolean)
-    return {
-      level: byId(levels, filters.level_id)?.name || null,
-      stream: byId(streams, filters.stream_id)?.name || null,
-      subject: byId(subjects, filters.subject_id)?.name || null,
-      topics: selectedTopics,
-    }
-  }, [levels, streams, subjects, topicOptions, filters.level_id, filters.stream_id, filters.subject_id, filters.topic_ids])
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -339,7 +294,7 @@ export default function GeneratePage() {
         })
         stopProgress()
         setGenProgress(100)
-        downloadBlob(blob, buildPdfFilename({ variant: 'combined', context: filenameContext }))
+        downloadBlob(blob, buildPdfFilename({ variant: 'combined', title: coverTitle }))
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
@@ -348,10 +303,10 @@ export default function GeneratePage() {
         ])
         stopProgress()
         setGenProgress(100)
-        downloadBlob(questionBlob, buildPdfFilename({ variant: 'question', context: filenameContext }))
+        downloadBlob(questionBlob, buildPdfFilename({ variant: 'question', title: coverTitle }))
         // Small gap so the browser doesn't drop the second programmatic download.
         setTimeout(
-          () => downloadBlob(answerBlob, buildPdfFilename({ variant: 'answer', context: filenameContext })),
+          () => downloadBlob(answerBlob, buildPdfFilename({ variant: 'answer', title: coverTitle })),
           600,
         )
         setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })

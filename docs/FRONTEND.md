@@ -192,22 +192,20 @@ selection cart) on the right.
 
 #### Download filenames
 
-Downloaded PDFs get **descriptive names** built by `buildPdfFilename`
-(`src/utils/pdfFilename.js`, covered by `pdfFilename.test.js`) from the active filter context
-(`filenameContext` in `GeneratePage.jsx` — Level / Stream / Subject / selected Topics):
+Downloaded PDFs get **title-based names** built by `buildPdfFilename`
+(`src/utils/pdfFilename.js`, covered by `pdfFilename.test.js`) from the worksheet **Title** (the
+cover title the user entered, `coverTitle` in `GeneratePage.jsx`):
 
 ```
-Pillora_<Level>_<Stream>_<Subject>_<TopicInfo>_<Type>.pdf
+Pillora_<Title>_<Type>.pdf
 ```
 
-- `<Type>` is `Paper` (combined), `Questions`, or `Answers`.
-- Segments for unset filters are skipped; each name segment is sanitized of filesystem-invalid
-  characters.
-- `<TopicInfo>`: **1 topic** → `T{n}-<Hyphenated-Name>` (e.g. `T1-Algebra`); **2–5 topics** →
-  codes only, ordered by number (e.g. `T1_T23_T28`); **>5 or none** → omitted.
-- **Fallback** — when no structured filter (Level / Stream / Subject / Topics) is active (e.g.
-  browsing with defaults and/or the search bar only), the name is dated:
-  `Pillora_<YYYY-MM-DD>_<Type>.pdf`.
+- `<Type>` is `Ques and Ans` (combined), `Questions`, or `Answers`.
+- Only the Title is used — no filters, topics, or subtitles. The Title is trimmed and stripped of
+  filesystem-invalid characters (`\ / : * ? " < > |`).
+- A Title is **always** present: when the field is blank (or not yet loaded), it falls back to the
+  default cover title (`DEFAULT_COVER_TITLE` in `app/schemas/generate.py` — `Topical Worksheets`),
+  so the filename matches the title stamped on the cover.
 - **Generate PDF** button (enabled once the cart is non-empty). An **estimated progress bar**
   (client-side only, no backend streaming) eases toward ~90% while the requests are in flight, then
   snaps to 100% on completion. Errors surface as an inline notice.
