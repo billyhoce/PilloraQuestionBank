@@ -23,14 +23,20 @@ class GenerateFilters(BaseModel):
 
 class SelectRequest(BaseModel):
     filters: GenerateFilters = GenerateFilters()
-    target_marks: int
+    # What the target counts: "marks" (a marks total) or "count" (a number of
+    # questions). ``target_value`` is interpreted accordingly.
+    target_type: Literal["marks", "count"] = "marks"
+    target_value: int
     exclude_question_ids: list[int] = []
+    # Picking algorithm: "random" (randomized-restart greedy / random sample) or
+    # "in-order" (deterministic pass from the top of the pool).
+    algorithm: Literal["random", "in-order"] = "random"
 
 
 class SelectResponse(BaseModel):
     items: list[QuestionListItem]
     total_marks: int
-    target_marks: int
+    count: int
     exact: bool
     warning: Optional[str] = None
 

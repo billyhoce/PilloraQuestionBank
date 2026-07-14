@@ -175,8 +175,8 @@ export const api = {
     // pre-fill the editable cover fields. cover_body is rich-text HTML
     // (paragraphs + bold/italic/underline/link).
     coverDefaults: (signal) => request('GET', '/api/generate/cover-defaults', undefined, signal),
-    // Auto-select a randomized set of questions summing near target_marks.
-    // body: { filters, target_marks, exclude_question_ids }
+    // Auto-select questions for a target (marks total or question count).
+    // body: { filters, target_type, target_value, algorithm, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
     // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
     // header_text, include_cover, cover_title, cover_subtitle1, cover_subtitle2,

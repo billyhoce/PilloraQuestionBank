@@ -93,13 +93,16 @@ There is no `/api/questions/:id/image/:page` proxy endpoint — images are serve
 ### Generation — Authenticated (Implemented)
 
 ```
-POST   /api/generate/select      -- auto-select a randomized set of questions summing near
-                                    target_marks. Body: { filters, target_marks,
-                                    exclude_question_ids[] }. `filters` mirrors the Browse
-                                    filter params (subject_id, stream_id, level_id, year,
-                                    school_id, exam_type_id, topic_ids[], exclusive,
-                                    paper_number, search). Returns { items, total_marks,
-                                    target_marks, exact, warning }.
+POST   /api/generate/select      -- auto-select a set of questions for a target.
+                                    Body: { filters, target_type, target_value,
+                                    exclude_question_ids[], algorithm }. `filters` mirrors
+                                    the Browse filter params (subject_id, stream_id,
+                                    level_id, year, school_id, exam_type_id, topic_ids[],
+                                    exclusive, paper_number, search). `target_type` is
+                                    "marks" (target_value = marks total) or "count"
+                                    (target_value = number of questions). `algorithm` is
+                                    "random" (default) or "in-order". Returns { items,
+                                    total_marks, count, exact, warning }.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
                                     "question"|"answer"|"combined", header_text,
@@ -116,8 +119,10 @@ POST   /api/generate/paper       -- render a PDF from a manual selection.
 
 `POST /api/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite
 (`_apply_filters` + the eager-load options from `app/routes/questions.py`) to build the candidate
-pool, excludes any `exclude_question_ids`, then runs `knapsack_select`. It never returns a 404 — an
-empty result with a `warning` string keeps the live builder UI responsive.
+pool and excludes any `exclude_question_ids`, then dispatches on `target_type` + `algorithm`: for
+`"marks"` it runs `knapsack_select` (`"random"`) or `in_order_select` (`"in-order"`); for `"count"`
+it runs `count_select` (random sample or first-N). It never returns a 404 — an empty result with a
+`warning` string keeps the live builder UI responsive.
 
 `POST /api/generate/paper` renders the question paper, the answer paper, or both combined into a
 single PDF, depending on `variant`. Both endpoints require authentication (`get_current_user`),
@@ -157,23 +162,39 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 
 ## Question Selection (Implemented)
 
-`app/services/generate.py::knapsack_select(questions, target_marks)` picks a subset of questions
-whose marks sum as close as possible to `target_marks`, exposed via `POST /api/generate/select`.
+`app/services/generate.py` offers selection by a **marks total** (`target_type="marks"`) or a
+**question count** (`target_type="count"`), each with a `"random"` or `"in-order"` `algorithm`, all
+exposed via `POST /api/generate/select`.
+
+**Marks target.** Both marks selectors ignore questions with `null` or non-positive `marks` and
+return `[]` for a non-positive target or when nothing is selectable.
+
+`knapsack_select(questions, target_marks)` (`algorithm="random"`):
 
 - **Randomized-restart greedy**, not an exact optimizer. Each restart shuffles the pool and greedily
   adds questions until the running total reaches the target, considering every intermediate subset.
   The restart budget scales with pool size (`_RESTARTS_PER_QUESTION = 20`, clamped to `[200, 2000]`).
-- Prefers an **exact match**; otherwise returns the subset whose total is closest to the target
-  (a slight overshoot is allowed if it lands closer). Stops early once an exact match is found.
-- The randomness is intentional: the same filters/target produce a *different* paper each time.
-  Equally-good subsets are chosen by reservoir sampling so repeated calls vary.
-- Questions with `null` or non-positive `marks` are ignored. Returns `[]` for a non-positive target
-  or when nothing is selectable.
+- Prefers an **exact match**; otherwise returns the subset whose total is closest (a slight overshoot
+  is allowed if it lands closer). The randomness is intentional: the same filters/target produce a
+  *different* paper each time (equally-good subsets are reservoir-sampled). Stops early on an exact
+  match.
+
+`in_order_select(questions, target_marks)` (`algorithm="in-order"`):
+
+- **Deterministic single greedy pass** over the pool in its given (`Question.id`) order that **stops
+  at the first question which would exceed the target** — the result never overshoots. No shuffling,
+  restarts, or tie-break randomness, so the same filtered pool and target always return the same
+  questions from the top of the list.
+
+**Count target.** `count_select(questions, count, *, randomize)` selects a fixed *number* of
+questions — `random.sample` of `count` when `algorithm="random"`, else the first `count` in id
+order. Unlike the marks selectors it does **not** filter out null-mark questions (the caller is
+choosing a count, not a marks total). Returns all matches when `count` exceeds the pool size.
 
 `POST /api/generate/select` also supports an **add-to-selection** flow client-side: the frontend
-passes the already-chosen questions in `exclude_question_ids` and reduces `target_marks` by their
-running total, so autofill tops up an existing selection instead of replacing it (see
-[FRONTEND.md](./FRONTEND.md#paper-generation-ui)).
+passes the already-chosen questions in `exclude_question_ids` and reduces `target_value` by their
+running total (marks) or count, so autofill tops up an existing selection instead of replacing it
+(see [FRONTEND.md](./FRONTEND.md#paper-generation-ui)).
 
 ## Paper Generation Engine (Implemented)
 
@@ -244,9 +265,10 @@ Dataclasses: `Block(label, source_label, pages, page_index)`,
 
 **Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
 small grey provenance line just above its image — `source_label`, formatted
-`[{School}/{Year}/{ExamType}/P{paper_number}/Q{original_number}]` (e.g.
-`[Bendemeer Secondary School/2024/Prelim/P2/Q6]`; `paper_number` is stored bare, so a `P` is
-prefixed). `LayoutEngine(show_credit=True)` reserves a fixed band (`_CREDIT_BAND_PX`) in each
+`[{School}/{Year}/{ExamType}/{paper_number}/Q{original_number}]` (e.g.
+`[Bendemeer Secondary School/2024/Prelim/2/Q6]`; `paper_number` is stored bare and rendered as-is).
+The credit line is drawn at `_CREDIT_FONT_PX = 40` (~11.5pt at 300 DPI).
+`LayoutEngine(show_credit=True)` reserves a fixed band (`_CREDIT_BAND_PX`) in each
 block's height so packing and rendering stay in sync, then draws the line and advances the cursor
 before the image. The route enables it for the `question` variant (and the `combined` PDF's
 question section) and leaves it off for the answer paper. Blocks with an empty `source_label`

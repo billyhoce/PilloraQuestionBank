@@ -4,11 +4,15 @@ import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
 import CoverBodyEditor from '../components/generate/CoverBodyEditor'
+import InfoTooltip from '../components/InfoTooltip'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 import { buildPdfFilename } from '../utils/pdfFilename'
 
 const PAGE_SIZE = 50
+
+// Max questions the "Select All" button adds in one click.
+const SELECT_ALL_LIMIT = 50
 
 const EMPTY_FILTERS = {
   level_id: '',
@@ -88,9 +92,12 @@ export default function GeneratePage() {
   const [cart, setCart] = useState([])
 
   // Autocreate panel state
-  const [targetMarks, setTargetMarks] = useState('')
+  const [targetType, setTargetType] = useState('count') // 'marks' | 'count'
+  const [targetValue, setTargetValue] = useState('')
   const [autoMode, setAutoMode] = useState('replace') // 'replace' | 'add'
+  const [pickingAlgorithm, setPickingAlgorithm] = useState('random') // 'random' | 'in-order'
   const [autoLoading, setAutoLoading] = useState(false)
+  const [selectAllLoading, setSelectAllLoading] = useState(false)
   const [notice, setNotice] = useState(null) // { type: 'warning' | 'success', text }
 
   // PDF generation state
@@ -208,21 +215,57 @@ export default function GeneratePage() {
     })
   }
 
+  // Add up to SELECT_ALL_LIMIT questions matching the current filters to the cart.
+  async function handleSelectAll() {
+    setNotice(null)
+    setSelectAllLoading(true)
+    try {
+      const res = await api.questions.list(filtersToListArgs(filters, 1))
+      const matches = res.items || []
+      mergeIntoCart(matches)
+      if ((res.total || 0) > SELECT_ALL_LIMIT) {
+        setNotice({
+          type: 'warning',
+          text: `Added the first ${SELECT_ALL_LIMIT} questions — that's the Select All limit.`,
+        })
+      } else if (matches.length === 0) {
+        setNotice({ type: 'warning', text: 'No questions match the current filters.' })
+      } else {
+        setNotice({ type: 'success', text: `Added ${matches.length} questions to the selection.` })
+      }
+    } catch (e) {
+      setNotice({ type: 'warning', text: e?.message || 'Select All failed.' })
+    } finally {
+      setSelectAllLoading(false)
+    }
+  }
+
   async function handleAutocreate() {
     setNotice(null)
-    const target = Number(targetMarks)
+    const byMarks = targetType === 'marks'
+    const target = Number(targetValue)
     if (!Number.isFinite(target) || target <= 0) {
-      setNotice({ type: 'warning', text: 'Enter a target mark total greater than 0.' })
+      setNotice({
+        type: 'warning',
+        text: byMarks
+          ? 'Enter a target mark total greater than 0.'
+          : 'Enter a number of questions greater than 0.',
+      })
       return
     }
 
     let requestTarget = target
     let excludeIds = []
     if (autoMode === 'add') {
-      requestTarget = target - cartTotalMarks
+      requestTarget = byMarks ? target - cartTotalMarks : target - cart.length
       excludeIds = cart.map(it => it.id)
       if (requestTarget <= 0) {
-        setNotice({ type: 'warning', text: `Your selection already totals ${cartTotalMarks} marks, at or above the target.` })
+        setNotice({
+          type: 'warning',
+          text: byMarks
+            ? `Your selection already totals ${cartTotalMarks} marks, at or above the target.`
+            : `Your selection already has ${cart.length} questions, at or above the target.`,
+        })
         return
       }
     }
@@ -231,8 +274,10 @@ export default function GeneratePage() {
     try {
       const res = await api.generate.select({
         filters: filtersToSelectPayload(filters),
-        target_marks: requestTarget,
+        target_type: targetType,
+        target_value: requestTarget,
         exclude_question_ids: excludeIds,
+        algorithm: pickingAlgorithm,
       })
       const newItems = res.items || []
       if (autoMode === 'replace') {
@@ -244,9 +289,11 @@ export default function GeneratePage() {
         setNotice({ type: 'warning', text: res.warning })
       } else if (newItems.length === 0) {
         setNotice({ type: 'warning', text: 'No questions were selected.' })
-      } else {
+      } else if (byMarks) {
         const finalTotal = autoMode === 'replace' ? res.total_marks : cartTotalMarks + res.total_marks
         setNotice({ type: 'success', text: `Selected ${newItems.length} questions (${finalTotal} marks).` })
+      } else {
+        setNotice({ type: 'success', text: `Selected ${newItems.length} questions.` })
       }
     } catch (e) {
       setNotice({ type: 'warning', text: e?.message || 'Autocreate failed.' })
@@ -330,12 +377,23 @@ export default function GeneratePage() {
         <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-6 space-y-6 lg:space-y-0">
           {/* Results */}
           <section className="space-y-4">
-            <div className="text-sm text-gray-600">
-              {loading
-                ? 'Loading…'
-                : total === 0
-                  ? 'No questions match the current filters.'
-                  : `Showing ${items.length} of ${total} ${total === 1 ? 'question' : 'questions'}`}
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm text-gray-600">
+                {loading
+                  ? 'Loading…'
+                  : total === 0
+                    ? 'No questions match the current filters.'
+                    : `Showing ${items.length} of ${total} ${total === 1 ? 'question' : 'questions'}`}
+              </div>
+              <button
+                type="button"
+                onClick={handleSelectAll}
+                disabled={selectAllLoading || loading || total === 0}
+                className="px-3 py-1.5 text-sm border border-blue-600 text-blue-600 rounded hover:bg-blue-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
+              >
+                {selectAllLoading ? <Spinner size="sm" /> : null}
+                Select All{total > SELECT_ALL_LIMIT ? ` (first ${SELECT_ALL_LIMIT})` : ''}
+              </button>
             </div>
 
             {loading ? (
@@ -371,23 +429,38 @@ export default function GeneratePage() {
           </section>
 
           {/* Selection cart + autocreate */}
-          <aside className="lg:sticky lg:top-6 lg:self-start space-y-4">
+          <aside className="lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-3rem)] lg:overflow-y-auto space-y-4 pr-1">
             {/* Autocreate panel */}
             <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
               <h2 className="text-sm font-semibold text-gray-900">Autocreate Paper</h2>
               <p className="text-xs text-gray-500">
-                Auto-pick a randomized set of questions from the current filters, summing near your target marks.
+                Auto-pick a set of questions from the current filters, by a target marks total or a
+                number of questions.
               </p>
               <div className="flex items-center gap-2">
-                <label className="text-xs text-gray-600" htmlFor="target-marks">Target marks</label>
+                <label className="text-xs text-gray-600" htmlFor="target-type">Select by</label>
+                <select
+                  id="target-type"
+                  value={targetType}
+                  onChange={e => setTargetType(e.target.value)}
+                  className="px-2 py-1 border border-gray-300 rounded text-sm"
+                >
+                  <option value="count">Number of questions</option>
+                  <option value="marks">Marks</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-600" htmlFor="target-value">
+                  {targetType === 'marks' ? 'Target marks' : 'Number of questions'}
+                </label>
                 <input
-                  id="target-marks"
+                  id="target-value"
                   type="number"
                   min="1"
-                  value={targetMarks}
-                  onChange={e => setTargetMarks(e.target.value)}
+                  value={targetValue}
+                  onChange={e => setTargetValue(e.target.value)}
                   className="w-24 px-2 py-1 border border-gray-300 rounded text-sm"
-                  placeholder="e.g. 50"
+                  placeholder={targetType === 'marks' ? 'e.g. 50' : 'e.g. 10'}
                 />
               </div>
               <div className="flex gap-3 text-xs text-gray-700">
@@ -409,6 +482,38 @@ export default function GeneratePage() {
                   />
                   Add to selection
                 </label>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 text-xs font-medium text-gray-700">
+                  Picking Algorithm
+                  <InfoTooltip label="What does Picking Algorithm do?">
+                    <strong>In-order</strong> picks from the top of the filtered list, so the same
+                    filters always give the same questions — for a marks target it stops just before
+                    exceeding the total; for a question count it takes the first N.{' '}
+                    <strong>Random</strong> picks a different set each time — closest it can get to the
+                    marks target, or N questions at random.
+                  </InfoTooltip>
+                </div>
+                <div className="flex gap-3 text-xs text-gray-700">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="picking-algorithm"
+                      checked={pickingAlgorithm === 'in-order'}
+                      onChange={() => setPickingAlgorithm('in-order')}
+                    />
+                    In-order
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="picking-algorithm"
+                      checked={pickingAlgorithm === 'random'}
+                      onChange={() => setPickingAlgorithm('random')}
+                    />
+                    Random
+                  </label>
+                </div>
               </div>
               <button
                 type="button"
@@ -461,7 +566,7 @@ export default function GeneratePage() {
                   Add questions from the list, or use Autocreate above.
                 </p>
               ) : (
-                <ul className="space-y-2 max-h-[50vh] overflow-y-auto">
+                <ul className="space-y-2">
                   {cart.map(it => (
                     <li key={it.id} className="flex items-start justify-between gap-2 text-xs border-b border-gray-100 pb-2">
                       <div className="min-w-0">
