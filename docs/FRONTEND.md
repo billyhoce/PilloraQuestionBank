@@ -121,7 +121,13 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - **School** — multi-select
 - **Exam Type** — multi-select
 - **Paper Number** — free-text input, case-insensitive exact match (values may contain letters, e.g. "1", "a")
-- **Topic** — multi-select, **scoped to selected Subject + Stream** (greyed out until both are chosen)
+- **Topic** — multi-select, **scoped to selected Subject + Stream** (greyed out until both are chosen). Rendered by `TopicMultiSelect.jsx` (reused by both Browse and Generate).
+  - **Exclusive only** — a checkbox beside the topic chips that restricts results to questions
+    covering **only** the selected topics and nothing else (maps to the `exclusive` API param — see
+    [BACKEND.md](./BACKEND.md)). Disabled until at least one topic is selected, and auto-cleared
+    when the topic selection is emptied. A help "?" badge next to it shows an explanatory tooltip on
+    hover, pins it open on click, and dismisses it on outside-click / Escape / scroll; the tooltip
+    is portal-rendered so it can't be clipped by the filter card.
 - **Subtopic** — multi-select, **scoped to selected Topic(s)**
 - **Search** — free-text keyword box. Runs **live as the user types**, debounced ~300ms after the last keystroke (Enter or the Search button commit instantly); clearing the box returns to all questions. Matches topic/subtopic/tag/school/subject/level/school-level tier ("Secondary")/stream/exam-type names, the `T{n}` topic-number token, and — for an all-digit keyword — the paper year.
 
@@ -176,14 +182,32 @@ selection cart) on the right.
 - Optional **header / instructions** `<textarea>` printed on the first page of the question PDF.
 - A **"Download as"** radio selector chooses the output mode, defaulting to **1 combined PDF**:
   - **Combined (default):** one call to `api.generate.paper` with `variant: "combined"` (and
-    `header_text`); the single blob downloads as `{timestamp}_paper.pdf` — question paper first,
-    answer paper appended behind it.
+    `header_text`) — question paper first, answer paper appended behind it, downloaded as the
+    `Paper` type.
   - **Separate:** calls `api.generate.paper` **twice in parallel** — `variant: "question"` (with
-    `header_text`) and `variant: "answer"` — downloading `{timestamp}_question.pdf` and
-    `{timestamp}_answer.pdf` (one shared client-generated timestamp; a short gap between the two so
-    browsers don't drop the second download).
+    `header_text`) and `variant: "answer"` — downloaded as the `Questions` and `Answers` types (a
+    short gap between the two so browsers don't drop the second download).
 - Each call returns a PDF `Blob` (a binary fetch that bypasses the JSON-only `request` helper) and
   auto-downloads via a local `downloadBlob` helper.
+
+#### Download filenames
+
+Downloaded PDFs get **descriptive names** built by `buildPdfFilename`
+(`src/utils/pdfFilename.js`, covered by `pdfFilename.test.js`) from the active filter context
+(`filenameContext` in `GeneratePage.jsx` — Level / Stream / Subject / selected Topics):
+
+```
+Pillora_<Level>_<Stream>_<Subject>_<TopicInfo>_<Type>.pdf
+```
+
+- `<Type>` is `Paper` (combined), `Questions`, or `Answers`.
+- Segments for unset filters are skipped; each name segment is sanitized of filesystem-invalid
+  characters.
+- `<TopicInfo>`: **1 topic** → `T{n}-<Hyphenated-Name>` (e.g. `T1-Algebra`); **2–5 topics** →
+  codes only, ordered by number (e.g. `T1_T23_T28`); **>5 or none** → omitted.
+- **Fallback** — when no structured filter (Level / Stream / Subject / Topics) is active (e.g.
+  browsing with defaults and/or the search bar only), the name is dated:
+  `Pillora_<YYYY-MM-DD>_<Type>.pdf`.
 - **Generate PDF** button (enabled once the cart is non-empty). An **estimated progress bar**
   (client-side only, no backend streaming) eases toward ~90% while the requests are in flight, then
   snaps to 100% on completion. Errors surface as an inline notice.

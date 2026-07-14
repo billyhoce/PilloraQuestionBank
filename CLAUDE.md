@@ -56,6 +56,19 @@ FastAPI                                              │
 | [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) | Claude API usage: topic auto-labeling and filename metadata extraction |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
 
+## Contribution Requirements
+
+Every new feature or behavior change must, **in the same change**:
+
+- **Update the docs.** Revise the relevant doc(s) under `docs/` (and `CLAUDE.md` itself when the
+  scope, stack, or architecture changes) so they never drift from the code. The Documentation Map
+  above says which doc owns which area (DATA_MODEL / BACKEND / FRONTEND / AI_INTEGRATION /
+  DEPLOYMENT). Fix any statement the change makes stale, not just add new prose.
+- **Write tests where the change is testable.** Add or update backend tests (`pytest`, in `tests/`)
+  and frontend tests (Vitest, colocated `*.test.js` / `*.test.jsx`) to cover new or changed
+  behavior. Both suites run in CI's `frontend-build` job. Pure-config / asset-only changes with no
+  testable behavior are exempt.
+
 ## Out of Scope (v1)
 
 - AI-assisted marks extraction from question images
