@@ -11,6 +11,7 @@ const adminLinks = [
   { to: '/admin/reference', label: 'Reference' },
   { to: '/admin/import', label: 'Import' },
   { to: '/admin/papers', label: 'Papers' },
+  { to: '/admin/users', label: 'User Management' },
 ]
 
 // Single role-aware menubar: everyone sees the base links; admins also see the
@@ -47,6 +48,14 @@ export default function NavBar() {
         </nav>
       </div>
       <div className="flex items-center gap-4">
+        {user?.role === 'public' && (
+          <Link
+            to="/subscribe"
+            className="text-sm font-medium px-3 py-1.5 rounded border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 transition-colors"
+          >
+            ⭐ Go Premium
+          </Link>
+        )}
         {user ? (
           <UserMenu />
         ) : (

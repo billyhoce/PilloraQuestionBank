@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import { useAuth } from '../../context/AuthContext'
 import Spinner from '../Spinner'
@@ -140,27 +141,45 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
                 {tagError ? <p className="text-xs text-red-600 mt-1">{tagError}</p> : null}
               </section>
 
-              <section>
-                {detail.marks != null ? (
-                  <div className="text-sm text-gray-600 mb-2">Marks: {detail.marks}</div>
-                ) : null}
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Question</h3>
-                <div className="space-y-2">
-                  {detail.question_pages.map(p => (
-                    <img key={p.id} src={p.url} alt={`Q page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
-                  ))}
-                </div>
-              </section>
-              {detail.answer_pages.length > 0 ? (
-                <section>
-                  <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Answer</h3>
-                  <div className="space-y-2">
-                    {detail.answer_pages.map(p => (
-                      <img key={p.id} src={p.url} alt={`A page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
-                    ))}
+              {detail.locked ? (
+                <section className="flex flex-col items-center justify-center gap-3 rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 to-gray-100 py-12 px-6 text-center">
+                  <span className="text-3xl" aria-hidden="true">🔒</span>
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">This is premium content</p>
+                    <p className="text-xs text-gray-500 mt-1">Subscribe to view the full question and answer.</p>
                   </div>
+                  <Link
+                    to="/subscribe"
+                    className="text-sm font-medium px-4 py-2 rounded border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 transition-colors"
+                  >
+                    Go Premium
+                  </Link>
                 </section>
-              ) : null}
+              ) : (
+                <>
+                  <section>
+                    {detail.marks != null ? (
+                      <div className="text-sm text-gray-600 mb-2">Marks: {detail.marks}</div>
+                    ) : null}
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Question</h3>
+                    <div className="space-y-2">
+                      {detail.question_pages.map(p => (
+                        <img key={p.id} src={p.url} alt={`Q page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
+                      ))}
+                    </div>
+                  </section>
+                  {detail.answer_pages.length > 0 ? (
+                    <section>
+                      <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Answer</h3>
+                      <div className="space-y-2">
+                        {detail.answer_pages.map(p => (
+                          <img key={p.id} src={p.url} alt={`A page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              )}
             </div>
           ) : null}
         </div>

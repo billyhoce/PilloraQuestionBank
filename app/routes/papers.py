@@ -52,6 +52,7 @@ class PaperMetadataIn(BaseModel):
     exam_type_id: int
     year: int
     paper_number: str
+    is_premium: bool = False
 
 
 class PageIn(BaseModel):
@@ -341,6 +342,7 @@ def get_paper(
         "exam_type_id": paper.exam_type_id,
         "year": paper.year,
         "paper_number": paper.paper_number,
+        "is_premium": paper.is_premium,
         "paper_info": _paper_info(paper),
         "questions": [_serialize_question(q) for q in questions],
     }

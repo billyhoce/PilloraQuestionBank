@@ -31,6 +31,7 @@ Paper: {
   exam_type_id (FK),
   year (int),
   paper_number (string),       -- "1", "2", "a", "b" etc.
+  is_premium (bool),           -- default false; premium papers are gated to premium/admin users
   created_by (FK -> User),
   created_at
 }
@@ -71,10 +72,18 @@ User: {
   id,
   email (unique),
   password_hash,
-  role ENUM('admin', 'public'),
+  role ENUM('admin', 'public', 'premium'),   -- 'public' is shown as "Normal" in the UI
   created_at
 }
 ```
+
+**Roles & the premium paywall.** `role` has three tiers, enforced by a DB check
+constraint (`ck_user_role`): `admin`, `public` (labelled "Normal" in the UI), and
+`premium`. Premium is granted by an admin via the User Management page (there is no
+self-serve payment yet — the Subscribe page is a stub). A paper flagged
+`is_premium = true` is gated: only `admin` and `premium` users may view its question
+images or generate papers from its questions. Non-premium (and anonymous) users still
+see the question tiles and all metadata, but the backend withholds the image URLs.
 
 ## Image Storage Conventions
 

@@ -32,9 +32,11 @@ Topics are always displayed with their topic number as a `T{n}:` prefix, e.g. **
 | `/` or `/browse` | Browse / Filter questions | Authenticated |
 | `/questions/:id` | Question detail (all pages) | Authenticated |
 | `/generate` | Paper generation | Authenticated |
+| `/subscribe` | Subscribe / Go Premium (payment stub) | Authenticated |
 | `/admin/import` | Import flow | Admin |
 | `/admin/reference` | Reference data CRUD | Admin |
-| `/admin/users` | User management | Admin |
+| `/admin/papers` | Papers list + editor | Admin |
+| `/admin/users` | User management (change tiers) | Admin |
 
 ## Navigation (App Shell)
 
@@ -45,10 +47,29 @@ user's role — there is no "Admin" button to unlock it:
 
 - **Everyone:** Question Bank (`/`), Generate Paper (`/generate` — signed-out clicks land on
   `/login` via `ProtectedRoute`).
-- **Admins additionally:** Reference, Import, Papers.
+- **Admins additionally:** Reference, Import, Papers, User Management (`/admin/users`).
+- **Normal (`public`) users:** a **⭐ Go Premium** link (to `/subscribe`) appears at the top
+  right. Premium and admin users don't see it.
 - **Top right:** signed-in users get an account button (their email) opening a dropdown
   (`<UserMenu />`) with **Log out** (closes on outside click / Escape; logging out returns to
   `/`). Signed-out visitors see a **Log in** link instead.
+
+## Premium paywall (UI)
+
+Three user tiers: **Normal** (stored as `public`), **Premium**, and **Admin**.
+
+- **User Management** (`/admin/users`, `features/users/UsersList.jsx`): admins list every
+  user and change their tier via a per-row select (Normal / Premium / Admin → `api.users.updateRole`).
+  An admin's own row is disabled so they can't lock themselves out.
+- **Subscribe** (`/subscribe`, `pages/SubscribePage.jsx`): a stub — pricing + a disabled
+  Subscribe button (payments not built). Premium access is granted by an admin, not self-serve.
+- **Locked content:** premium papers are flagged with an `is_premium` tickbox in the paper
+  editor (`PaperMetadataBar`) and a Premium badge in the admin papers list. For a Normal/anonymous
+  viewer, the backend withholds the image URL and sets `locked` (see BACKEND.md). `QuestionCard`
+  then renders a 🔒 "Premium content — Subscribe to unlock" placeholder instead of the image; in
+  the Generate cart the Add button is replaced by a **Subscribe** link. `QuestionDetailModal` shows
+  a "Go Premium" panel in place of the images. The Generate page also surfaces the backend's `403`
+  message if a premium question is somehow submitted.
 
 ## Import Flow UI (Admin)
 

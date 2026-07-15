@@ -76,6 +76,7 @@ export default function PaperEditor() {
           exam_type_id: p.exam_type_id,
           year: String(p.year),
           paper_number: p.paper_number,
+          is_premium: p.is_premium,
         })
         return loadTopics(p.subject_id, p.stream_id)
       })
@@ -92,6 +93,7 @@ export default function PaperEditor() {
       exam_type_id: draft.exam_type_id,
       year: Number(draft.year),
       paper_number: draft.paper_number,
+      is_premium: !!draft.is_premium,
     })
     setMetadata({ ...draft, year: String(draft.year) })
 

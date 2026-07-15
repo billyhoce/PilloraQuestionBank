@@ -34,11 +34,24 @@ Note: Pydantic schemas and ORM models live in separate `schemas/` and `models/` 
 ### Auth (Implemented)
 
 ```
-POST   /api/auth/register       -- public registration
+POST   /api/auth/register       -- public registration (always role "public")
 POST   /api/auth/login          -- sets JWT in httpOnly cookie
 POST   /api/auth/logout         -- clears cookie
 GET    /api/auth/me             -- returns current authenticated user
 ```
+
+### User Management — Admin only (Implemented)
+
+```
+GET    /api/users               -- list all users (id, email, role, created_at)
+PATCH  /api/users/{id}/role     -- change a user's tier. Body: { role: "admin"|"public"|"premium" }.
+                                   An admin cannot change their own role (400). Unknown user -> 404.
+                                   Invalid role value -> 422.
+```
+
+The three tiers are `admin`, `public` (shown as "Normal" in the UI), and `premium`.
+Registration always yields `public`; `premium`/`admin` are granted here by an admin
+(the Subscribe page is a payment stub, not a self-serve upgrade path).
 
 ### Reference Data — Admin write, Public read (Implemented)
 
@@ -90,6 +103,15 @@ GET    /api/questions/:id         -- full question detail: question pages + answ
 
 There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned S3 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
 
+**Premium paywall.** Both read endpoints take *optional* auth (`get_current_user_optional`)
+so they stay public but can tailor the response to the viewer. For a question whose
+paper has `is_premium = true`, when the viewer is not entitled (`can_view_premium` is
+false — i.e. anonymous or `public`), the backend **withholds the presigned image URL**
+(`first_page_url` / page `url` become `null`) and sets `locked: true` on the item /
+detail. The tile and all metadata are still returned, so the frontend can show a
+locked placeholder that prompts a subscription. `premium` and `admin` viewers see the
+URLs normally.
+
 ### Generation — Authenticated (Implemented)
 
 ```
@@ -123,6 +145,11 @@ pool and excludes any `exclude_question_ids`, then dispatches on `target_type` +
 `"marks"` it runs `knapsack_select` (`"random"`) or `in_order_select` (`"in-order"`); for `"count"`
 it runs `count_select` (random sample or first-N). It never returns a 404 — an empty result with a
 `warning` string keeps the live builder UI responsive.
+
+**Premium paywall on generation.** For non-premium viewers (`public`), `/generate/select`
+filters premium papers out of the candidate pool entirely, and `/generate/paper` returns
+`403` if any posted `question_id` belongs to a premium paper (the UI already prevents adding
+locked questions; this is the server-side guard). `premium`/`admin` users are unrestricted.
 
 `POST /api/generate/paper` renders the question paper, the answer paper, or both combined into a
 single PDF, depending on `variant`. Both endpoints require authentication (`get_current_user`),
@@ -328,8 +355,9 @@ WebP page images.
 
 - **Passwords:** bcrypt via `bcrypt.gensalt()` (default cost factor 12). Implemented.
 - **Auth tokens:** JWT (`python-jose`, HS256) in an `httpOnly`, `secure`, `samesite=lax` cookie named `access_token`, 7-day expiry. `JWT_SECRET_KEY` read from env (falls back to an insecure default — **must** be set in production). Implemented.
-- **Admin routes:** `require_admin` dependency (in `app/routes/auth.py`) checks `user.role == "admin"`, returns `403` otherwise. Applied to all `POST/PUT/DELETE` on reference data and all `/api/import/*` routes. Implemented.
-- **Image access:** images are never proxied through the backend — every question/page response embeds an S3 **presigned URL** (`get_presigned_url`), keeping VM bandwidth free for HTML/JSON. Implemented.
+- **Admin routes:** `require_admin` dependency (in `app/routes/auth.py`) checks `user.role == "admin"`, returns `403` otherwise. Applied to all `POST/PUT/DELETE` on reference data, all `/api/import/*` routes, and the `/api/users` management routes. Implemented.
+- **Roles / premium tier:** three tiers — `admin`, `public` ("Normal"), `premium`. `can_view_premium(user)` (in `app/routes/auth.py`) returns true for `admin`/`premium`. `get_current_user_optional` is the non-raising variant used by the public browse endpoints so they can tailor responses to the viewer's tier. Implemented.
+- **Image access:** images are never proxied through the backend — every question/page response embeds an S3 **presigned URL** (`get_presigned_url`), keeping VM bandwidth free for HTML/JSON. The premium paywall works *by withholding this URL*: for a premium paper viewed by a non-entitled user, the backend simply omits `get_presigned_url` and returns `null` + `locked: true`, so the URL never reaches an unauthorized client. Implemented.
 - **Input validation:** all API inputs are Pydantic models (`app/schemas/`), including password-strength validation on registration. Implemented.
 - **CORS:** **not implemented** — no `CORSMiddleware` is registered in `app/main.py`.
 - **Rate limiting:** **not implemented** — there is no limiter on `/api/auth/*` or anywhere else.

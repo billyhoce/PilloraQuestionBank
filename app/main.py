@@ -8,6 +8,7 @@ from app.routes.ingest import router as ingest_router
 from app.routes.papers import router as papers_router
 from app.routes.questions import router as questions_router
 from app.routes.reference import router as reference_router
+from app.routes.users import router as users_router
 
 app = FastAPI(title="PilloraQuestionBank")
 
@@ -19,6 +20,7 @@ def health():
 
 
 app.include_router(auth_router)
+app.include_router(users_router)
 app.include_router(reference_router)
 app.include_router(questions_router)
 app.include_router(generate_router)

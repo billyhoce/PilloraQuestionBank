@@ -14,6 +14,13 @@ const columns = [
   { key: 'year', label: 'Year' },
   { key: 'paper_number', label: 'Paper' },
   { key: 'question_count', label: 'Questions' },
+  {
+    key: 'is_premium',
+    label: 'Premium',
+    render: (row) => (row.is_premium
+      ? <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium">Premium</span>
+      : <span className="text-gray-400">—</span>),
+  },
 ]
 
 export default function PapersList() {

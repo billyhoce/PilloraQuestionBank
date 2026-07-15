@@ -12,8 +12,14 @@ A web application that serves as a database of secondary school exam questions (
 
 | Role | Capabilities |
 |---|---|
-| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), all public capabilities |
-| **Public** (registered) | View/filter questions, generate and download custom papers |
+| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), manage users (change tiers), all premium capabilities |
+| **Premium** (registered, paid) | All public capabilities, plus view images of premium papers and generate papers using premium questions |
+| **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions |
+
+The stored role values are `admin`, `premium`, and `public` (shown as "Normal" in the UI).
+Papers carry an `is_premium` flag; their images/questions are gated to premium & admin users.
+Premium is granted by an admin via the User Management page — the Subscribe page is a payment
+stub for now.
 
 Auth is email/password with bcrypt hashing. Session-based or JWT. No OAuth in v1.
 

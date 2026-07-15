@@ -1,5 +1,6 @@
 """Tests for the questions list/filter and detail endpoints."""
 from datetime import datetime, UTC
+from unittest.mock import patch
 
 import pytest
 
@@ -524,6 +525,85 @@ def test_get_question_pages_include_presigned_urls(public_client, sample_paper, 
 def test_get_question_not_found_returns_404(public_client):
     resp = public_client.get("/api/questions/99999")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Premium paywall
+# ---------------------------------------------------------------------------
+
+
+def _make_premium(db_session, paper):
+    paper.is_premium = True
+    db_session.flush()
+
+
+def test_list_premium_paper_locked_for_public(public_client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert items  # tiles are still visible
+    for item in items:
+        assert item["paper_info"]["is_premium"] is True
+        assert item["locked"] is True
+        assert item["first_page_url"] is None
+
+
+def test_list_premium_paper_locked_for_anonymous(client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = client.get("/api/questions")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert items
+    assert all(i["locked"] and i["first_page_url"] is None for i in items)
+
+
+def test_list_premium_paper_unlocked_for_premium(premium_client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = premium_client.get("/api/questions")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert all(not i["locked"] and i["first_page_url"] == "https://signed" for i in items)
+
+
+def test_list_premium_paper_unlocked_for_admin(admin_client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = admin_client.get("/api/questions")
+    assert resp.status_code == 200
+    assert all(not i["locked"] for i in resp.json()["items"])
+
+
+def test_non_premium_paper_not_locked(public_client, sample_paper):
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    assert all(not i["locked"] for i in resp.json()["items"])
+
+
+def test_get_question_detail_locked_for_public(public_client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = public_client.get(f"/api/questions/{q1.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["locked"] is True
+    assert all(p["url"] is None for p in body["question_pages"])
+
+
+def test_get_question_detail_unlocked_for_premium(premium_client, sample_paper, db_session):
+    _make_premium(db_session, sample_paper)
+    q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
+    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
+        resp = premium_client.get(f"/api/questions/{q1.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["locked"] is False
+    assert all(p["url"] == "https://signed" for p in body["question_pages"])
 
 
 def test_get_question_includes_topic_chips(public_client, db_session, reference_data, admin_user):

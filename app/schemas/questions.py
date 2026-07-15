@@ -7,6 +7,7 @@ class PaperInfoSchema(BaseModel):
     id: int
     year: int
     paper_number: str
+    is_premium: bool = False
     subject_name: str
     stream_name: str
     level_name: str
@@ -33,6 +34,9 @@ class QuestionListItem(BaseModel):
     topics: list[QuestionTopicInfo] = []
     tags: list[QuestionTagInfo] = []
     first_page_url: Optional[str] = None
+    # True when this question's paper is premium and the viewer isn't entitled;
+    # the image URL is withheld and the frontend renders a locked placeholder.
+    locked: bool = False
 
 
 class QuestionListResponse(BaseModel):
@@ -46,7 +50,7 @@ class QuestionPageSchema(BaseModel):
     page_type: str
     width_px: int
     height_px: int
-    url: str
+    url: Optional[str] = None
 
 
 class QuestionDetailResponse(BaseModel):
@@ -57,3 +61,6 @@ class QuestionDetailResponse(BaseModel):
     answer_pages: list[QuestionPageSchema]
     topics: list[QuestionTopicInfo] = []
     tags: list[QuestionTagInfo] = []
+    # True when the paper is premium and the viewer isn't entitled; page URLs
+    # are withheld.
+    locked: bool = False

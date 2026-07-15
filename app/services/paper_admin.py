@@ -113,6 +113,8 @@ def update_paper(paper_id: int, data: dict, db: Any) -> Optional[Paper]:
     paper.exam_type_id = data["exam_type_id"]
     paper.year = data["year"]
     paper.paper_number = data["paper_number"]
+    if "is_premium" in data:
+        paper.is_premium = data["is_premium"]
 
     if subject_or_stream_changed:
         question_ids = [q.id for q in paper.questions]

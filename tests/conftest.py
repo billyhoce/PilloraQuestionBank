@@ -142,6 +142,11 @@ def public_user(db_session):
 
 
 @pytest.fixture
+def premium_user(db_session):
+    return _create_user(db_session, "premium@test.com", "Premiumpass123!", "premium")
+
+
+@pytest.fixture
 def admin_client(client, admin_user):
     """TestClient pre-authenticated as the admin user."""
     resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "Adminpass123!"})
@@ -154,6 +159,14 @@ def public_client(client, public_user):
     """TestClient pre-authenticated as a public user."""
     resp = client.post("/api/auth/login", json={"email": "user@test.com", "password": "Userpass123!"})
     assert resp.status_code == 200, f"Public login failed: {resp.text}"
+    return client
+
+
+@pytest.fixture
+def premium_client(client, premium_user):
+    """TestClient pre-authenticated as a premium user."""
+    resp = client.post("/api/auth/login", json={"email": "premium@test.com", "password": "Premiumpass123!"})
+    assert resp.status_code == 200, f"Premium login failed: {resp.text}"
     return client
 
 

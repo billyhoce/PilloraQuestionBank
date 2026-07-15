@@ -87,6 +87,15 @@ export default function PaperMetadataBar({ metadata, refs, onSave }) {
             className="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+        <label className="flex items-center gap-2 pb-2 text-sm text-gray-700 select-none">
+          <input
+            type="checkbox"
+            checked={!!draft.is_premium}
+            onChange={(e) => set('is_premium', e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          Premium paper
+        </label>
         <button
           type="button"
           onClick={handleSaveClick}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import QuestionCard from './QuestionCard'
 
 const baseItem = {
@@ -58,5 +59,44 @@ describe('QuestionCard tag chips', () => {
   it('renders no tag chips when tags are absent', () => {
     render(<QuestionCard item={baseItem} onClick={() => {}} />)
     expect(screen.queryByText('Challenging')).not.toBeInTheDocument()
+  })
+})
+
+describe('QuestionCard premium lock', () => {
+  const lockedItem = {
+    ...baseItem,
+    first_page_url: null,
+    locked: true,
+    paper_info: { ...baseItem.paper_info, is_premium: true },
+  }
+
+  const renderWithRouter = (props) =>
+    render(<MemoryRouter><QuestionCard {...props} /></MemoryRouter>)
+
+  it('shows a lock overlay and no image for a locked premium question', () => {
+    renderWithRouter({ item: lockedItem, onClick: () => {} })
+    expect(screen.getByText('Premium content')).toBeInTheDocument()
+    expect(screen.getByText('Subscribe to unlock')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('shows a Subscribe link instead of an Add button in selectable mode', () => {
+    renderWithRouter({ item: lockedItem, onClick: () => {}, selectable: true })
+    const subscribe = screen.getByRole('link', { name: /subscribe/i })
+    expect(subscribe).toHaveAttribute('href', '/subscribe')
+    expect(screen.queryByRole('button', { name: /add/i })).not.toBeInTheDocument()
+  })
+
+  it('renders the image and an Add button when not locked', () => {
+    const item = {
+      ...baseItem,
+      locked: false,
+      first_page_url: 'https://example.com/img.webp',
+      paper_info: { ...baseItem.paper_info, is_premium: false },
+    }
+    renderWithRouter({ item, onClick: () => {}, selectable: true })
+    expect(screen.getByRole('img')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add/i })).toBeInTheDocument()
+    expect(screen.queryByText('Premium content')).not.toBeInTheDocument()
   })
 })
