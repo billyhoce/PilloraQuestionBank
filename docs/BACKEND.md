@@ -169,6 +169,7 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 
 2. **`POST /api/import/confirm`** (Implemented)
    - Accepts paper metadata + an ordered list of questions, each with its pages (`temp_key`, `page_type`, `page_order`, `width_px`, `height_px`).
+   - Accepts an optional `is_premium` flag (**defaults to `true`** — imported papers are premium unless the admin unticks the box at the final import step).
    - Creates `Paper`, `Question`, and `QuestionPage` rows transactionally.
    - Moves images from the temp key into the canonical object-store key pattern: `papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp` (S3 server-side copy + delete of the temp object).
    - Persists `width_px` and `height_px` per page.

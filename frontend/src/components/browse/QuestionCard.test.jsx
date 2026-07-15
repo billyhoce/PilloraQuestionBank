@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import QuestionCard from './QuestionCard'
 
@@ -73,11 +74,19 @@ describe('QuestionCard premium lock', () => {
   const renderWithRouter = (props) =>
     render(<MemoryRouter><QuestionCard {...props} /></MemoryRouter>)
 
-  it('shows a lock overlay and no image for a locked premium question', () => {
+  it('shows the placeholder image (not the real preview) for a locked premium question', () => {
     renderWithRouter({ item: lockedItem, onClick: () => {} })
-    expect(screen.getByText('Premium content')).toBeInTheDocument()
-    expect(screen.getByText('Subscribe to unlock')).toBeInTheDocument()
-    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    const img = screen.getByRole('img', { name: /premium content/i })
+    expect(img).toBeInTheDocument()
+    expect(img.getAttribute('src')).not.toBe('https://example.com/img.webp')
+  })
+
+  it('stays clickable when locked (opens the detail view)', async () => {
+    const onClick = vi.fn()
+    const user = userEvent.setup()
+    renderWithRouter({ item: lockedItem, onClick })
+    await user.click(screen.getByRole('img', { name: /premium content/i }))
+    expect(onClick).toHaveBeenCalled()
   })
 
   it('shows a Subscribe link instead of an Add button in selectable mode', () => {
@@ -87,7 +96,7 @@ describe('QuestionCard premium lock', () => {
     expect(screen.queryByRole('button', { name: /add/i })).not.toBeInTheDocument()
   })
 
-  it('renders the image and an Add button when not locked', () => {
+  it('renders the real image and an Add button when not locked', () => {
     const item = {
       ...baseItem,
       locked: false,
@@ -95,8 +104,8 @@ describe('QuestionCard premium lock', () => {
       paper_info: { ...baseItem.paper_info, is_premium: false },
     }
     renderWithRouter({ item, onClick: () => {}, selectable: true })
-    expect(screen.getByRole('img')).toBeInTheDocument()
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://example.com/img.webp')
     expect(screen.getByRole('button', { name: /add/i })).toBeInTheDocument()
-    expect(screen.queryByText('Premium content')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /premium content/i })).not.toBeInTheDocument()
   })
 })

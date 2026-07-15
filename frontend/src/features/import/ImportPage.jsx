@@ -63,6 +63,7 @@ function countGroups(arr) {
 const emptyMetadata = {
   subject_id: null, stream_id: null, level_id: null,
   school_id: null, exam_type_id: null, year: '', paper_number: '',
+  is_premium: true,  // imported papers are premium by default
 }
 
 export default function ImportPage() {
@@ -201,6 +202,7 @@ export default function ImportPage() {
         exam_type_id: metadata.exam_type_id,
         year: Number(metadata.year),
         paper_number: metadata.paper_number,
+        is_premium: metadata.is_premium,
         questions,
       })
       setPaperId(result.paper_id)

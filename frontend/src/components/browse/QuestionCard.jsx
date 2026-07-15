@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import premiumLocked from '../../assets/premium-locked.svg'
 import { formatTopic } from '../../utils/topicFormat'
 
 export default function QuestionCard({ item, onClick, selectable = false, selected = false, onToggleSelect }) {
@@ -14,11 +15,11 @@ export default function QuestionCard({ item, onClick, selectable = false, select
   const preview = (
     <div className="aspect-[5/2] bg-white overflow-hidden">
       {locked ? (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 bg-gradient-to-br from-amber-50 to-gray-100 text-center px-2">
-          <span className="text-lg" aria-hidden="true">🔒</span>
-          <span className="text-xs font-semibold text-amber-800">Premium content</span>
-          <span className="text-[10px] text-gray-500">Subscribe to unlock</span>
-        </div>
+        <img
+          src={premiumLocked}
+          alt="Premium content — subscribe to unlock"
+          className="w-full h-full object-contain"
+        />
       ) : first_page_url ? (
         <img
           src={first_page_url}

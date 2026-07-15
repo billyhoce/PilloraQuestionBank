@@ -123,6 +123,66 @@ def test_confirm_creates_paper_row(db_session, mock_s3, reference_data, admin_us
     assert db_session.query(Paper).count() == 1
 
 
+def _single_question_payload(reference_data, admin_user, mock_s3, temp_key):
+    mock_s3.put_object(Bucket="test-bucket", Key=temp_key, Body=b"fake")
+    return _make_confirm_payload(
+        reference_data,
+        admin_user,
+        questions=[
+            {
+                "question_number": 1,
+                "marks": 5,
+                "pages": [
+                    {"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}
+                ],
+            }
+        ],
+    )
+
+
+def test_confirm_defaults_paper_to_premium(db_session, mock_s3, reference_data, admin_user):
+    payload = _single_question_payload(reference_data, admin_user, mock_s3, "tmp/prem/page_0.webp")
+    # _make_confirm_payload omits is_premium — the import default (True) must apply.
+    paper = confirm_import(payload=payload, created_by=admin_user, db=db_session)
+    assert paper.is_premium is True
+
+
+def test_confirm_respects_is_premium_false(db_session, mock_s3, reference_data, admin_user):
+    payload = _single_question_payload(reference_data, admin_user, mock_s3, "tmp/free/page_0.webp")
+    payload["is_premium"] = False
+    paper = confirm_import(payload=payload, created_by=admin_user, db=db_session)
+    assert paper.is_premium is False
+
+
+def test_confirm_route_defaults_to_premium(admin_client, mock_s3, reference_data, admin_user):
+    rd = reference_data
+    temp_key = "tmp/route-prem/page_0.webp"
+    mock_s3.put_object(Bucket="test-bucket", Key=temp_key, Body=b"fake")
+    payload = {
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,
+        "level_id": rd["level"].id,
+        "school_id": rd["school"].id,
+        "exam_type_id": rd["exam_type"].id,
+        "year": 2024,
+        "paper_number": "3",
+        "questions": [
+            {"question_number": 1, "marks": 5, "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}]},
+        ],
+    }
+    resp = admin_client.post("/api/import/confirm", json=payload)
+    assert resp.status_code == 201
+    paper = db_session_from_client_paper(admin_client, resp.json()["paper_id"])
+    assert paper["is_premium"] is True
+
+
+def db_session_from_client_paper(client, paper_id):
+    """Fetch a paper's detail via the API (the editor endpoint exposes is_premium)."""
+    r = client.get(f"/api/papers/{paper_id}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def test_confirm_creates_correct_question_count(db_session, mock_s3, reference_data, admin_user):
     questions = [
         {

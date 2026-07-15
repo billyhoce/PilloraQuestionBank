@@ -63,13 +63,17 @@ Three user tiers: **Normal** (stored as `public`), **Premium**, and **Admin**.
   An admin's own row is disabled so they can't lock themselves out.
 - **Subscribe** (`/subscribe`, `pages/SubscribePage.jsx`): a stub — pricing + a disabled
   Subscribe button (payments not built). Premium access is granted by an admin, not self-serve.
-- **Locked content:** premium papers are flagged with an `is_premium` tickbox in the paper
-  editor (`PaperMetadataBar`) and a Premium badge in the admin papers list. For a Normal/anonymous
-  viewer, the backend withholds the image URL and sets `locked` (see BACKEND.md). `QuestionCard`
-  then renders a 🔒 "Premium content — Subscribe to unlock" placeholder instead of the image; in
-  the Generate cart the Add button is replaced by a **Subscribe** link. `QuestionDetailModal` shows
-  a "Go Premium" panel in place of the images. The Generate page also surfaces the backend's `403`
-  message if a premium question is somehow submitted.
+- **Flagging premium papers:** an `is_premium` tickbox appears in two places — the paper editor
+  (`PaperMetadataBar`) and the **import** metadata sidebar (`features/import/MetadataSidebar.jsx`).
+  On import the box is **ticked by default** (imported papers are premium unless unticked). The
+  admin papers list shows a Premium badge.
+- **Locked content:** for a Normal/anonymous viewer, the backend withholds the image URL and sets
+  `locked` (see BACKEND.md). `QuestionCard` then renders the placeholder asset
+  `src/assets/premium-locked.svg` in place of the image; in the Generate cart the Add button is
+  replaced by a **Subscribe** link. Locked cards **stay clickable** — clicking opens
+  `QuestionDetailModal`, which shows the same placeholder image plus a **Go Premium** button (in
+  place of the question/answer images). The Generate page also surfaces the backend's `403`
+  message if a premium question is somehow submitted (defense-in-depth; the UI already prevents it).
 
 ## Import Flow UI (Admin)
 
@@ -106,6 +110,7 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Sidebar form with dropdowns populated from reference tables:
   - Subject, Stream, Level, School, Exam Type
   - Year (number), Paper Number (string: "1", "2", "a", "b")
+  - **Premium paper** checkbox — ticked by default (imported papers are premium unless unticked).
 - **AI pre-fill:** when the upload completes, call AI filename extraction (see [AI_INTEGRATION.md](./AI_INTEGRATION.md)) and pre-populate the form. User confirms or edits.
 
 ### Step 8 — Confirm Upload
