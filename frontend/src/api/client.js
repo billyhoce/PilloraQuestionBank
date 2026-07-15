@@ -6,7 +6,7 @@ export function setUnauthorizedHandler(fn) {
 
 function friendlyMessage(status, isDelete, detail) {
   if (status === 401) return 'Your session has expired. Please log in again.'
-  if (status === 403) return 'Admin access required.'
+  if (status === 403) return detail || 'Admin access required.'
   if (status === 409) {
     if (detail) return detail
     if (isDelete) return 'Cannot delete — this item is still in use by other data.'
@@ -80,6 +80,11 @@ export const api = {
     login: (email, password) => request('POST', '/api/auth/login', { email, password }),
     register: (email, password) => request('POST', '/api/auth/register', { email, password }),
     logout: () => request('POST', '/api/auth/logout'),
+  },
+
+  users: {
+    list: () => request('GET', '/api/users').then(r => r.data),
+    updateRole: (id, role) => request('PATCH', `/api/users/${id}/role`, { role }),
   },
 
   schoolLevels: {

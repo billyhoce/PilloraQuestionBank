@@ -41,6 +41,9 @@ class ConfirmImportPayload(BaseModel):
     exam_type_id: int
     year: int
     paper_number: str
+    # Imported papers are premium by default; the admin can untick this at the
+    # final import step.
+    is_premium: bool = True
     questions: list[QuestionIn]
 
 

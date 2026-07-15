@@ -36,10 +36,31 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    access_token: Optional[str] = Cookie(default=None),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Like ``get_current_user`` but returns ``None`` instead of raising when the
+    caller is unauthenticated (or the token is invalid). Used by public endpoints
+    that still want to tailor their response to the viewer's tier."""
+    if not access_token:
+        return None
+    payload = decode_access_token(access_token)
+    if payload is None:
+        return None
+    return db.get(User, int(payload["sub"]))
+
+
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+def can_view_premium(user: Optional[User]) -> bool:
+    """Whether ``user`` may see premium paper images / generate with premium
+    questions. Admins and premium users qualify; public and anonymous do not."""
+    return user is not None and user.role in ("admin", "premium")
 
 
 @router.post("/register", status_code=201, response_model=UserResponse)

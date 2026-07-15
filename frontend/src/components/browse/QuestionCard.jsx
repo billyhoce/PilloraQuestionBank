@@ -1,7 +1,12 @@
+import { Link } from 'react-router-dom'
+import premiumLocked from '../../assets/premium-locked.svg'
 import { formatTopic } from '../../utils/topicFormat'
 
 export default function QuestionCard({ item, onClick, selectable = false, selected = false, onToggleSelect }) {
   const { paper_info, topics, tags, first_page_url, question_number, marks } = item
+  // The backend withholds the image URL for premium papers when the viewer isn't
+  // entitled and sets `locked`. Fall back to inferring it from the metadata.
+  const locked = item.locked ?? (paper_info.is_premium && !first_page_url)
   const uniqueTopics = [...new Map((topics || []).map(t => [t.topic_name, t])).values()]
   const subtopicNames = [...new Set((topics || []).flatMap(t => t.subtopic_names || []))]
   const questionTags = tags || []
@@ -9,7 +14,13 @@ export default function QuestionCard({ item, onClick, selectable = false, select
 
   const preview = (
     <div className="aspect-[5/2] bg-white overflow-hidden">
-      {first_page_url ? (
+      {locked ? (
+        <img
+          src={premiumLocked}
+          alt="Premium content — subscribe to unlock"
+          className="w-full h-full object-contain"
+        />
+      ) : first_page_url ? (
         <img
           src={first_page_url}
           alt={title}
@@ -75,17 +86,26 @@ export default function QuestionCard({ item, onClick, selectable = false, select
             <span className="text-xs text-gray-600">
               {marks != null ? `${marks} ${marks === 1 ? 'mark' : 'marks'}` : 'Marks —'}
             </span>
-            <button
-              type="button"
-              onClick={onToggleSelect}
-              className={`text-xs font-medium px-2.5 py-1 rounded transition-colors ${
-                selected
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'border border-blue-500 text-blue-600 hover:bg-blue-50'
-              }`}
-            >
-              {selected ? '✓ Added' : '+ Add'}
-            </button>
+            {locked ? (
+              <Link
+                to="/subscribe"
+                className="text-xs font-medium px-2.5 py-1 rounded border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 transition-colors"
+              >
+                🔒 Subscribe
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={onToggleSelect}
+                className={`text-xs font-medium px-2.5 py-1 rounded transition-colors ${
+                  selected
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'border border-blue-500 text-blue-600 hover:bg-blue-50'
+                }`}
+              >
+                {selected ? '✓ Added' : '+ Add'}
+              </button>
+            )}
           </div>
         </div>
       </div>

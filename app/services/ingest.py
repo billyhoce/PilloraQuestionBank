@@ -73,6 +73,7 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
             exam_type_id=payload["exam_type_id"],
             year=payload["year"],
             paper_number=payload["paper_number"],
+            is_premium=payload.get("is_premium", True),
             created_by=created_by.id,
             created_at=datetime.now(UTC),
         )

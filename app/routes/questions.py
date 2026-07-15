@@ -6,6 +6,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db import get_db
+from app.routes.auth import can_view_premium, get_current_user_optional
 from app.models.orm import (
     ExamType,
     Level,
@@ -22,6 +23,7 @@ from app.models.orm import (
     Subtopic,
     Tag,
     Topic,
+    User,
 )
 from app.schemas.questions import QuestionDetailResponse, QuestionListResponse
 from app.storage.s3_client import get_presigned_url
@@ -125,6 +127,7 @@ def _paper_info(paper: Paper) -> dict:
         "id": paper.id,
         "year": paper.year,
         "paper_number": paper.paper_number,
+        "is_premium": paper.is_premium,
         "subject_name": paper.subject.name,
         "stream_name": paper.stream.name,
         "level_name": paper.level.name,
@@ -169,8 +172,14 @@ def _tag_infos(question: Question) -> list[dict]:
     ]
 
 
-def serialize_list_item(q: Question) -> dict:
-    """Build a QuestionListItem dict for a question (with eager-loaded relations)."""
+def serialize_list_item(q: Question, can_view_premium: bool = True) -> dict:
+    """Build a QuestionListItem dict for a question (with eager-loaded relations).
+
+    When the question belongs to a premium paper and the viewer isn't entitled
+    (``can_view_premium`` is False), the image URL is withheld and ``locked`` is
+    set so the frontend shows a paywall placeholder instead of the image.
+    """
+    locked = q.paper.is_premium and not can_view_premium
     return {
         "id": q.id,
         "question_number": q.question_number,
@@ -178,7 +187,8 @@ def serialize_list_item(q: Question) -> dict:
         "paper_info": _paper_info(q.paper),
         "topics": _topic_infos(q),
         "tags": _tag_infos(q),
-        "first_page_url": _first_page_url(q),
+        "first_page_url": None if locked else _first_page_url(q),
+        "locked": locked,
     }
 
 
@@ -216,7 +226,9 @@ def list_questions(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
+    viewer_premium = can_view_premium(current_user)
     filter_args = (
         subject_id,
         stream_id,
@@ -243,7 +255,7 @@ def list_questions(
         .all()
     )
 
-    items = [serialize_list_item(q) for q in questions]
+    items = [serialize_list_item(q, viewer_premium) for q in questions]
 
     return {"total": total, "items": items}
 
@@ -252,15 +264,18 @@ def list_questions(
 def get_question(
     question_id: int,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     question = (
         db.query(Question)
         .filter(Question.id == question_id)
-        .options(selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
+        .options(joinedload(Question.paper), selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
         .one_or_none()
     )
     if question is None:
         raise HTTPException(status_code=404, detail="Question not found")
+
+    locked = question.paper.is_premium and not can_view_premium(current_user)
 
     def _page_dict(p: QuestionPage) -> dict:
         return {
@@ -269,7 +284,7 @@ def get_question(
             "page_type": p.page_type,
             "width_px": p.width_px,
             "height_px": p.height_px,
-            "url": get_presigned_url(p.image_key),
+            "url": None if locked else get_presigned_url(p.image_key),
         }
 
     sorted_pages = sorted(question.pages, key=lambda p: (p.page_type, p.page_order))
@@ -281,4 +296,5 @@ def get_question(
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
         "topics": _topic_infos(question),
         "tags": _tag_infos(question),
+        "locked": locked,
     }

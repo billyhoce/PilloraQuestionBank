@@ -1039,3 +1039,65 @@ def test_generate_paper_combined_covers_each_section(
 def test_generate_paper_rejects_unknown_variant(public_client):
     resp = public_client.post("/api/generate/paper", json={"question_ids": [1], "variant": "both"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Premium paywall
+# ---------------------------------------------------------------------------
+
+
+def test_generate_select_excludes_premium_for_public(public_client, sample_paper, db_session, reference_data):
+    sample_paper.is_premium = True
+    db_session.flush()
+    resp = public_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "marks",
+        "target_value": 10,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 0
+    assert data["items"] == []
+
+
+def test_generate_select_includes_premium_for_premium(premium_client, sample_paper, db_session, reference_data):
+    sample_paper.is_premium = True
+    db_session.flush()
+    resp = premium_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "marks",
+        "target_value": 10,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 3
+
+
+def test_generate_paper_premium_blocked_for_public(public_client, sample_paper, db_session, reference_data):
+    sample_paper.is_premium = True
+    db_session.flush()
+    ids = _question_ids(db_session, sample_paper)
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+        })
+    assert resp.status_code == 403
+
+
+def test_generate_paper_premium_allowed_for_premium(premium_client, sample_paper, db_session, reference_data):
+    sample_paper.is_premium = True
+    db_session.flush()
+    ids = _question_ids(db_session, sample_paper)
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
+    ):
+        resp = premium_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+        })
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"

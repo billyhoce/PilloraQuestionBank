@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -8,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -100,7 +102,7 @@ class Tag(Base):
 
 class User(Base):
     __tablename__ = "app_user"
-    __table_args__ = (CheckConstraint("role IN ('admin', 'public')", name="ck_user_role"),)
+    __table_args__ = (CheckConstraint("role IN ('admin', 'public', 'premium')", name="ck_user_role"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -122,6 +124,9 @@ class Paper(Base):
     exam_type_id: Mapped[int] = mapped_column(ForeignKey("exam_type.id", ondelete="RESTRICT"), nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     paper_number: Mapped[str] = mapped_column(String(8), nullable=False)
+    is_premium: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     created_by: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

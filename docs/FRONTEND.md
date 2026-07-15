@@ -32,9 +32,11 @@ Topics are always displayed with their topic number as a `T{n}:` prefix, e.g. **
 | `/` or `/browse` | Browse / Filter questions | Authenticated |
 | `/questions/:id` | Question detail (all pages) | Authenticated |
 | `/generate` | Paper generation | Authenticated |
+| `/subscribe` | Subscribe / Go Premium (payment stub) | Authenticated |
 | `/admin/import` | Import flow | Admin |
 | `/admin/reference` | Reference data CRUD | Admin |
-| `/admin/users` | User management | Admin |
+| `/admin/papers` | Papers list + editor | Admin |
+| `/admin/users` | User management (change tiers) | Admin |
 
 ## Navigation (App Shell)
 
@@ -45,10 +47,33 @@ user's role — there is no "Admin" button to unlock it:
 
 - **Everyone:** Question Bank (`/`), Generate Paper (`/generate` — signed-out clicks land on
   `/login` via `ProtectedRoute`).
-- **Admins additionally:** Reference, Import, Papers.
+- **Admins additionally:** Reference, Import, Papers, User Management (`/admin/users`).
+- **Normal (`public`) users:** a **⭐ Go Premium** link (to `/subscribe`) appears at the top
+  right. Premium and admin users don't see it.
 - **Top right:** signed-in users get an account button (their email) opening a dropdown
   (`<UserMenu />`) with **Log out** (closes on outside click / Escape; logging out returns to
   `/`). Signed-out visitors see a **Log in** link instead.
+
+## Premium paywall (UI)
+
+Three user tiers: **Normal** (stored as `public`), **Premium**, and **Admin**.
+
+- **User Management** (`/admin/users`, `features/users/UsersList.jsx`): admins list every
+  user and change their tier via a per-row select (Normal / Premium / Admin → `api.users.updateRole`).
+  An admin's own row is disabled so they can't lock themselves out.
+- **Subscribe** (`/subscribe`, `pages/SubscribePage.jsx`): a stub — pricing + a disabled
+  Subscribe button (payments not built). Premium access is granted by an admin, not self-serve.
+- **Flagging premium papers:** an `is_premium` tickbox appears in two places — the paper editor
+  (`PaperMetadataBar`) and the **import** metadata sidebar (`features/import/MetadataSidebar.jsx`).
+  On import the box is **ticked by default** (imported papers are premium unless unticked). The
+  admin papers list shows a Premium badge.
+- **Locked content:** for a Normal/anonymous viewer, the backend withholds the image URL and sets
+  `locked` (see BACKEND.md). `QuestionCard` then renders the placeholder asset
+  `src/assets/premium-locked.svg` in place of the image; in the Generate cart the Add button is
+  replaced by a **Subscribe** link. Locked cards **stay clickable** — clicking opens
+  `QuestionDetailModal`, which shows the same placeholder image plus a **Go Premium** button (in
+  place of the question/answer images). The Generate page also surfaces the backend's `403`
+  message if a premium question is somehow submitted (defense-in-depth; the UI already prevents it).
 
 ## Import Flow UI (Admin)
 
@@ -85,6 +110,7 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Sidebar form with dropdowns populated from reference tables:
   - Subject, Stream, Level, School, Exam Type
   - Year (number), Paper Number (string: "1", "2", "a", "b")
+  - **Premium paper** checkbox — ticked by default (imported papers are premium unless unticked).
 - **AI pre-fill:** when the upload completes, call AI filename extraction (see [AI_INTEGRATION.md](./AI_INTEGRATION.md)) and pre-populate the form. User confirms or edits.
 
 ### Step 8 — Confirm Upload

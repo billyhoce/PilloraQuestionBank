@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
-from app.models.orm import Question, User
+from app.models.orm import Paper, Question, User
 from app.pdf.layout_engine import Block, CoverSpec, LayoutEngine, render_combined
-from app.routes.auth import get_current_user
+from app.routes.auth import can_view_premium, get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
     _SUBTOPICS_EAGER,
@@ -99,6 +99,7 @@ def select_questions(
     selected questions (never a 404 — an empty result with a warning keeps the
     live builder UI responsive).
     """
+    viewer_premium = can_view_premium(current_user)
     f = payload.filters
     base = db.query(Question).join(Question.paper)
     query = _apply_filters(
@@ -115,6 +116,10 @@ def select_questions(
         f.search,
         f.paper_number,
     )
+    if not viewer_premium:
+        # Non-premium users can't generate with premium papers, so keep them out
+        # of the candidate pool entirely.
+        query = query.filter(Paper.is_premium.is_(False))
     if payload.exclude_question_ids:
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))
 
@@ -160,7 +165,7 @@ def select_questions(
             )
 
     return {
-        "items": [serialize_list_item(q) for q in selected],
+        "items": [serialize_list_item(q, viewer_premium) for q in selected],
         "total_marks": total_marks,
         "count": count,
         "exact": exact,
@@ -191,6 +196,14 @@ def generate_paper(
     )
     by_id = {q.id: q for q in rows}
     ordered = [by_id[qid] for qid in payload.question_ids if qid in by_id]
+
+    # Server-side paywall: non-premium users may not render premium questions,
+    # even if a premium question id is posted directly (the UI already blocks it).
+    if not can_view_premium(current_user) and any(q.paper.is_premium for q in ordered):
+        raise HTTPException(
+            status_code=403,
+            detail="Premium content requires a premium subscription",
+        )
 
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.

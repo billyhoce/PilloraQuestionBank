@@ -87,6 +87,29 @@ def test_update_paper_metadata(admin_client, sample_paper, mock_s3):
     assert detail["paper_number"] == "2"
 
 
+def test_update_paper_is_premium_round_trips(admin_client, sample_paper, mock_s3):
+    base = {
+        "subject_id": sample_paper.subject_id,
+        "stream_id": sample_paper.stream_id,
+        "level_id": sample_paper.level_id,
+        "school_id": sample_paper.school_id,
+        "exam_type_id": sample_paper.exam_type_id,
+        "year": sample_paper.year,
+        "paper_number": sample_paper.paper_number,
+    }
+
+    # Defaults to False, and the flag is exposed on the detail payload.
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is False
+
+    resp = admin_client.put(f"/api/papers/{sample_paper.id}", json={**base, "is_premium": True})
+    assert resp.status_code == 200, resp.text
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is True
+
+    resp = admin_client.put(f"/api/papers/{sample_paper.id}", json={**base, "is_premium": False})
+    assert resp.status_code == 200, resp.text
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is False
+
+
 def test_update_paper_stream_change_clears_topics(
     admin_client, db_session, sample_paper, reference_data, mock_s3
 ):

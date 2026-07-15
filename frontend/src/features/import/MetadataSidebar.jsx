@@ -70,6 +70,15 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
           className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
+      <label className="flex items-center gap-2 text-sm text-gray-700 select-none">
+        <input
+          type="checkbox"
+          checked={!!metadata.is_premium}
+          onChange={(e) => set('is_premium', e.target.checked)}
+          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        Premium paper
+      </label>
       <div className="text-xs text-gray-500 pt-1 space-y-0.5">
         <div>{questionCount} question{questionCount !== 1 ? 's' : ''}</div>
         {answerCount > 0 && <div>{answerCount} answer set{answerCount !== 1 ? 's' : ''}</div>}
