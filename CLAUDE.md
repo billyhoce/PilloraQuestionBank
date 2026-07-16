@@ -12,9 +12,9 @@ A web application that serves as a database of secondary school exam questions (
 
 | Role | Capabilities |
 |---|---|
-| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), manage users (change tiers), all premium capabilities |
+| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), configure paper generation (cover titles, subtitle placeholders, cover body, header/footer presets — the Generation Config page), full control of cover/header/footer when generating, manage users (change tiers), all premium capabilities |
 | **Premium** (registered, paid) | All public capabilities, plus view images of premium papers and generate papers using premium questions |
-| **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions |
+| **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions — always with a cover page, choosing a title from the admin-configured list; the cover body, header, and footer are admin presets |
 
 The stored role values are `admin`, `premium`, and `public` (shown as "Normal" in the UI).
 Papers carry an `is_premium` flag; their images/questions are gated to premium & admin users.

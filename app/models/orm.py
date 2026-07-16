@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     false,
     func,
@@ -98,6 +99,31 @@ class Tag(Base):
     __tablename__ = "tag"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+
+
+class CoverTitle(Base):
+    """Admin-curated cover titles. Non-admin users must pick their generated
+    paper's cover title from this list (admins may type free text)."""
+
+    __tablename__ = "cover_title"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+
+class GenerationConfig(Base):
+    """Singleton row (id=1) of admin-set paper-generation presets. Non-admin
+    generations always use the cover body / header / footer stored here; the
+    subtitle placeholders are the grey hint text shown in the Generate form."""
+
+    __tablename__ = "generation_config"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_generation_config_singleton"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subtitle1_placeholder: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    subtitle2_placeholder: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    cover_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    header_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    footer_text: Mapped[str] = mapped_column(String(255), nullable=False, default="")
 
 
 class User(Base):

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
@@ -80,7 +81,12 @@ function filtersToSelectPayload(filters) {
   }
 }
 
+// Sentinel value for the admin title dropdown's free-text option.
+const CUSTOM_TITLE = '__custom__'
+
 export default function GeneratePage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
@@ -106,38 +112,54 @@ export default function GeneratePage() {
   const [notice, setNotice] = useState(null) // { type: 'warning' | 'success', text }
 
   // PDF generation state
-  const [headerText, setHeaderText] = useState('')
   const [outputMode, setOutputMode] = useState('combined') // 'combined' | 'separate'
 
-  // Cover page state (editable defaults). Title and body start as null =
-  // "defaults not loaded yet": the fields are pre-filled from
-  // GET /api/generate/cover-defaults (the single source of truth), and any
-  // field still null at generate time is omitted from the request so the
-  // backend default applies. coverBody holds rich-text HTML (paragraphs plus
+  // Cover/header/footer state, driven by the admin-set generation config
+  // (GET /api/generation-config). Fields start as null = "config not loaded
+  // yet": they're pre-filled once from the config, and anything still null at
+  // generate time is omitted so the server-side presets apply. Non-admins only
+  // control the title (dropdown of configured titles) and the two subtitles —
+  // the server forces the config body/header/footer and always adds a cover.
+  // Admins control everything; coverBody holds rich-text HTML (paragraphs plus
   // bold/italic/underline/link), edited via CoverBodyEditor.
-  const [includeCover, setIncludeCover] = useState(true)
+  const [genConfig, setGenConfig] = useState(null)
+  const [includeCover, setIncludeCover] = useState(true) // admin-only toggle
   const [coverTitle, setCoverTitle] = useState(null)
+  const [titleMode, setTitleMode] = useState('preset') // 'preset' | 'custom' (admin)
+  const [customTitle, setCustomTitle] = useState('')
   const [coverSubtitle1, setCoverSubtitle1] = useState('')
   const [coverSubtitle2, setCoverSubtitle2] = useState('')
   const [coverBody, setCoverBody] = useState(null)
+  const [headerText, setHeaderText] = useState(null)
+  const [footerText, setFooterText] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
   const [genError, setGenError] = useState(null)
   const progressTimer = useRef(null)
 
-  // Pre-fill the cover title/body from the backend defaults. If the user has
-  // already typed into a field (no longer null), leave their text alone; if
-  // the fetch fails, the fields stay null and the backend defaults apply.
+  const titles = genConfig?.titles ?? []
+  // The title that ends up on the cover (and in the PDF filename).
+  const effectiveTitle = isAdmin && titleMode === 'custom' ? customTitle : coverTitle
+
+  // Pre-fill from the generation config. If the user already touched a field
+  // (no longer null), leave their text alone; if the fetch fails, everything
+  // stays null and the server-side presets apply.
   useEffect(() => {
     const controller = new AbortController()
-    api.generate.coverDefaults(controller.signal)
-      .then(res => {
-        setCoverTitle(prev => prev ?? res.cover_title)
-        setCoverBody(prev => prev ?? res.cover_body)
+    api.generationConfig.get(controller.signal)
+      .then(cfg => {
+        setGenConfig(cfg)
+        setCoverTitle(prev => prev ?? (cfg.titles[0]?.name ?? ''))
+        if (isAdmin) {
+          if (cfg.titles.length === 0) setTitleMode('custom')
+          setCoverBody(prev => prev ?? cfg.cover_body)
+          setHeaderText(prev => prev ?? cfg.header_text)
+          setFooterText(prev => prev ?? cfg.footer_text)
+        }
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [])
+  }, [isAdmin])
 
   const handleFilterChange = useCallback((patch) => {
     setFilters(prev => {
@@ -351,35 +373,42 @@ export default function GeneratePage() {
 
     const ids = cart.map(it => it.id)
     // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
-    // Title/body still null (defaults never loaded) are omitted so the backend
-    // defaults apply server-side.
+    // A title still null (config never loaded) is omitted so the server falls
+    // back to the first configured title. Non-admins send only title/subtitles;
+    // the server forces the config presets for everything else, so admin-only
+    // fields (include_cover, body, footer) stay out of their request.
     const cover = {
-      include_cover: includeCover,
       cover_subtitle1: coverSubtitle1,
       cover_subtitle2: coverSubtitle2,
     }
-    if (coverTitle !== null) cover.cover_title = coverTitle
-    if (coverBody !== null) cover.cover_body = coverBody
+    if (effectiveTitle !== null) cover.cover_title = effectiveTitle
+    if (isAdmin) {
+      cover.include_cover = includeCover
+      if (coverBody !== null) cover.cover_body = coverBody
+      if (footerText !== null) cover.footer_text = footerText
+    }
+    // Header only appears on question pages; the answer request always sends ''.
+    const header = isAdmin ? { header_text: headerText ?? '' } : {}
     try {
       if (outputMode === 'combined') {
         const blob = await api.generate.paper({
-          question_ids: ids, variant: 'combined', header_text: headerText, ...cover,
+          question_ids: ids, variant: 'combined', ...header, ...cover,
         })
         stopProgress()
         setGenProgress(100)
-        downloadBlob(blob, buildPdfFilename({ variant: 'combined', title: coverTitle }))
+        downloadBlob(blob, buildPdfFilename({ variant: 'combined', title: effectiveTitle }))
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
-          api.generate.paper({ question_ids: ids, variant: 'question', header_text: headerText, ...cover }),
-          api.generate.paper({ question_ids: ids, variant: 'answer', header_text: '', ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'question', ...header, ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'answer', ...(isAdmin ? { header_text: '' } : {}), ...cover }),
         ])
         stopProgress()
         setGenProgress(100)
-        downloadBlob(questionBlob, buildPdfFilename({ variant: 'question', title: coverTitle }))
+        downloadBlob(questionBlob, buildPdfFilename({ variant: 'question', title: effectiveTitle }))
         // Small gap so the browser doesn't drop the second programmatic download.
         setTimeout(
-          () => downloadBlob(answerBlob, buildPdfFilename({ variant: 'answer', title: coverTitle })),
+          () => downloadBlob(answerBlob, buildPdfFilename({ variant: 'answer', title: effectiveTitle })),
           600,
         )
         setNotice({ type: 'success', text: 'Generated question and answer PDFs.' })
@@ -622,38 +651,81 @@ export default function GeneratePage() {
               )}
 
               <div className="space-y-2 pt-1 border-t border-gray-100">
-                <label className="flex items-center gap-2 text-xs font-medium text-gray-700 pt-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={includeCover}
-                    onChange={e => setIncludeCover(e.target.checked)}
-                  />
-                  Include cover page
-                </label>
-                {includeCover ? (
-                  <div className="space-y-2">
+                {isAdmin ? (
+                  <label className="flex items-center gap-2 text-xs font-medium text-gray-700 pt-2 cursor-pointer">
                     <input
-                      type="text"
-                      value={coverTitle ?? ''}
-                      onChange={e => setCoverTitle(e.target.value)}
-                      placeholder="Title"
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                      type="checkbox"
+                      checked={includeCover}
+                      onChange={e => setIncludeCover(e.target.checked)}
                     />
+                    Include cover page
+                  </label>
+                ) : (
+                  // Non-admins always generate with a cover page.
+                  <span className="block text-xs font-medium text-gray-700 pt-2">Cover page</span>
+                )}
+                {(!isAdmin || includeCover) ? (
+                  <div className="space-y-2">
+                    {isAdmin ? (
+                      <>
+                        <select
+                          aria-label="Title"
+                          value={titleMode === 'custom' ? CUSTOM_TITLE : (coverTitle ?? '')}
+                          onChange={e => {
+                            if (e.target.value === CUSTOM_TITLE) {
+                              setTitleMode('custom')
+                            } else {
+                              setTitleMode('preset')
+                              setCoverTitle(e.target.value)
+                            }
+                          }}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                        >
+                          {titles.map(t => (
+                            <option key={t.id} value={t.name}>{t.name}</option>
+                          ))}
+                          <option value={CUSTOM_TITLE}>Custom…</option>
+                        </select>
+                        {titleMode === 'custom' ? (
+                          <input
+                            type="text"
+                            value={customTitle}
+                            onChange={e => setCustomTitle(e.target.value)}
+                            placeholder="Custom title"
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                          />
+                        ) : null}
+                      </>
+                    ) : (
+                      <select
+                        aria-label="Title"
+                        value={coverTitle ?? ''}
+                        disabled={titles.length === 0}
+                        onChange={e => setCoverTitle(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        {titles.map(t => (
+                          <option key={t.id} value={t.name}>{t.name}</option>
+                        ))}
+                      </select>
+                    )}
                     <input
                       type="text"
                       value={coverSubtitle1}
                       onChange={e => setCoverSubtitle1(e.target.value)}
-                      placeholder="Subtitle 1 — e.g. Secondary 3 Mathematics"
+                      placeholder={genConfig?.subtitle1_placeholder || 'Subtitle 1'}
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
                     />
                     <input
                       type="text"
                       value={coverSubtitle2}
                       onChange={e => setCoverSubtitle2(e.target.value)}
-                      placeholder="Subtitle 2 — e.g. 2024 Prelim"
+                      placeholder={genConfig?.subtitle2_placeholder || 'Subtitle 2'}
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
                     />
-                    <CoverBodyEditor value={coverBody} onChange={setCoverBody} />
+                    {isAdmin ? (
+                      <CoverBodyEditor value={coverBody} onChange={setCoverBody} />
+                    ) : null}
                     <p className="text-[11px] text-gray-400">
                       Marks box on the cover shows the paper total automatically.
                     </p>
@@ -661,19 +733,37 @@ export default function GeneratePage() {
                 ) : null}
               </div>
 
-              <div className="space-y-1 pt-1">
-                <label className="text-xs text-gray-600" htmlFor="header-text">
-                  Header / instructions (optional)
-                </label>
-                <textarea
-                  id="header-text"
-                  rows={2}
-                  value={headerText}
-                  onChange={e => setHeaderText(e.target.value)}
-                  placeholder="e.g. Answer all questions. Time: 2 hours."
-                  className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
-                />
-              </div>
+              {isAdmin ? (
+                <>
+                  <div className="space-y-1 pt-1">
+                    <label className="text-xs text-gray-600" htmlFor="header-text">
+                      Header / instructions (optional)
+                    </label>
+                    <textarea
+                      id="header-text"
+                      rows={2}
+                      value={headerText ?? ''}
+                      onChange={e => setHeaderText(e.target.value)}
+                      placeholder="e.g. Answer all questions. Time: 2 hours."
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                    />
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-xs text-gray-600" htmlFor="footer-text">
+                      Footer (optional)
+                    </label>
+                    <input
+                      id="footer-text"
+                      type="text"
+                      value={footerText ?? ''}
+                      onChange={e => setFooterText(e.target.value)}
+                      placeholder="e.g. 2024 Prelim Questions"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    />
+                  </div>
+                </>
+              ) : null}
 
               <div className="space-y-1 pt-1">
                 <span className="text-xs text-gray-600">Download as</span>

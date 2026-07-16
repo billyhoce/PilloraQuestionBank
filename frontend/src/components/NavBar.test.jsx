@@ -25,6 +25,7 @@ describe('NavBar links by role', () => {
     expect(screen.getByRole('link', { name: 'Reference' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Import' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Papers' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Generation Config' })).toBeInTheDocument()
   })
 
   it('shows only Question Bank and Generate Paper to public users', () => {
@@ -34,6 +35,7 @@ describe('NavBar links by role', () => {
     expect(screen.queryByRole('link', { name: 'Reference' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Import' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Papers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Generation Config' })).not.toBeInTheDocument()
   })
 
   it('shows a Log in link instead of the account button when signed out', () => {

@@ -538,29 +538,13 @@ def test_render_combined_matches_separate_renders(minimal_webp_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Routes — /api/generate/cover-defaults
+# Routes — /api/generate/cover-defaults (retired, replaced by generation config)
 # ---------------------------------------------------------------------------
 
 
-def test_cover_defaults_requires_auth(client):
-    resp = client.get("/api/generate/cover-defaults")
-    assert resp.status_code == 401
-
-
-def test_cover_defaults_match_paper_request_defaults(public_client):
-    """The served defaults are the same values GeneratePaperRequest falls back
-    to, so a client pre-filling from this endpoint and one omitting the fields
-    produce identical covers."""
-    from app.schemas.generate import GeneratePaperRequest
-
+def test_cover_defaults_endpoint_removed(public_client):
     resp = public_client.get("/api/generate/cover-defaults")
-    assert resp.status_code == 200
-    data = resp.json()
-    defaults = GeneratePaperRequest(question_ids=[1])
-    assert data["cover_title"] == defaults.cover_title
-    assert data["cover_body"] == defaults.cover_body
-    assert "Dear students," in data["cover_body"]
-    assert '<a href="https://www.pillora.com.sg">' in data["cover_body"]
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -889,7 +873,7 @@ def test_generate_paper_combined_returns_pdf(public_client, sample_paper, db_ses
 
 
 def test_generate_paper_combined_builds_question_then_answer_sections(
-    public_client, sample_paper, db_session, reference_data
+    admin_client, sample_paper, db_session, reference_data
 ):
     ids = _question_ids(db_session, sample_paper)
     captured = {}
@@ -902,10 +886,11 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
-        resp = public_client.post("/api/generate/paper", json={
+        resp = admin_client.post("/api/generate/paper", json={
             "question_ids": ids,
             "variant": "combined",
             "header_text": "Test paper",
+            "footer_text": "My footer",
         })
 
     assert resp.status_code == 200
@@ -916,13 +901,15 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     assert q_engine.fit_width is True
     assert q_engine.show_credit is True
     assert q_plan.header_text == "Test paper"
-    assert q_plan.footer_label == "Questions"
+    assert q_plan.footer_label == "My footer"
     assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
 
     a_engine, a_plan = sections[1]
     assert a_engine.fit_width is False
     assert a_engine.show_credit is False
-    assert a_plan.footer_label == "Answers"
+    # The footer is the same verbatim text on both sections — the old
+    # subtitle2-derived "… Questions"/"… Answers" labels are gone.
+    assert a_plan.footer_label == "My footer"
     assert a_plan.header_text == ""
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]
@@ -959,9 +946,129 @@ def test_generate_paper_combined_omits_empty_answer_section(
 
 
 def test_generate_paper_attaches_cover_and_total_marks(
+    admin_client, sample_paper, db_session, reference_data
+):
+    # Question variant: cover built with the paper total (5+3+2); admins may
+    # use any free-text title, and the footer is their text verbatim.
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+            "cover_title": "My Paper",
+            "cover_subtitle2": "2024 Prelim",
+            "footer_text": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    plan = captured["plan"]
+    assert plan.cover is not None
+    assert plan.cover.total_marks == 10
+    assert plan.cover.is_questions is True
+    assert plan.cover.title == "My Paper"
+    assert plan.footer_label == "2024 Prelim"
+
+
+def test_generate_paper_include_cover_false_omits_cover(
+    admin_client, sample_paper, db_session, reference_data
+):
+    # Only admins may skip the cover page (users always get one — see the
+    # generation-config enforcement tests below).
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question", "include_cover": False,
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover is None
+
+
+def test_generate_paper_combined_covers_each_section(
+    admin_client, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "combined", "cover_subtitle2": "2024 Prelim",
+        })
+
+    assert resp.status_code == 200
+    (_, q_plan), (_, a_plan) = captured["sections"]
+    assert q_plan.cover.is_questions is True and q_plan.cover.total_marks == 10
+    assert a_plan.cover.is_questions is False and a_plan.cover.total_marks == 10
+    # No footer_text sent and no derivation from subtitle2 — footer stays empty.
+    assert q_plan.footer_label == ""
+    assert a_plan.footer_label == ""
+
+
+def test_generate_paper_rejects_unknown_variant(public_client):
+    resp = public_client.post("/api/generate/paper", json={"question_ids": [1], "variant": "both"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Generation-config enforcement (non-admin generations)
+# ---------------------------------------------------------------------------
+
+
+def _seed_generation_config(db_session, **overrides):
+    from app.services.generation_config import get_or_create_config
+
+    cfg = get_or_create_config(db_session)
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    db_session.flush()
+    return cfg
+
+
+def _seed_cover_titles(db_session, *names):
+    from app.models.orm import CoverTitle
+
+    titles = [CoverTitle(name=n) for n in names]
+    db_session.add_all(titles)
+    db_session.flush()
+    return titles
+
+
+def test_generate_paper_public_forces_config_presets(
     public_client, sample_paper, db_session, reference_data
 ):
-    # Question variant: cover built with the paper total (5+3+2) and Questions.
+    """Non-admin requests can't override the admin presets: the cover page is
+    always included, and body/header/footer come from the generation config."""
+    _seed_generation_config(
+        db_session,
+        cover_body="<p>Config body</p>",
+        header_text="Config header",
+        footer_text="Config footer",
+    )
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
@@ -976,22 +1083,52 @@ def test_generate_paper_attaches_cover_and_total_marks(
         resp = public_client.post("/api/generate/paper", json={
             "question_ids": ids,
             "variant": "question",
-            "cover_title": "My Paper",
-            "cover_subtitle2": "2024 Prelim",
+            "include_cover": False,
+            "cover_body": "<p>Client body</p>",
+            "header_text": "Client header",
+            "footer_text": "Client footer",
+            "cover_subtitle1": "Sec 3 Math",
         })
 
     assert resp.status_code == 200
     plan = captured["plan"]
-    assert plan.cover is not None
-    assert plan.cover.total_marks == 10
-    assert plan.cover.is_questions is True
-    assert plan.cover.title == "My Paper"
-    assert plan.footer_label == "2024 Prelim Questions"
+    assert plan.cover is not None  # include_cover=False ignored
+    assert plan.cover.body == "<p>Config body</p>"
+    assert plan.cover.title == ""  # no titles configured → untitled cover
+    assert plan.cover.subtitle1 == "Sec 3 Math"  # subtitles stay free text
+    assert plan.header_text == "Config header"
+    assert plan.footer_label == "Config footer"
 
 
-def test_generate_paper_include_cover_false_omits_cover(
+def test_generate_paper_premium_also_gets_config_presets(
+    premium_client, sample_paper, db_session, reference_data
+):
+    # Premium users follow the same rules as public users — only admins differ.
+    _seed_generation_config(db_session, footer_text="Config footer")
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = premium_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question", "include_cover": False,
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover is not None
+    assert captured["plan"].footer_label == "Config footer"
+
+
+def test_generate_paper_public_title_from_configured_list(
     public_client, sample_paper, db_session, reference_data
 ):
+    _seed_cover_titles(db_session, "Topical Worksheets", "Revision Pack")
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
@@ -1004,16 +1141,80 @@ def test_generate_paper_include_cover_false_omits_cover(
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = public_client.post("/api/generate/paper", json={
-            "question_ids": ids, "variant": "question", "include_cover": False,
+            "question_ids": ids, "variant": "question", "cover_title": "Revision Pack",
         })
 
     assert resp.status_code == 200
-    assert captured["plan"].cover is None
+    assert captured["plan"].cover.title == "Revision Pack"
 
 
-def test_generate_paper_combined_covers_each_section(
+def test_generate_paper_public_unknown_title_returns_400(
     public_client, sample_paper, db_session, reference_data
 ):
+    """A hand-crafted request can't put arbitrary text on the cover title."""
+    _seed_cover_titles(db_session, "Topical Worksheets")
+    ids = _question_ids(db_session, sample_paper)
+
+    resp = public_client.post("/api/generate/paper", json={
+        "question_ids": ids, "variant": "question", "cover_title": "Anything I want",
+    })
+
+    assert resp.status_code == 400
+    assert "configured titles" in resp.json()["detail"]
+
+
+def test_generate_paper_public_empty_title_falls_back_to_first(
+    public_client, sample_paper, db_session, reference_data
+):
+    # A client that never loaded the config omits the title; the first
+    # configured title (the dropdown default) is used.
+    _seed_cover_titles(db_session, "Topical Worksheets", "Revision Pack")
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = public_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question",
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover.title == "Topical Worksheets"
+
+
+def test_generate_paper_admin_free_text_title_and_no_validation(
+    admin_client, sample_paper, db_session, reference_data
+):
+    _seed_cover_titles(db_session, "Topical Worksheets")
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids, "variant": "question", "cover_title": "Anything I want",
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].cover.title == "Anything I want"
+
+
+def test_generate_paper_public_combined_uses_config_footer_on_both_sections(
+    public_client, sample_paper, db_session, reference_data
+):
+    _seed_generation_config(db_session, footer_text="Config footer")
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
@@ -1031,14 +1232,9 @@ def test_generate_paper_combined_covers_each_section(
 
     assert resp.status_code == 200
     (_, q_plan), (_, a_plan) = captured["sections"]
-    assert q_plan.cover.is_questions is True and q_plan.cover.total_marks == 10
-    assert a_plan.cover.is_questions is False and a_plan.cover.total_marks == 10
-    assert a_plan.footer_label == "2024 Prelim Answers"
-
-
-def test_generate_paper_rejects_unknown_variant(public_client):
-    resp = public_client.post("/api/generate/paper", json={"question_ids": [1], "variant": "both"})
-    assert resp.status_code == 422
+    assert q_plan.footer_label == "Config footer"
+    assert a_plan.footer_label == "Config footer"
+    assert q_plan.cover is not None and a_plan.cover is not None
 
 
 # ---------------------------------------------------------------------------
