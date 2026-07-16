@@ -12,6 +12,7 @@ import ImportPage from './pages/admin/ImportPage'
 import PapersPage from './pages/admin/PapersPage'
 import PaperEditorPage from './pages/admin/PaperEditorPage'
 import UserManagementPage from './pages/admin/UserManagementPage'
+import GenerationConfigPage from './pages/admin/GenerationConfigPage'
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="/admin/papers" element={<PapersPage />} />
               <Route path="/admin/papers/:id" element={<PaperEditorPage />} />
               <Route path="/admin/users" element={<UserManagementPage />} />
+              <Route path="/admin/generation-config" element={<GenerationConfigPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

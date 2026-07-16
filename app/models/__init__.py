@@ -1,5 +1,7 @@
 from app.models.orm import (
+    CoverTitle,
     ExamType,
+    GenerationConfig,
     Level,
     Paper,
     Question,
@@ -17,7 +19,9 @@ from app.models.orm import (
 )
 
 __all__ = [
+    "CoverTitle",
     "ExamType",
+    "GenerationConfig",
     "Level",
     "Paper",
     "Question",

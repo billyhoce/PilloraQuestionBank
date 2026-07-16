@@ -175,17 +175,31 @@ export const api = {
     get: (id, signal) => request('GET', `/api/questions/${id}`, undefined, signal),
   },
 
+  // Admin-set generation presets + the cover-title list, readable by any
+  // authenticated user ({ titles, subtitle1_placeholder, subtitle2_placeholder,
+  // cover_body, header_text, footer_text }); writes are admin-only.
+  generationConfig: {
+    get: (signal) => request('GET', '/api/generation-config', undefined, signal),
+    update: (body) => request('PUT', '/api/generation-config', body),
+  },
+
+  coverTitles: {
+    list: () => request('GET', '/api/cover-titles').then(r => r.data),
+    create: (name) => request('POST', '/api/cover-titles', { name }),
+    update: (id, name) => request('PUT', `/api/cover-titles/${id}`, { name }),
+    delete: (id) => request('DELETE', `/api/cover-titles/${id}`),
+  },
+
   generate: {
-    // Canonical cover-page defaults ({ cover_title, cover_body }) used to
-    // pre-fill the editable cover fields. cover_body is rich-text HTML
-    // (paragraphs + bold/italic/underline/link).
-    coverDefaults: (signal) => request('GET', '/api/generate/cover-defaults', undefined, signal),
     // Auto-select questions for a target (marks total or question count).
     // body: { filters, target_type, target_value, algorithm, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
     // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
-    // header_text, include_cover, cover_title, cover_subtitle1, cover_subtitle2,
-    // cover_body }. Returns a Blob (binary) — bypasses `request`, which is JSON-only.
+    // header_text, footer_text, include_cover, cover_title, cover_subtitle1,
+    // cover_subtitle2, cover_body }. Non-admins may only send the title (from
+    // the configured list) and subtitles — the server forces the config presets
+    // for everything else. Returns a Blob (binary) — bypasses `request`, which
+    // is JSON-only.
     paper: async (body) => {
       const res = await fetch('/api/generate/paper', {
         method: 'POST',

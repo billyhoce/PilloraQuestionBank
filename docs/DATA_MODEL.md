@@ -13,6 +13,7 @@ School:         { id, name }
 ExamType:       { id, name }                          -- e.g. "WA1", "WA2", "EOY", "Prelim"
 Topic:          { id, subject_id (FK), stream_id (FK), name, topic_number }
 Subtopic:       { id, topic_id (FK), name }
+CoverTitle:     { id, name (unique) }                 -- cover titles users pick from when generating
 ```
 
 ### Key Relationship
@@ -75,7 +76,25 @@ User: {
   role ENUM('admin', 'public', 'premium'),   -- 'public' is shown as "Normal" in the UI
   created_at
 }
+
+GenerationConfig: {
+  id,                          -- singleton: CHECK (id = 1)
+  subtitle1_placeholder,       -- grey hint text for Subtitle 1 on the Generate form
+  subtitle2_placeholder,       -- grey hint text for Subtitle 2
+  cover_body (text),           -- rich-text HTML cover letter stamped on non-admin PDFs
+  header_text (text),          -- header preset applied to non-admin generations
+  footer_text                  -- footer preset, printed verbatim on every page
+}
 ```
+
+**Generation config.** `GenerationConfig` is a **single row** (`ck_generation_config_singleton`
+enforces `id = 1`) of admin-set presets applied to every non-admin paper generation; `CoverTitle`
+is the admin-curated list of cover titles those users must pick from (admins may type free text).
+The Alembic migration seeds the row with the canonical defaults (mirrored in
+`app/services/generation_config.py`, which also lazily re-creates the row if missing) and one
+title, `"Topical Worksheets"`. See
+[BACKEND.md](./BACKEND.md#generation-config--cover-titles-implemented) for the API and
+enforcement rules.
 
 **Roles & the premium paywall.** `role` has three tiers, enforced by a DB check
 constraint (`ck_user_role`): `admin`, `public` (labelled "Normal" in the UI), and

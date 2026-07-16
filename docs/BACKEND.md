@@ -128,16 +128,28 @@ POST   /api/generate/select      -- auto-select a set of questions for a target.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
                                     "question"|"answer"|"combined", header_text,
-                                    include_cover, cover_title, cover_subtitle1,
-                                    cover_subtitle2, cover_body }.
+                                    footer_text, include_cover, cover_title,
+                                    cover_subtitle1, cover_subtitle2, cover_body }.
                                     "combined" returns one PDF with the answer
                                     paper appended after the question paper.
                                     Each page carries branded header/footer chrome;
                                     the question paper credits each question's source;
                                     a cover page (per section, with a marks box) is
-                                    included unless include_cover=false.
+                                    included unless include_cover=false (admins only —
+                                    see role enforcement below).
                                     Returns application/pdf. Empty question_ids -> 422.
 ```
+
+**Role enforcement on `/generate/paper`.** Admins control every field verbatim. For
+non-admin users (`public` and `premium`) the admin-set [generation config](#generation-config--cover-titles)
+wins (`_resolve_generation_options` in `app/routes/generate.py`):
+
+- `include_cover` is forced to `true` — users always get a cover page.
+- `cover_body`, `header_text`, and `footer_text` are replaced with the config presets.
+- `cover_title` must be one of the configured cover titles: an unknown title -> `400`
+  (a hand-crafted POST can't bypass the dropdown); an empty/omitted title falls back to
+  the **first** configured title; with no titles configured the cover is untitled.
+- `cover_subtitle1` / `cover_subtitle2` stay free text for everyone.
 
 `POST /api/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite
 (`_apply_filters` + the eager-load options from `app/routes/questions.py`) to build the candidate
@@ -167,6 +179,29 @@ checkbox on the admin Papers list, so an admin can flag/unflag a paper without o
 `POST /api/generate/paper` renders the question paper, the answer paper, or both combined into a
 single PDF, depending on `variant`. Both endpoints require authentication (`get_current_user`),
 not admin. See [Paper Generation Engine](#paper-generation-engine-implemented) below.
+
+### Generation Config & Cover Titles (Implemented)
+
+Admin-set presets that drive non-admin generations (see role enforcement above) and pre-fill the
+Generate form. Router: `app/routes/generation_config.py`; service:
+`app/services/generation_config.py` (`get_or_create_config` lazily creates the singleton row with
+the seeded defaults, so the app self-heals on an unseeded database).
+
+```
+GET    /api/generation-config    -- any authenticated user. Returns { titles: [{id, name}] (id
+                                    order — the first is the non-admin dropdown default),
+                                    subtitle1_placeholder, subtitle2_placeholder, cover_body,
+                                    header_text, footer_text }. Nothing here is secret (every
+                                    value is printed in the PDFs users generate); writes are
+                                    what's restricted.
+PUT    /api/generation-config    -- admin. Replaces the five preset fields; returns the GET shape.
+                                    cover_body is stored as-is and sanitized at render time
+                                    (app/pdf/cover_body.py), same as the request path.
+GET    /api/cover-titles         -- any authenticated user. { data: [{id, name}] } in id order.
+POST   /api/cover-titles         -- admin. Body { name }. Duplicate -> 409. Returns 201.
+PUT    /api/cover-titles/:id     -- admin. Body { name }. Duplicate -> 409, unknown id -> 404.
+DELETE /api/cover-titles/:id     -- admin. Plain delete (nothing references titles). 204.
+```
 
 ## Import Pipeline (Server Side)
 
@@ -328,7 +363,10 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
 - **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
   link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
 - **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
-  bottom-right. The route sets the footer label per section (`Questions` / `Answers`).
+  bottom-right. The route sets the footer label to the resolved `footer_text` **verbatim** —
+  admins' request field, or the generation-config preset for non-admins. The same text appears on
+  every section (the old subtitle2-derived `"… Questions"` / `"… Answers"` labels are gone —
+  identical footers on the question and answer sections are intentional).
 
 Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined`
 PDF the question and answer papers number independently. The free-text `header_text` instructions
@@ -352,12 +390,15 @@ Platypus `Paragraph` objects, which handle the word-wrap and emit **clickable li
 in the PDF (links render blue + underlined). Plain text with no tags is accepted as the legacy
 newline-separated format, so older API clients keep working.
 
-The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, builds a `CoverSpec`
-per section from the request's `cover_*` fields (question section `is_questions=True`, answer
-section `False`), and includes it unless `include_cover=false`. In `combined`, a cover is prepended
-to **each** section. Cover-text defaults live in `app/schemas/generate.py` (`DEFAULT_COVER_TITLE`,
-`DEFAULT_COVER_BODY`) — the single source of truth. They double as the request-schema defaults and
-are served by `GET /api/generate/cover-defaults` so the frontend can pre-fill the editable fields
+The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, resolves the
+effective cover values by role (`_resolve_generation_options` — admins use the request's
+`cover_*` fields verbatim; non-admins get the generation-config presets and a validated title),
+builds a `CoverSpec` per section (question section `is_questions=True`, answer section `False`),
+and includes it unless covers are disabled (admins only — non-admins always get one). In
+`combined`, a cover is prepended to **each** section. The canonical default cover title/body live
+in `app/services/generation_config.py` (`DEFAULT_COVER_TITLE`, `DEFAULT_COVER_BODY`): they seed
+the `generation_config` row and `cover_title` list in the Alembic migration, and
+`GET /api/generation-config` serves the live config so the frontend pre-fills the editable fields
 without keeping its own copy.
 
 ### Library

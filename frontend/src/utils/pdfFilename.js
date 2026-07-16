@@ -17,8 +17,8 @@ const PDF_TYPE_LABEL = {
   answer: 'Answers',
 }
 
-// Mirrors DEFAULT_COVER_TITLE in app/schemas/generate.py — the title the
-// backend puts on the cover when none is supplied.
+// Mirrors DEFAULT_COVER_TITLE in app/services/generation_config.py — the
+// seeded cover title used when no title is supplied or configured.
 const DEFAULT_TITLE = 'Topical Worksheets'
 
 // Drop characters that are invalid in filenames and trim surrounding space.

@@ -12,6 +12,7 @@ const adminLinks = [
   { to: '/admin/import', label: 'Import' },
   { to: '/admin/papers', label: 'Papers' },
   { to: '/admin/users', label: 'User Management' },
+  { to: '/admin/generation-config', label: 'Generation Config' },
 ]
 
 // Single role-aware menubar: everyone sees the base links; admins also see the
