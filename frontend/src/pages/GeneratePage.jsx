@@ -8,6 +8,11 @@ import InfoTooltip from '../components/InfoTooltip'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 import { buildPdfFilename } from '../utils/pdfFilename'
+import { isLocked } from '../utils/premium'
+
+// Shown when a premium/locked question somehow reaches the cart — /generate/paper
+// returns 403 for premium content, so we block before the request and on 403.
+const PREMIUM_WARNING = 'Cannot generate: your selection includes premium questions. Remove them or subscribe to unlock.'
 
 const PAGE_SIZE = 50
 
@@ -117,6 +122,7 @@ export default function GeneratePage() {
   const [coverBody, setCoverBody] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
+  const [genError, setGenError] = useState(null)
   const progressTimer = useRef(null)
 
   // Pre-fill the cover title/body from the backend defaults. If the user has
@@ -197,6 +203,9 @@ export default function GeneratePage() {
   const hasUnmarked = cart.some(it => it.marks == null)
 
   function toggleSelect(item) {
+    // Belt-and-braces: locked items can't be generated, so never let one into
+    // the cart (the per-card Add button is already hidden for these).
+    if (isLocked(item)) return
     setCart(prev => (
       prev.some(it => it.id === item.id)
         ? prev.filter(it => it.id !== item.id)
@@ -221,17 +230,27 @@ export default function GeneratePage() {
     setSelectAllLoading(true)
     try {
       const res = await api.questions.list(filtersToListArgs(filters, 1))
-      const matches = res.items || []
+      const all = res.items || []
+      // Skip premium/locked questions — they can't be generated and the backend
+      // would 403 the whole request.
+      const matches = all.filter(it => !isLocked(it))
+      const skipped = all.length - matches.length
       mergeIntoCart(matches)
+      const skippedNote = skipped > 0 ? ` (${skipped} premium skipped)` : ''
       if ((res.total || 0) > SELECT_ALL_LIMIT) {
         setNotice({
           type: 'warning',
-          text: `Added the first ${SELECT_ALL_LIMIT} questions — that's the Select All limit.`,
+          text: `Added the first ${matches.length} questions${skippedNote} — that's the Select All limit.`,
         })
       } else if (matches.length === 0) {
-        setNotice({ type: 'warning', text: 'No questions match the current filters.' })
+        setNotice({
+          type: 'warning',
+          text: skipped > 0
+            ? `No questions added (${skipped} premium skipped).`
+            : 'No questions match the current filters.',
+        })
       } else {
-        setNotice({ type: 'success', text: `Added ${matches.length} questions to the selection.` })
+        setNotice({ type: 'success', text: `Added ${matches.length} questions${skippedNote}.` })
       }
     } catch (e) {
       setNotice({ type: 'warning', text: e?.message || 'Select All failed.' })
@@ -314,6 +333,13 @@ export default function GeneratePage() {
   async function handleGenerate() {
     if (cart.length === 0 || generating) return
     setNotice(null)
+    setGenError(null)
+    // Pre-flight: /generate/paper 403s on premium content, so block before the
+    // request if a locked item slipped into the cart.
+    if (cart.some(isLocked)) {
+      setGenError(PREMIUM_WARNING)
+      return
+    }
     setGenerating(true)
     setGenProgress(0)
 
@@ -360,7 +386,12 @@ export default function GeneratePage() {
       }
     } catch (e) {
       stopProgress()
-      setNotice({ type: 'warning', text: e?.message || 'PDF generation failed.' })
+      // /generate/paper has no admin gate, so a 403 there is always the premium block.
+      if (e?.status === 403) {
+        setGenError(PREMIUM_WARNING)
+      } else {
+        setNotice({ type: 'warning', text: e?.message || 'PDF generation failed.' })
+      }
     } finally {
       setTimeout(() => { setGenerating(false); setGenProgress(0) }, 800)
     }
@@ -677,6 +708,12 @@ export default function GeneratePage() {
                     />
                   </div>
                   <div className="text-xs text-gray-500">Generating PDFs… {Math.round(genProgress)}%</div>
+                </div>
+              ) : null}
+
+              {genError ? (
+                <div className="text-xs rounded px-2 py-1.5 bg-amber-50 text-amber-800 border border-amber-200">
+                  {genError}
                 </div>
               ) : null}
 

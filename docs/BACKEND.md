@@ -151,6 +151,19 @@ filters premium papers out of the candidate pool entirely, and `/generate/paper`
 `403` if any posted `question_id` belongs to a premium paper (the UI already prevents adding
 locked questions; this is the server-side guard). `premium`/`admin` users are unrestricted.
 
+**Toggling a paper's premium flag.**
+
+```
+PATCH  /api/papers/{paper_id}/premium  -- set a paper's is_premium flag. Admin only.
+                                          Body: { is_premium: bool }. Returns { id, is_premium }.
+                                          Unknown paper -> 404. Missing/invalid body -> 422.
+```
+
+`app/routes/papers.py::set_paper_premium_route` is a lightweight alternative to the full
+metadata `PUT /api/papers/{paper_id}` (which requires every FK id): it loads the paper, sets
+`is_premium`, and `db.flush()`es (`get_db` commits on success). It powers the inline Premium
+checkbox on the admin Papers list, so an admin can flag/unflag a paper without opening the editor.
+
 `POST /api/generate/paper` renders the question paper, the answer paper, or both combined into a
 single PDF, depending on `variant`. Both endpoints require authentication (`get_current_user`),
 not admin. See [Paper Generation Engine](#paper-generation-engine-implemented) below.

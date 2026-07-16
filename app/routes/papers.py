@@ -76,6 +76,10 @@ class TagsIn(BaseModel):
     tag_ids: List[int] = []
 
 
+class PremiumIn(BaseModel):
+    is_premium: bool
+
+
 # --------------------------------------------------------------------------- #
 # Eager-load options & serialization
 # --------------------------------------------------------------------------- #
@@ -363,6 +367,27 @@ def update_paper_route(
     if paper is None:
         raise HTTPException(status_code=404, detail="Paper not found")
     return {"id": paper.id, "paper_info": _paper_info(paper)}
+
+
+@router.patch("/papers/{paper_id}/premium")
+def set_paper_premium_route(
+    paper_id: int,
+    payload: PremiumIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Toggle a paper's premium flag directly from the Papers list. Admin-only.
+
+    A lightweight alternative to the full metadata PUT (which requires every FK
+    id) — get_db commits on success.
+    """
+    paper = db.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    paper.is_premium = payload.is_premium
+    db.flush()
+    return {"id": paper.id, "is_premium": paper.is_premium}
 
 
 @router.delete("/papers/{paper_id}", status_code=204)
