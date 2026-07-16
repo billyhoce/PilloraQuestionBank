@@ -63,17 +63,29 @@ Three user tiers: **Normal** (stored as `public`), **Premium**, and **Admin**.
   An admin's own row is disabled so they can't lock themselves out.
 - **Subscribe** (`/subscribe`, `pages/SubscribePage.jsx`): a stub — pricing + a disabled
   Subscribe button (payments not built). Premium access is granted by an admin, not self-serve.
-- **Flagging premium papers:** an `is_premium` tickbox appears in two places — the paper editor
-  (`PaperMetadataBar`) and the **import** metadata sidebar (`features/import/MetadataSidebar.jsx`).
-  On import the box is **ticked by default** (imported papers are premium unless unticked). The
-  admin papers list shows a Premium badge.
+- **Flagging premium papers:** an `is_premium` tickbox appears in three places — the paper editor
+  (`PaperMetadataBar`), the **import** metadata sidebar (`features/import/MetadataSidebar.jsx`), and
+  the admin **Papers list** (`features/papers/PapersList.jsx`) as an inline checkbox in the Premium
+  column. On import the box is **ticked by default** (imported papers are premium unless unticked).
+  The Papers-list checkbox calls `api.papers.setPremium(id, is_premium)` (`PATCH
+  /api/papers/{id}/premium`), optimistically updates the row, and reverts + shows an error on
+  failure — so an admin can flag/unflag without opening the editor (the columns array is built
+  inside the component via `useMemo` so the cell can close over the toggle handler).
 - **Locked content:** for a Normal/anonymous viewer, the backend withholds the image URL and sets
-  `locked` (see BACKEND.md). `QuestionCard` then renders the placeholder asset
+  `locked` (see BACKEND.md). The shared helper `isLocked(item)` (`src/utils/premium.js`) resolves
+  this — `item.locked` if present, else `paper_info.is_premium && !first_page_url` — and is reused
+  by `QuestionCard` and the Generate page. `QuestionCard` then renders the placeholder asset
   `src/assets/premium-locked.svg` in place of the image; in the Generate cart the Add button is
-  replaced by a **Subscribe** link. Locked cards **stay clickable** — clicking opens
+  replaced by a **Subscribe** link.  Locked cards **stay clickable** — clicking opens
   `QuestionDetailModal`, which shows the same placeholder image plus a **Go Premium** button (in
-  place of the question/answer images). The Generate page also surfaces the backend's `403`
-  message if a premium question is somehow submitted (defense-in-depth; the UI already prevents it).
+  place of the question/answer images).
+- **Generate paywall guards:** on the Generate page, **Select All** filters locked questions out
+  before adding to the cart (its notice reports how many premium questions were skipped), and
+  `toggleSelect` no-ops on a locked item. Before generating, a pre-flight check
+  (`cart.some(isLocked)`) and any `403` from `/generate/paper` set a dedicated `genError`, rendered
+  as an amber warning banner right next to the Generate button (the Autocreate panel's notice is
+  easy to miss) — so a Normal user who somehow has a premium question queued gets a clear "cannot
+  generate with premium questions" message instead of a silent failure.
 
 ## Import Flow UI (Admin)
 

@@ -1,27 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../../api/client'
 import ReferenceTable from '../reference/ReferenceTable'
 import ConfirmDialog from '../../components/ConfirmDialog'
 import ErrorBanner from '../../components/ErrorBanner'
-
-const columns = [
-  { key: 'subject_name', label: 'Subject' },
-  { key: 'stream_name', label: 'Stream' },
-  { key: 'level_name', label: 'Level' },
-  { key: 'school_name', label: 'School' },
-  { key: 'exam_type_name', label: 'Exam' },
-  { key: 'year', label: 'Year' },
-  { key: 'paper_number', label: 'Paper' },
-  { key: 'question_count', label: 'Questions' },
-  {
-    key: 'is_premium',
-    label: 'Premium',
-    render: (row) => (row.is_premium
-      ? <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-medium">Premium</span>
-      : <span className="text-gray-400">—</span>),
-  },
-]
 
 export default function PapersList() {
   const navigate = useNavigate()
@@ -41,6 +23,41 @@ export default function PapersList() {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Optimistically toggle a paper's premium flag; revert + surface an error on
+  // failure. The checkbox lives inline on the list so admins skip the drill-in.
+  const togglePremium = useCallback((row, nextValue) => {
+    setError(null)
+    setRows(prev => prev.map(r => (r.id === row.id ? { ...r, is_premium: nextValue } : r)))
+    api.papers.setPremium(row.id, nextValue).catch((e) => {
+      setRows(prev => prev.map(r => (r.id === row.id ? { ...r, is_premium: !nextValue } : r)))
+      setError(e.message)
+    })
+  }, [])
+
+  const columns = useMemo(() => [
+    { key: 'subject_name', label: 'Subject' },
+    { key: 'stream_name', label: 'Stream' },
+    { key: 'level_name', label: 'Level' },
+    { key: 'school_name', label: 'School' },
+    { key: 'exam_type_name', label: 'Exam' },
+    { key: 'year', label: 'Year' },
+    { key: 'paper_number', label: 'Paper' },
+    { key: 'question_count', label: 'Questions' },
+    {
+      key: 'is_premium',
+      label: 'Premium',
+      render: (row) => (
+        <input
+          type="checkbox"
+          checked={row.is_premium}
+          onChange={(e) => togglePremium(row, e.target.checked)}
+          aria-label={`Premium — ${row.subject_name} ${row.year} Paper ${row.paper_number}`}
+          className="h-4 w-4 cursor-pointer accent-amber-600"
+        />
+      ),
+    },
+  ], [togglePremium])
 
   async function handleDelete() {
     setDeleting(true)

@@ -231,6 +231,7 @@ export const api = {
     },
     get: (id) => request('GET', `/api/papers/${id}`),
     update: (id, metadata) => request('PUT', `/api/papers/${id}`, metadata),
+    setPremium: (id, is_premium) => request('PATCH', `/api/papers/${id}/premium`, { is_premium }),
     remove: (id) => request('DELETE', `/api/papers/${id}`),
     addQuestion: (paperId, payload) => request('POST', `/api/papers/${paperId}/questions`, payload),
     updateQuestion: (questionId, payload) => request('PUT', `/api/questions/${questionId}`, payload),

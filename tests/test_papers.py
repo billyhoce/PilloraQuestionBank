@@ -110,6 +110,42 @@ def test_update_paper_is_premium_round_trips(admin_client, sample_paper, mock_s3
     assert _get_detail(admin_client, sample_paper.id)["is_premium"] is False
 
 
+def test_patch_paper_premium_toggles(admin_client, sample_paper, mock_s3):
+    # Starts non-premium; PATCH flips it true -> false -> true, each reflected
+    # on the detail payload.
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is False
+
+    resp = admin_client.patch(f"/api/papers/{sample_paper.id}/premium", json={"is_premium": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"id": sample_paper.id, "is_premium": True}
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is True
+
+    resp = admin_client.patch(f"/api/papers/{sample_paper.id}/premium", json={"is_premium": False})
+    assert resp.status_code == 200, resp.text
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is False
+
+    resp = admin_client.patch(f"/api/papers/{sample_paper.id}/premium", json={"is_premium": True})
+    assert resp.status_code == 200, resp.text
+    assert _get_detail(admin_client, sample_paper.id)["is_premium"] is True
+
+
+def test_patch_paper_premium_requires_admin(public_client, sample_paper):
+    resp = public_client.patch(f"/api/papers/{sample_paper.id}/premium", json={"is_premium": True})
+    assert resp.status_code == 403
+
+
+def test_patch_paper_premium_missing_returns_404(admin_client):
+    resp = admin_client.patch("/api/papers/99999/premium", json={"is_premium": True})
+    assert resp.status_code == 404
+
+
+def test_patch_paper_premium_invalid_body_returns_422(admin_client, sample_paper):
+    assert admin_client.patch(f"/api/papers/{sample_paper.id}/premium", json={}).status_code == 422
+    assert admin_client.patch(
+        f"/api/papers/{sample_paper.id}/premium", json={"is_premium": "maybe"}
+    ).status_code == 422
+
+
 def test_update_paper_stream_change_clears_topics(
     admin_client, db_session, sample_paper, reference_data, mock_s3
 ):

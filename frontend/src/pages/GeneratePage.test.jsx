@@ -208,4 +208,53 @@ describe('GeneratePage Select All', () => {
     await user.click(await screen.findByRole('button', { name: /select all/i }))
     await waitFor(() => expect(screen.getByText(/select all limit/i)).toBeInTheDocument())
   })
+
+  it('excludes a locked (premium) item from the cart', async () => {
+    const user = userEvent.setup()
+    const lockedItem = { ...itemB, locked: true }
+    api.questions.list.mockResolvedValue({ items: [item, lockedItem], total: 2 })
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.click(await screen.findByRole('button', { name: /select all/i }))
+    // Only the unlocked item lands in the cart; the premium one is reported as skipped.
+    await waitFor(() => expect(screen.getByRole('heading', { name: /selection \(1\)/i })).toBeInTheDocument())
+    expect(screen.getByText(/1 premium skipped/i)).toBeInTheDocument()
+  })
+})
+
+describe('GeneratePage premium generate guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.questions.list.mockResolvedValue({ items: [item], total: 1 })
+    api.generate.coverDefaults.mockResolvedValue(COVER_DEFAULTS)
+  })
+
+  it('a locked question cannot be added to the cart (shows Subscribe, not Add)', async () => {
+    // isLocked is deterministic per item, so a locked question never exposes an
+    // Add control — the belt-and-braces guard against generating with premium
+    // content. Select All also skips it, so a locked item cannot reach the cart.
+    const lockedItem = { ...item, locked: true }
+    api.questions.list.mockResolvedValue({ items: [lockedItem], total: 1 })
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    expect(await screen.findByRole('link', { name: /subscribe/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /\+ add/i })).not.toBeInTheDocument()
+  })
+
+  it('maps a 403 from generate to the premium warning and shows no crash notice', async () => {
+    const user = await renderWithCartItem()
+    await screen.findByDisplayValue(COVER_DEFAULTS.cover_body)
+    // /generate/paper has no admin gate — a 403 there is always the premium block.
+    api.generate.paper.mockRejectedValue({ status: 403, message: 'Premium content requires a premium subscription' })
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/includes premium questions/i)).toBeInTheDocument()
+    )
+  })
 })
