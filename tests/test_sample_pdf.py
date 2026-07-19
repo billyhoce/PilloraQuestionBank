@@ -23,11 +23,13 @@ from app.pdf.sample_data import build_sample_blocks, make_page_png  # noqa: E402
 
 
 def _planned_pages(n_questions: int, variant: str) -> int:
-    """Page count the engine's own layout predicts for a synthetic paper."""
+    """Page count the engine's own layout predicts for a synthetic paper,
+    using the same header the script applies (question variant only)."""
     blocks, _ = build_sample_blocks(n_questions, variant)
     is_question = variant == "question"
     engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
-    return engine.compute_layout(blocks).page_count
+    header = generate_sample_pdf._DEFAULT_HEADER if is_question else ""
+    return engine.compute_layout(blocks, header_text=header).page_count
 
 
 def _page_count(pdf_path: Path) -> int:

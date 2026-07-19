@@ -2,10 +2,12 @@
 
 Used by ``scripts/generate_sample_pdf.py`` (and its tests) to build engine-ready
 ``Block``s backed by deterministic placeholder images generated in memory with
-PIL. The placeholder heights cycle through a schedule chosen to exercise the
-layout edge cases: small blocks that pack together, a near-page-filling block,
-a multi-page block that overflows ``compute_layout``'s page estimate, and a
-single image taller than a page (which the renderer shrinks to fit).
+PIL. The placeholder sizes cycle through a schedule chosen to exercise the
+layout edge cases — small blocks that pack together, a near-page-filling block,
+a multi-page block that overflows ``compute_layout``'s page estimate — while
+staying within what the ingestion pipeline can actually produce: every stored
+page image is a crop of one 300-DPI A4 scan page, width-capped at 1760px by
+``app/pdf/image_processing.standardize`` (so ≤1760 wide, ≤~2490 tall).
 
 Everything here is deterministic: the same inputs always produce the same
 images, so rendered pages can be compared pixel-for-pixel across code changes.
@@ -15,40 +17,34 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.pdf.layout_engine import PAGE_W_PX, Block
+from app.pdf.layout_engine import Block
 
-# Question pages use the standardized 2480px canvas width (see
-# docs/DATA_MODEL.md); answer pages keep their native size at render time and
-# are ≤1760px wide from ingestion, so the sample widths respect that too.
-_QUESTION_W_PX = PAGE_W_PX
-
-# Per-question page heights (question variant), cycled by question position.
-# At the question-variant scale (1760/2480 ≈ 0.71) and a ~2948px page budget:
-#   800/1500/400  — small blocks that pack several to a page
-#   2900          — nearly page-filling
-#   2000 + 2900   — a two-image block taller than a page, so its images flow
-#                   onto an extra page that compute_layout's estimate misses
-#   4500          — one image taller than a page; the renderer shrinks it
-_QUESTION_HEIGHTS = [
-    (800,),
-    (1500,),
-    (400,),
-    (2900,),
-    (2000, 2900),
-    (4500,),
+# Per-question pages as (width, height), cycled by question position. All
+# sizes respect the ingest guarantees (width ≤ 1760px cap, height ≤ ~2490px —
+# a full A4 page cropped and width-capped), so a single page image always fits
+# the ~2948px page budget and no synthetic size can occur that ingest can't
+# produce. Most question pages sit at the 1760px cap (rendered 1:1 by the
+# question variant); position 3 is narrower to exercise the upscale-to-1760
+# path. Position 4 is nearly page-filling; position 5 is a two-image block
+# taller than a page, so its images flow onto an extra page that
+# compute_layout's estimate misses.
+_QUESTION_PAGES = [
+    ((1760, 800),),
+    ((1760, 1500),),
+    ((1200, 280),),
+    ((1760, 2400),),
+    ((1760, 2000), (1760, 2400)),
 ]
 
-# Per-question answer pages as (width, height), cycled by question position.
-# Widths vary (answers render at native size, flush left); position 3 has no
-# answer pages, so the answer paper skips it while reserving its number —
-# mirroring _blocks_for in app/routes/generate.py.
+# Answer pages render at native size (flush left), so widths vary; position 3
+# has no answer pages, so the answer paper skips it while reserving its
+# number — mirroring _blocks_for in app/routes/generate.py.
 _ANSWER_PAGES = [
     ((1200, 600),),
     ((1760, 900),),
     (),
-    ((1500, 2900),),
+    ((1500, 2400),),
     ((1000, 500), (1600, 800)),
-    ((1760, 1200),),
 ]
 
 _BORDER_PX = 4
@@ -111,10 +107,8 @@ def make_page_png(width_px: int, height_px: int, label: str, tint=None) -> bytes
 
 def _pages_spec(position: int, variant: str) -> list[tuple[int, int]]:
     """(width, height) list for question ``position`` (1-based) in ``variant``."""
-    if variant == "question":
-        heights = _QUESTION_HEIGHTS[(position - 1) % len(_QUESTION_HEIGHTS)]
-        return [(_QUESTION_W_PX, h) for h in heights]
-    return list(_ANSWER_PAGES[(position - 1) % len(_ANSWER_PAGES)])
+    schedule = _QUESTION_PAGES if variant == "question" else _ANSWER_PAGES
+    return list(schedule[(position - 1) % len(schedule)])
 
 
 def build_sample_blocks(

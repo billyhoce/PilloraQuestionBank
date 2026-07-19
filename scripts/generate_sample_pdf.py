@@ -3,8 +3,9 @@
 Generate a sample paper PDF with the real layout engine — no database or S3.
 
 Question/answer pages are synthetic placeholder images (app/pdf/sample_data.py)
-whose sizes cycle through the layout edge cases: packing, a near-page-filling
-block, a multi-page block, and an image taller than a page. The orchestration
+whose sizes cycle through the layout edge cases — packing, upscaling of narrow
+pages, a near-page-filling block, a multi-page block — within the size bounds
+the ingestion pipeline guarantees for stored images. The orchestration
 mirrors POST /api/generate/paper (app/routes/generate.py), so what this script
 renders is what the route would render for the same options.
 
@@ -53,8 +54,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--questions",
         type=int,
-        default=6,
-        help="number of sample questions; 6 covers every synthetic page size (default: 6)",
+        default=5,
+        help="number of sample questions; 5 covers every synthetic page size (default: 5)",
     )
     parser.add_argument("--header", default=_DEFAULT_HEADER, help="header text (question paper only)")
     parser.add_argument("--footer", default="Pillora Learning", help="footer label on every page")
