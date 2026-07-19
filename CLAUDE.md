@@ -60,6 +60,7 @@ FastAPI                                              │
 | [docs/BACKEND.md](./docs/BACKEND.md) | FastAPI app, API endpoints, import pipeline (server side), PDF generation engine, auth & security |
 | [docs/FRONTEND.md](./docs/FRONTEND.md) | React app, import flow UI, browse/filter UI, paper generation UI, admin CRUD UI |
 | [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) | Claude API usage: topic auto-labeling and filename metadata extraction |
+| [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
 
 ## Contribution Requirements
@@ -70,6 +71,11 @@ Every new feature or behavior change must, **in the same change**:
   scope, stack, or architecture changes) so they never drift from the code. The Documentation Map
   above says which doc owns which area (DATA_MODEL / BACKEND / FRONTEND / AI_INTEGRATION /
   DEPLOYMENT). Fix any statement the change makes stale, not just add new prose.
+- **Visually verify PDF layout changes.** After changing `app/pdf/layout_engine.py`,
+  `app/pdf/cover_body.py`, or anything else that affects generated-PDF appearance, run
+  `python scripts/generate_sample_pdf.py --png --out <scratch>/sample.pdf` (no DB/S3 needed) and
+  inspect the emitted page PNGs before concluding. See
+  [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md).
 - **Write tests where the change is testable.** Add or update backend tests (`pytest`, in `tests/`)
   and frontend tests (Vitest, colocated `*.test.js` / `*.test.jsx`) to cover new or changed
   behavior. Both suites run in CI's `frontend-build` job. Pure-config / asset-only changes with no

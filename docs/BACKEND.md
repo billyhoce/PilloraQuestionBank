@@ -19,7 +19,7 @@ app/
 ├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, ingest.py, generate.py (question selection)
-├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render)
+├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render), sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
@@ -405,6 +405,13 @@ without keeping its own copy.
 
 ReportLab (in `requirements.txt`) drives the per-page cursor + image flow; Pillow decodes the stored
 WebP page images.
+
+### Local sample generation & visual self-verification
+
+Two scripts (`scripts/generate_sample_pdf.py`, `scripts/pdf_to_images.py`) drive the real layout
+engine with no database, S3, or network, then rasterize the output for visual inspection — the
+workflow for verifying layout changes without standing up infrastructure. See
+[PDF_GENERATION_TESTING.md](./PDF_GENERATION_TESTING.md).
 
 ## Auth & Security
 
