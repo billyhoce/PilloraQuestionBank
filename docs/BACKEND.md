@@ -19,7 +19,7 @@ app/
 ├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, ingest.py, generate.py (question selection)
-├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render)
+├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render), sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
@@ -405,6 +405,39 @@ without keeping its own copy.
 
 ReportLab (in `requirements.txt`) drives the per-page cursor + image flow; Pillow decodes the stored
 WebP page images.
+
+### Local sample generation & visual self-verification
+
+Two scripts drive the real layout engine with **no database, S3, or network** — for eyeballing
+layout changes (by a developer or by Claude) without standing up infrastructure:
+
+```
+python scripts/generate_sample_pdf.py --png            # combined paper + per-page PNGs
+python scripts/pdf_to_images.py some.pdf --dpi 120     # rasterize any PDF to PNGs
+```
+
+`scripts/generate_sample_pdf.py` mirrors `generate_paper()`'s orchestration exactly (same
+engine/plan/cover wiring per variant) but feeds it synthetic placeholder pages from
+`app/pdf/sample_data.py` — deterministic PIL-drawn images (bordered, labeled, faintly tinted for
+answers) whose sizes cycle through the layout edge cases: small blocks that pack together, a
+near-page-filling block, a multi-page block that overflows `compute_layout`'s page estimate, an
+image taller than a page, and an answer-less question whose number stays reserved. Flags mirror
+`GeneratePaperRequest` (`--variant`, `--header`/`--footer`, `--cover*`, rich-text `--cover-body`),
+plus `--questions N`, `--out`, `--png`/`--dpi`, and repeatable `--image PATH` to substitute real
+image files. `fetch_bytes` is an in-memory dict lookup — the same injection seam the route fills
+with `get_image_bytes`.
+
+`scripts/pdf_to_images.py` (`pdf_to_pngs`, PyMuPDF) rasterizes each page to `page_NN.png` in
+`<pdf-stem>_pages/`. The 120-DPI default keeps A4 pages ~992×1403 px — legible chrome text at a
+size cheap to inspect (raise `--dpi` to zoom into a suspect page). The self-verification loop is:
+change layout code → `generate_sample_pdf.py --png` → inspect the PNGs (cover, chrome, numbering,
+packing) → compare against a pre-change run. Compare **PNGs, not PDF bytes** (ReportLab embeds
+timestamps, so PDFs are never byte-identical; the rendered pixels are deterministic).
+
+Caveat: synthetic placeholders can't reveal issues that depend on real scan content (greyscale
+backgrounds, near-margin ink, WebP artifacts). For those, feed real pages back in via `--image`
+(e.g. pages produced by `pdf_to_images.py` from a paper in `samples/`). Tests:
+`tests/test_sample_pdf.py`.
 
 ## Auth & Security
 
