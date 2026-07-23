@@ -29,11 +29,9 @@ from app.pdf.layout_engine import Block
 # taller than a page, so its images flow onto an extra page that
 # compute_layout's estimate misses.
 _QUESTION_PAGES = [
-    ((1760, 800),),
-    ((1760, 1500),),
-    ((1200, 280),),
-    ((1760, 2400),),
-    ((1760, 2000), (1760, 2400)),
+    ((1760, 400),),
+    ((1760, 200),),
+    ((1200, 700), (1760, 1000)),
 ]
 
 # Answer pages render at native size (flush left), so widths vary; position 3
@@ -41,9 +39,7 @@ _QUESTION_PAGES = [
 # number — mirroring _blocks_for in app/routes/generate.py.
 _ANSWER_PAGES = [
     ((1200, 600),),
-    ((1760, 900),),
     (),
-    ((1500, 2400),),
     ((1000, 500), (1600, 800)),
 ]
 
