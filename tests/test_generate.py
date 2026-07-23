@@ -3,6 +3,7 @@ import io
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pypdf import PdfReader
 
 from app.models.orm import Question
@@ -389,6 +390,28 @@ def test_chrome_renders_with_logo(minimal_webp_bytes, tmp_path, monkeypatch):
     plan = engine.compute_layout([_make_block("1", [800])])
     pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
     assert pdf[:4] == b"%PDF"
+    layout_engine._load_logo.cache_clear()
+
+
+def test_load_logo_reports_bottom_padding(tmp_path, monkeypatch):
+    # The logo asset is a square canvas with the mark inset; _load_logo returns
+    # the transparent bottom padding (scaled to the target width) so the header
+    # can sit the visible mark — not its padded box — on the rule.
+    from PIL import Image as PILImage
+
+    from app.pdf import layout_engine
+
+    # 200x200 canvas, opaque mark only in the top half → 100px transparent below.
+    img = PILImage.new("RGBA", (200, 200), (0, 0, 0, 0))
+    img.paste((134, 59, 255, 255), (0, 0, 200, 100))
+    logo = tmp_path / "pillora_logo.png"
+    img.save(logo)
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", str(logo))
+
+    reader, w_px, h_px, bottom_pad_px = layout_engine._load_logo(100)  # half scale
+    assert (w_px, h_px) == (100, 100)
+    assert bottom_pad_px == pytest.approx(50)  # 100px padding at 0.5 scale
     layout_engine._load_logo.cache_clear()
 
 

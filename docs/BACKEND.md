@@ -358,15 +358,16 @@ reserve no band.
 
 Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once per page:
 
-- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX = 310`) and bottom
+- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX`) and bottom
   (`_FOOTER_LINE_Y_PX`), inset `_MARGIN_X_PX` on each side. The **content band sits between them**
-  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures. The header
-  rule sits far enough down the page that the full-size logo clears it above the line.
-- **Logo** top-left, sitting **fully above** the header rule — its bottom edge a small
-  `_LOGO_RULE_GAP_PX` gap above the line (not centered on it). Loaded from
-  `app/pdf/assets/pillora_logo.png` (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to
-  `_LOGO_W_PX`). The asset is **optional**: if absent/unreadable the page renders without it (no
-  error).
+  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures.
+- **Logo** top-left, with its **visible** bottom edge a small `_LOGO_RULE_GAP_PX` gap above the
+  header rule (sitting on the line, not crossing it). Loaded from `app/pdf/assets/pillora_logo.png`
+  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is a square
+  canvas with the wordmark inset, so `_load_logo` also returns the transparent **bottom padding**
+  below the mark and `_draw_chrome` offsets the padded box by it — otherwise the padding would leave
+  the mark floating above the line. The asset is **optional**: if absent/unreadable the page renders
+  without it (no error).
 - **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
   link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
 - **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**

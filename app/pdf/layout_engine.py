@@ -44,14 +44,13 @@ PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
 WEBSITE = "www.pillora.com.sg"
 WEBSITE_URL = "https://www.pillora.com.sg"
 _MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
-_HEADER_LINE_Y_PX = 310                # header rule, px from the top — far enough down
-                                       # that the full-size logo clears it above the line
+_HEADER_LINE_Y_PX = 250                # header rule, px from the top
 _FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
 _CHROME_FONT = "Helvetica"
 _CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
 _CHROME_RULE_PX = 4                    # rule line thickness
 _LOGO_W_PX = 250                       # header logo width (aspect preserved)
-_LOGO_RULE_GAP_PX = 20                 # gap between the logo's bottom edge and the header rule
+_LOGO_RULE_GAP_PX = 12                 # gap between the logo's visible bottom and the header rule
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 LOGO_PATH = os.path.join(_ASSETS_DIR, "pillora_logo.png")
 
@@ -61,7 +60,7 @@ _CONTENT_BOTTOM_PX = _FOOTER_LINE_Y_PX - 60
 _DEFAULT_CAPACITY_PX = _CONTENT_BOTTOM_PX - _CONTENT_TOP_PX
 
 # Cover page.
-_COVER_LOGO_W_PX = 350
+_COVER_LOGO_W_PX = 525
 _COVER_TITLE_FONT_PX = 70
 _COVER_SUBTITLE_FONT_PX = 60
 _COVER_BODY_FONT_PX = 45
@@ -145,17 +144,25 @@ class LayoutPlan:
 
 @lru_cache(maxsize=2)
 def _load_logo(target_w_px: int = _LOGO_W_PX):
-    """Load the Pillora logo as ``(ImageReader, w_px, h_px)`` scaled to
-    ``target_w_px`` (aspect preserved), or ``None`` if the asset is missing/
-    unreadable — chrome then simply renders without a logo. Cached, so adding
-    or changing the logo file takes effect on process restart."""
+    """Load the Pillora logo as ``(ImageReader, w_px, h_px, bottom_pad_px)``
+    scaled to ``target_w_px`` (aspect preserved), or ``None`` if the asset is
+    missing/unreadable — chrome then simply renders without a logo.
+
+    ``bottom_pad_px`` is the transparent margin below the visible mark (scaled
+    to ``target_w_px``); the asset is a square canvas with the wordmark inset,
+    so callers use it to sit the *visible* logo — not its padded box — on the
+    header rule. Cached, so adding or changing the logo file takes effect on
+    process restart."""
     try:
         img = Image.open(LOGO_PATH)
         img.load()
         if img.mode != "RGBA":
             img = img.convert("RGBA")
-        h_px = round(img.height * (target_w_px / img.width))
-        return ImageReader(img), target_w_px, h_px
+        s = target_w_px / img.width
+        h_px = round(img.height * s)
+        bbox = img.getbbox()  # bounds of the non-transparent content; None if blank
+        bottom_pad_px = (img.height - bbox[3]) * s if bbox else 0
+        return ImageReader(img), target_w_px, h_px, bottom_pad_px
     except Exception:
         return None
 
@@ -362,12 +369,13 @@ class LayoutEngine:
         c.line(left, y_pt(_HEADER_LINE_Y_PX), right, y_pt(_HEADER_LINE_Y_PX))
         c.line(left, y_pt(_FOOTER_LINE_Y_PX), right, y_pt(_FOOTER_LINE_Y_PX))
 
-        # Logo top-left, sitting fully above the header rule (bottom edge a small
-        # gap above the line).
+        # Logo top-left, with its *visible* bottom edge a small gap above the
+        # header rule. The asset has transparent padding below the mark, so we
+        # offset the padded box by that padding to sit the mark on the line.
         logo = _load_logo()
         if logo is not None:
-            reader, w_px, h_px = logo
-            top_px = _HEADER_LINE_Y_PX - _LOGO_RULE_GAP_PX - h_px
+            reader, w_px, h_px, bottom_pad_px = logo
+            top_px = _HEADER_LINE_Y_PX - _LOGO_RULE_GAP_PX - h_px + bottom_pad_px
             c.drawImage(
                 reader,
                 left,
@@ -406,7 +414,7 @@ class LayoutEngine:
         y = _CONTENT_TOP_PX + 40
         logo = _load_logo(_COVER_LOGO_W_PX)
         if logo is not None:
-            reader, w_px, h_px = logo
+            reader, w_px, h_px, _ = logo
             c.drawImage(
                 reader,
                 (PAGE_W_PX - w_px) / 2 * scale,
