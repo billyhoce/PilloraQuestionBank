@@ -261,10 +261,24 @@ def test_layout_tall_block_starts_fresh():
 
 
 def test_layout_multipage_block_flows():
-    # Two 400px pages within one block, capacity 500: the block still starts on
-    # page 0; render flows the second page. compute_layout counts the start page.
+    # Two 400px pages within one block, capacity 500: the block starts on page 0
+    # and render flows the second page onto page 1. compute_layout now counts the
+    # overflow page too, so page_count is 2.
     plan = _engine(capacity_px=500).compute_layout([_make_block("1", [400, 400])])
     assert plan.blocks[0].page_index == 0
+    assert plan.page_count == 2
+
+
+def test_layout_multipage_block_packs_first_page():
+    # capacity 1000, Q1=600px leaves 400px. Q2 is multi-page (300px + 800px): its
+    # whole height (1100px) overflows, but its FIRST page (300px) fits — so Q2
+    # starts on the same page as Q1, and its large second page flows to page 1.
+    plan = _engine(capacity_px=1000).compute_layout(
+        [_make_block("1", [600]), _make_block("2", [300, 800])]
+    )
+    assert plan.blocks[0].page_index == 0
+    assert plan.blocks[1].page_index == 0  # first page packed onto the same page
+    assert plan.page_count == 2            # Q2's second page flowed to page 1
 
 
 def test_layout_preserves_labels_and_order():

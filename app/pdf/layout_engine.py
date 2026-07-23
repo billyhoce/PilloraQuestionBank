@@ -44,12 +44,14 @@ PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
 WEBSITE = "www.pillora.com.sg"
 WEBSITE_URL = "https://www.pillora.com.sg"
 _MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
-_HEADER_LINE_Y_PX = 250                # header rule, px from the top
+_HEADER_LINE_Y_PX = 310                # header rule, px from the top — far enough down
+                                       # that the full-size logo clears it above the line
 _FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
 _CHROME_FONT = "Helvetica"
 _CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
 _CHROME_RULE_PX = 4                    # rule line thickness
 _LOGO_W_PX = 250                       # header logo width (aspect preserved)
+_LOGO_RULE_GAP_PX = 20                 # gap between the logo's bottom edge and the header rule
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 LOGO_PATH = os.path.join(_ASSETS_DIR, "pillora_logo.png")
 
@@ -184,21 +186,31 @@ class LayoutEngine:
     def compute_layout(self, blocks: list[Block], header_text: str = "") -> LayoutPlan:
         """Assign each block the page it starts on, packing greedily by height.
 
-        ``page_count`` is a lower bound — a block taller than a page overflows onto
-        further pages at render time, which this pagination does not count.
+        A block starts a new page only when its *first* page-image (plus the
+        credit band) won't fit in the remaining space; a multi-page block then
+        flows its later pages onto following pages, exactly as ``render_onto``
+        renders it. This walk mirrors that flow, so ``page_count`` counts those
+        overflow pages too.
         """
         header_px = _header_height_px(header_text)
         page = 0
         cursor = header_px  # px used on the current page (header reserved on page 0)
         for block in blocks:
-            h = self._block_height_px(block)
             gap = self.block_gap_px if cursor > 0 else 0
-            if cursor > 0 and cursor + gap + h > self.page_capacity_px:
+            if cursor > 0 and cursor + gap + self._first_unit_height_px(block) > self.page_capacity_px:
                 page += 1
-                cursor = 0
+                cursor = 0.0
                 gap = 0
             block.page_index = page
-            cursor += gap + h
+            cursor += gap
+            if self._credit_for(block):
+                cursor += _CREDIT_BAND_PX
+            for pg in block.pages:
+                eff_h = self._page_height_px(pg)
+                if cursor > 0 and cursor + eff_h > self.page_capacity_px:
+                    page += 1
+                    cursor = 0.0
+                cursor += eff_h
         page_count = page + 1 if blocks else 1
         return LayoutPlan(page_count=page_count, blocks=blocks, header_text=header_text)
 
@@ -249,9 +261,11 @@ class LayoutEngine:
             used = header_px
 
         for block in plan.blocks:
-            block_h = self._block_height_px(block)
+            # Start a new page only if the block's first page (plus its credit
+            # band) won't fit here; a multi-page block then flows its remaining
+            # pages onto following pages via the per-image loop below.
             gap = self.block_gap_px if used > 0 else 0
-            if used > 0 and used + gap + block_h > self.page_capacity_px:
+            if used > 0 and used + gap + self._first_unit_height_px(block) > self.page_capacity_px:
                 new_page()
                 used = 0.0
                 gap = 0
@@ -314,6 +328,22 @@ class LayoutEngine:
         credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
         return images + credit
 
+    def _page_height_px(self, pg) -> float:
+        """Rendered height of one page-image for the current variant: scaled to
+        the variant's content width, then clamped to the page capacity for an
+        image taller than a whole page (mirrors the clamp in ``render_onto``)."""
+        eff_h = pg.height_px * self._image_scale(pg)
+        return min(eff_h, float(self.page_capacity_px))
+
+    def _first_unit_height_px(self, block: Block) -> float:
+        """Height that must fit in the current page's remaining space for this
+        block to *start* here: its credit band (drawn once, above the first
+        page) plus the first page-image. Later pages flow onto following pages
+        at render time, so they don't gate the block's start."""
+        credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
+        first = self._page_height_px(block.pages[0]) if block.pages else 0.0
+        return credit + first
+
     def _credit_for(self, block: Block) -> bool:
         """Whether this block gets a provenance credit line drawn above it."""
         return self.show_credit and bool(block.source_label)
@@ -332,11 +362,12 @@ class LayoutEngine:
         c.line(left, y_pt(_HEADER_LINE_Y_PX), right, y_pt(_HEADER_LINE_Y_PX))
         c.line(left, y_pt(_FOOTER_LINE_Y_PX), right, y_pt(_FOOTER_LINE_Y_PX))
 
-        # Logo top-left, vertically centered on the header rule.
+        # Logo top-left, sitting fully above the header rule (bottom edge a small
+        # gap above the line).
         logo = _load_logo()
         if logo is not None:
             reader, w_px, h_px = logo
-            top_px = _HEADER_LINE_Y_PX - h_px / 2
+            top_px = _HEADER_LINE_Y_PX - _LOGO_RULE_GAP_PX - h_px
             c.drawImage(
                 reader,
                 left,

@@ -321,12 +321,16 @@ fetch_bytes)` draws a plan onto an existing ReportLab canvas (ending on a fresh 
 PDF — how the `combined` variant appends the answer paper after the question paper.
 
 - `compute_layout(blocks, header_text="") -> LayoutPlan`: greedy **packing** — keeps a running
-  cursor and places each block (one question's pages for this variant) on the current page while it
-  fits `page_capacity_px`; a block that would overflow starts a new page. Two short consecutive
-  questions therefore share a page. A block taller than a whole page starts fresh and its pages flow
-  across pages at render time. Block heights use the variant's scale (`_image_scale`). Header height
-  is reserved on the first page. `page_count` is a lower bound (render is authoritative when a tall
-  block overflows).
+  cursor and places each block (one question's pages for this variant) on the current page. A block
+  starts a new page only when its **first page-image** (plus its credit band) won't fit in the space
+  left — so a multi-page question packs its first page onto the current page when there is room and
+  **flows its remaining pages onto following pages**, rather than jumping the whole question to a
+  fresh page. Two short consecutive questions therefore share a page; a block taller than a whole
+  page still starts wherever its first page fits. Heights use the variant's scale (`_image_scale`),
+  with a page-tall image clamped to `page_capacity_px` (`_page_height_px`); the block-start test uses
+  `_first_unit_height_px` (credit band + first page). Header height is reserved on the first page.
+  The walk mirrors `render_onto`'s per-image flow, so `page_count` counts multi-page overflow pages
+  too (render remains authoritative).
 - `render(plan, fetch_bytes) -> bytes`: **ReportLab** canvas at A4, scaling px→points. For each
   block it places the page image(s) (`fetch_bytes(image_key)` → Pillow → `ImageReader`) at the
   variant's scale and left offset, then draws the **number in the left margin**, right-aligned just
@@ -354,12 +358,15 @@ reserve no band.
 
 Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once per page:
 
-- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX`) and bottom
+- **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX = 310`) and bottom
   (`_FOOTER_LINE_Y_PX`), inset `_MARGIN_X_PX` on each side. The **content band sits between them**
-  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures.
-- **Logo** top-left, centered on the header rule — loaded from `app/pdf/assets/pillora_logo.png`
-  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is
-  **optional**: if absent/unreadable the page renders without it (no error).
+  (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures. The header
+  rule sits far enough down the page that the full-size logo clears it above the line.
+- **Logo** top-left, sitting **fully above** the header rule — its bottom edge a small
+  `_LOGO_RULE_GAP_PX` gap above the line (not centered on it). Loaded from
+  `app/pdf/assets/pillora_logo.png` (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to
+  `_LOGO_W_PX`). The asset is **optional**: if absent/unreadable the page renders without it (no
+  error).
 - **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
   link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
 - **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
