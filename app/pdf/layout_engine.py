@@ -81,6 +81,8 @@ _MARKS_BOX_FONT_PX = 52
 _TARGET_CONTENT_W_PX = 1760           # question-variant content width
 _LEFT_MARGIN_PX = (PAGE_W_PX - _TARGET_CONTENT_W_PX) // 2  # 360
 _ANSWER_GAP_PX = 100                   # vertical gap between consecutive answer blocks
+_QUESTION_GAP_PX = 59                  # 0.5 cm at 300 DPI (0.5/2.54*300 ≈ 59): question-paper
+                                       # padding between any two images stacked on the same page
 
 _LABEL_GAP_PX = 70
 _LABEL_FONT = "Helvetica-Bold"
@@ -182,7 +184,16 @@ class LayoutEngine:
         self.page_capacity_px = page_capacity_px
         self.fit_width = fit_width
         self.show_credit = show_credit
-        self.block_gap_px = 0 if fit_width else _ANSWER_GAP_PX
+        # block_gap_px separates one question from the next; intra_gap_px separates
+        # stacked page-images within a single multi-page question. The question paper
+        # pads both by 0.5 cm; the answer paper keeps a wider block gap and no
+        # intra-block gap (its pages stack flush).
+        if fit_width:
+            self.block_gap_px = _QUESTION_GAP_PX
+            self.intra_gap_px = _QUESTION_GAP_PX
+        else:
+            self.block_gap_px = _ANSWER_GAP_PX
+            self.intra_gap_px = 0
 
     def _image_scale(self, pg) -> float:
         """Uniform scale factor applied to an image for the current variant."""
@@ -212,12 +223,14 @@ class LayoutEngine:
             cursor += gap
             if self._credit_for(block):
                 cursor += _CREDIT_BAND_PX
-            for pg in block.pages:
+            for i, pg in enumerate(block.pages):
                 eff_h = self._page_height_px(pg)
-                if cursor > 0 and cursor + eff_h > self.page_capacity_px:
+                igap = self.intra_gap_px if (cursor > 0 and i > 0) else 0
+                if cursor > 0 and cursor + igap + eff_h > self.page_capacity_px:
                     page += 1
                     cursor = 0.0
-                cursor += eff_h
+                    igap = 0
+                cursor += igap + eff_h
         page_count = page + 1 if blocks else 1
         return LayoutPlan(page_count=page_count, blocks=blocks, header_text=header_text)
 
@@ -297,9 +310,15 @@ class LayoutEngine:
                     # Image taller than a page: fit to page height (both variants).
                     s_img *= self.page_capacity_px / eff_h
                     eff_h = float(self.page_capacity_px)
-                if used > 0 and used + eff_h > self.page_capacity_px:
+                # Pad above every page after the block's first (the block gap
+                # already separated the first); the pad is dropped when this page
+                # starts a fresh physical page.
+                igap = self.intra_gap_px if (used > 0 and not first_page) else 0
+                if used > 0 and used + igap + eff_h > self.page_capacity_px:
                     new_page()
                     used = 0.0
+                    igap = 0
+                used += igap
 
                 reader = self._image_reader(fetch_bytes(pg.image_key))
                 top = _CONTENT_TOP_PX + used

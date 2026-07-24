@@ -32,9 +32,10 @@ def _make_block(
     page_heights: list[int],
     source_label: str = "School 2024 Sec 3 EOY Q1",
     page_index: int = 0,
+    width_px: int = 2480,
 ) -> Block:
     pages = [
-        MagicMock(image_key=f"k_{label}_{i}.webp", height_px=h, width_px=2480, page_order=i)
+        MagicMock(image_key=f"k_{label}_{i}.webp", height_px=h, width_px=width_px, page_order=i)
         for i, h in enumerate(page_heights)
     ]
     return Block(label=label, source_label=source_label, pages=pages, page_index=page_index)
@@ -523,12 +524,33 @@ def test_every_page_has_clickable_website_chrome(minimal_webp_bytes):
         assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
 
 
-def test_question_variant_has_no_block_gap():
+def test_question_variant_pads_between_blocks():
+    from app.pdf.layout_engine import _QUESTION_GAP_PX
+
     engine = LayoutEngine(fit_width=True)
-    assert engine.block_gap_px == 0
-    # Without a gap the two 400px (scaled) blocks comfortably share a page.
-    plan = engine.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    assert engine.block_gap_px == engine.intra_gap_px == _QUESTION_GAP_PX
+    # With ample room the two blocks still share a page despite the gap.
+    plan = engine.compute_layout(
+        [_make_block("1", [400], width_px=1760), _make_block("2", [400], width_px=1760)]
+    )
     assert plan.blocks[0].page_index == plan.blocks[1].page_index == 0
+    # width_px=1760 → scale 1.0, so heights map 1:1. Capacity 858 fits 800px of
+    # image but not 400 + 59 gap + 400 = 859, so the gap pushes Q2 to a new page.
+    tight = LayoutEngine(page_capacity_px=858, fit_width=True)
+    plan = tight.compute_layout(
+        [_make_block("1", [400], width_px=1760), _make_block("2", [400], width_px=1760)]
+    )
+    assert [b.page_index for b in plan.blocks] == [0, 1]
+
+
+def test_question_variant_pads_between_pages_of_one_block():
+    # A single multi-page question: its two 400px pages would share a page
+    # (800 ≤ 858), but the 59px intra-question pad (859 > 858) flows the second
+    # page onto the next page. page_index stays 0; page_count counts the overflow.
+    engine = LayoutEngine(page_capacity_px=858, fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [400, 400], width_px=1760)])
+    assert plan.blocks[0].page_index == 0
+    assert plan.page_count == 2
 
 
 # ---------------------------------------------------------------------------
