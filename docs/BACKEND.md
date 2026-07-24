@@ -305,11 +305,16 @@ height); `fit_width` selects the horizontal treatment per variant:
 
 - **`fit_width=True` (question paper):** each image is scaled (aspect preserved) to a fixed **1760 px
   content width** and drawn **centered** on the page — **360 px margin on each side** (1760 + 360 +
-  360 = 2480). All questions therefore render at the same width regardless of their stored size.
+  360 = 2480). All questions therefore render at the same width regardless of their stored size. A
+  **59 px (0.5 cm at 300 DPI) vertical pad** (`_QUESTION_GAP_PX`) sits below any image that has
+  another image packed beneath it on the **same physical page** — both between consecutive questions
+  (`block_gap_px`) and between the stacked pages of one multi-page question (`intra_gap_px`); there is
+  no trailing pad where the next image starts a fresh page, and the pad is included when deciding
+  whether that next image fits.
 - **`fit_width=False` (answer paper):** each image keeps its **native size** (≤ 1760 px), **flush to
   the 360 px left margin**, with the remaining width as right padding. It never overflows (360 + 1760
   < 2480). A **100 px vertical gap** separates one question's answer block from the next (`block_gap_px`);
-  multiple answer pages of the same question stack with no extra gap.
+  multiple answer pages of the same question stack with no extra gap (`intra_gap_px = 0`).
 
 Both variants draw the question number into the **360 px left margin**, right-aligned just left of
 the image.
@@ -321,12 +326,18 @@ fetch_bytes)` draws a plan onto an existing ReportLab canvas (ending on a fresh 
 PDF — how the `combined` variant appends the answer paper after the question paper.
 
 - `compute_layout(blocks, header_text="") -> LayoutPlan`: greedy **packing** — keeps a running
-  cursor and places each block (one question's pages for this variant) on the current page while it
-  fits `page_capacity_px`; a block that would overflow starts a new page. Two short consecutive
-  questions therefore share a page. A block taller than a whole page starts fresh and its pages flow
-  across pages at render time. Block heights use the variant's scale (`_image_scale`). Header height
-  is reserved on the first page. `page_count` is a lower bound (render is authoritative when a tall
-  block overflows).
+  cursor and places each block (one question's pages for this variant) on the current page. A block
+  starts a new page only when its **first page-image** (plus its credit band) won't fit in the space
+  left — so a multi-page question packs its first page onto the current page when there is room and
+  **flows its remaining pages onto following pages**, rather than jumping the whole question to a
+  fresh page. Two short consecutive questions therefore share a page; a block taller than a whole
+  page still starts wherever its first page fits. Heights use the variant's scale (`_image_scale`),
+  with a page-tall image clamped to `page_capacity_px` (`_page_height_px`); the block-start test uses
+  `_first_unit_height_px` (credit band + first page) plus `block_gap_px`, and each subsequent page in
+  the block adds `intra_gap_px` before its fit test — so the inter-question and intra-question pads
+  are honoured when packing. Header height is reserved on the first page. The walk mirrors
+  `render_onto`'s per-image flow, so `page_count` counts multi-page overflow pages too (render remains
+  authoritative).
 - `render(plan, fetch_bytes) -> bytes`: **ReportLab** canvas at A4, scaling px→points. For each
   block it places the page image(s) (`fetch_bytes(image_key)` → Pillow → `ImageReader`) at the
   variant's scale and left offset, then draws the **number in the left margin**, right-aligned just
@@ -357,9 +368,14 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
 - **Purple rule lines** (`PURPLE ≈ #776687`) near the top (`_HEADER_LINE_Y_PX`) and bottom
   (`_FOOTER_LINE_Y_PX`), inset `_MARGIN_X_PX` on each side. The **content band sits between them**
   (`_CONTENT_TOP_PX … _CONTENT_BOTTOM_PX`), which is what `_DEFAULT_CAPACITY_PX` measures.
-- **Logo** top-left, centered on the header rule — loaded from `app/pdf/assets/pillora_logo.png`
-  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is
-  **optional**: if absent/unreadable the page renders without it (no error).
+- **Logo** top-left, with its **visible** bottom edge a small `_LOGO_RULE_GAP_PX` gap above the
+  header rule (sitting on the line, not crossing it). Loaded from `app/pdf/assets/pillora_logo.png`
+  (`LOGO_PATH`) via `_load_logo` (cached, aspect-preserved to `_LOGO_W_PX`). The asset is now **tightly
+  cropped to the wordmark** (no surrounding transparent margin), so its bottom padding is ~0; even so,
+  `_load_logo` still measures the transparent **bottom padding** below the mark from `getbbox()` and
+  `_draw_chrome` offsets the padded box by it, keeping the mark on the line for any future
+  padded asset. The asset is **optional**: if absent/unreadable the page renders without it (no
+  error).
 - **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
   link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
 - **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**

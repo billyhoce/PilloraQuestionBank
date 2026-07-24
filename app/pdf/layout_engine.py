@@ -50,6 +50,7 @@ _CHROME_FONT = "Helvetica"
 _CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
 _CHROME_RULE_PX = 4                    # rule line thickness
 _LOGO_W_PX = 250                       # header logo width (aspect preserved)
+_LOGO_RULE_GAP_PX = 12                 # gap between the logo's visible bottom and the header rule
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 LOGO_PATH = os.path.join(_ASSETS_DIR, "pillora_logo.png")
 
@@ -59,7 +60,7 @@ _CONTENT_BOTTOM_PX = _FOOTER_LINE_Y_PX - 60
 _DEFAULT_CAPACITY_PX = _CONTENT_BOTTOM_PX - _CONTENT_TOP_PX
 
 # Cover page.
-_COVER_LOGO_W_PX = 350
+_COVER_LOGO_W_PX = 525
 _COVER_TITLE_FONT_PX = 70
 _COVER_SUBTITLE_FONT_PX = 60
 _COVER_BODY_FONT_PX = 45
@@ -80,6 +81,8 @@ _MARKS_BOX_FONT_PX = 52
 _TARGET_CONTENT_W_PX = 1760           # question-variant content width
 _LEFT_MARGIN_PX = (PAGE_W_PX - _TARGET_CONTENT_W_PX) // 2  # 360
 _ANSWER_GAP_PX = 100                   # vertical gap between consecutive answer blocks
+_QUESTION_GAP_PX = 59                  # 0.5 cm at 300 DPI (0.5/2.54*300 ≈ 59): question-paper
+                                       # padding between any two images stacked on the same page
 
 _LABEL_GAP_PX = 70
 _LABEL_FONT = "Helvetica-Bold"
@@ -143,17 +146,25 @@ class LayoutPlan:
 
 @lru_cache(maxsize=2)
 def _load_logo(target_w_px: int = _LOGO_W_PX):
-    """Load the Pillora logo as ``(ImageReader, w_px, h_px)`` scaled to
-    ``target_w_px`` (aspect preserved), or ``None`` if the asset is missing/
-    unreadable — chrome then simply renders without a logo. Cached, so adding
-    or changing the logo file takes effect on process restart."""
+    """Load the Pillora logo as ``(ImageReader, w_px, h_px, bottom_pad_px)``
+    scaled to ``target_w_px`` (aspect preserved), or ``None`` if the asset is
+    missing/unreadable — chrome then simply renders without a logo.
+
+    ``bottom_pad_px`` is the transparent margin below the visible mark (scaled
+    to ``target_w_px``); the asset is a square canvas with the wordmark inset,
+    so callers use it to sit the *visible* logo — not its padded box — on the
+    header rule. Cached, so adding or changing the logo file takes effect on
+    process restart."""
     try:
         img = Image.open(LOGO_PATH)
         img.load()
         if img.mode != "RGBA":
             img = img.convert("RGBA")
-        h_px = round(img.height * (target_w_px / img.width))
-        return ImageReader(img), target_w_px, h_px
+        s = target_w_px / img.width
+        h_px = round(img.height * s)
+        bbox = img.getbbox()  # bounds of the non-transparent content; None if blank
+        bottom_pad_px = (img.height - bbox[3]) * s if bbox else 0
+        return ImageReader(img), target_w_px, h_px, bottom_pad_px
     except Exception:
         return None
 
@@ -173,7 +184,16 @@ class LayoutEngine:
         self.page_capacity_px = page_capacity_px
         self.fit_width = fit_width
         self.show_credit = show_credit
-        self.block_gap_px = 0 if fit_width else _ANSWER_GAP_PX
+        # block_gap_px separates one question from the next; intra_gap_px separates
+        # stacked page-images within a single multi-page question. The question paper
+        # pads both by 0.5 cm; the answer paper keeps a wider block gap and no
+        # intra-block gap (its pages stack flush).
+        if fit_width:
+            self.block_gap_px = _QUESTION_GAP_PX
+            self.intra_gap_px = _QUESTION_GAP_PX
+        else:
+            self.block_gap_px = _ANSWER_GAP_PX
+            self.intra_gap_px = 0
 
     def _image_scale(self, pg) -> float:
         """Uniform scale factor applied to an image for the current variant."""
@@ -184,21 +204,33 @@ class LayoutEngine:
     def compute_layout(self, blocks: list[Block], header_text: str = "") -> LayoutPlan:
         """Assign each block the page it starts on, packing greedily by height.
 
-        ``page_count`` is a lower bound — a block taller than a page overflows onto
-        further pages at render time, which this pagination does not count.
+        A block starts a new page only when its *first* page-image (plus the
+        credit band) won't fit in the remaining space; a multi-page block then
+        flows its later pages onto following pages, exactly as ``render_onto``
+        renders it. This walk mirrors that flow, so ``page_count`` counts those
+        overflow pages too.
         """
         header_px = _header_height_px(header_text)
         page = 0
         cursor = header_px  # px used on the current page (header reserved on page 0)
         for block in blocks:
-            h = self._block_height_px(block)
             gap = self.block_gap_px if cursor > 0 else 0
-            if cursor > 0 and cursor + gap + h > self.page_capacity_px:
+            if cursor > 0 and cursor + gap + self._first_unit_height_px(block) > self.page_capacity_px:
                 page += 1
-                cursor = 0
+                cursor = 0.0
                 gap = 0
             block.page_index = page
-            cursor += gap + h
+            cursor += gap
+            if self._credit_for(block):
+                cursor += _CREDIT_BAND_PX
+            for i, pg in enumerate(block.pages):
+                eff_h = self._page_height_px(pg)
+                igap = self.intra_gap_px if (cursor > 0 and i > 0) else 0
+                if cursor > 0 and cursor + igap + eff_h > self.page_capacity_px:
+                    page += 1
+                    cursor = 0.0
+                    igap = 0
+                cursor += igap + eff_h
         page_count = page + 1 if blocks else 1
         return LayoutPlan(page_count=page_count, blocks=blocks, header_text=header_text)
 
@@ -249,9 +281,11 @@ class LayoutEngine:
             used = header_px
 
         for block in plan.blocks:
-            block_h = self._block_height_px(block)
+            # Start a new page only if the block's first page (plus its credit
+            # band) won't fit here; a multi-page block then flows its remaining
+            # pages onto following pages via the per-image loop below.
             gap = self.block_gap_px if used > 0 else 0
-            if used > 0 and used + gap + block_h > self.page_capacity_px:
+            if used > 0 and used + gap + self._first_unit_height_px(block) > self.page_capacity_px:
                 new_page()
                 used = 0.0
                 gap = 0
@@ -276,9 +310,15 @@ class LayoutEngine:
                     # Image taller than a page: fit to page height (both variants).
                     s_img *= self.page_capacity_px / eff_h
                     eff_h = float(self.page_capacity_px)
-                if used > 0 and used + eff_h > self.page_capacity_px:
+                # Pad above every page after the block's first (the block gap
+                # already separated the first); the pad is dropped when this page
+                # starts a fresh physical page.
+                igap = self.intra_gap_px if (used > 0 and not first_page) else 0
+                if used > 0 and used + igap + eff_h > self.page_capacity_px:
                     new_page()
                     used = 0.0
+                    igap = 0
+                used += igap
 
                 reader = self._image_reader(fetch_bytes(pg.image_key))
                 top = _CONTENT_TOP_PX + used
@@ -314,6 +354,22 @@ class LayoutEngine:
         credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
         return images + credit
 
+    def _page_height_px(self, pg) -> float:
+        """Rendered height of one page-image for the current variant: scaled to
+        the variant's content width, then clamped to the page capacity for an
+        image taller than a whole page (mirrors the clamp in ``render_onto``)."""
+        eff_h = pg.height_px * self._image_scale(pg)
+        return min(eff_h, float(self.page_capacity_px))
+
+    def _first_unit_height_px(self, block: Block) -> float:
+        """Height that must fit in the current page's remaining space for this
+        block to *start* here: its credit band (drawn once, above the first
+        page) plus the first page-image. Later pages flow onto following pages
+        at render time, so they don't gate the block's start."""
+        credit = _CREDIT_BAND_PX if self._credit_for(block) else 0
+        first = self._page_height_px(block.pages[0]) if block.pages else 0.0
+        return credit + first
+
     def _credit_for(self, block: Block) -> bool:
         """Whether this block gets a provenance credit line drawn above it."""
         return self.show_credit and bool(block.source_label)
@@ -332,11 +388,13 @@ class LayoutEngine:
         c.line(left, y_pt(_HEADER_LINE_Y_PX), right, y_pt(_HEADER_LINE_Y_PX))
         c.line(left, y_pt(_FOOTER_LINE_Y_PX), right, y_pt(_FOOTER_LINE_Y_PX))
 
-        # Logo top-left, vertically centered on the header rule.
+        # Logo top-left, with its *visible* bottom edge a small gap above the
+        # header rule. The asset has transparent padding below the mark, so we
+        # offset the padded box by that padding to sit the mark on the line.
         logo = _load_logo()
         if logo is not None:
-            reader, w_px, h_px = logo
-            top_px = _HEADER_LINE_Y_PX - h_px / 2
+            reader, w_px, h_px, bottom_pad_px = logo
+            top_px = _HEADER_LINE_Y_PX - _LOGO_RULE_GAP_PX - h_px + bottom_pad_px
             c.drawImage(
                 reader,
                 left,
@@ -375,7 +433,7 @@ class LayoutEngine:
         y = _CONTENT_TOP_PX + 40
         logo = _load_logo(_COVER_LOGO_W_PX)
         if logo is not None:
-            reader, w_px, h_px = logo
+            reader, w_px, h_px, _ = logo
             c.drawImage(
                 reader,
                 (PAGE_W_PX - w_px) / 2 * scale,

@@ -71,15 +71,6 @@ def test_combined_has_both_sections(tmp_path):
     assert _page_count(out) == expected
 
 
-def test_multi_page_block_overflows_layout_estimate(tmp_path):
-    # Question 5's two images sum taller than a page, so rendering flows onto
-    # an extra page that compute_layout's estimate doesn't count.
-    out = tmp_path / "overflow.pdf"
-    generate_sample_pdf.main(
-        ["--variant", "question", "--questions", "5", "--no-cover", "--out", str(out)]
-    )
-    assert _page_count(out) > _planned_pages(5, "question")
-
 
 def test_png_conversion(tmp_path):
     out = tmp_path / "paper.pdf"

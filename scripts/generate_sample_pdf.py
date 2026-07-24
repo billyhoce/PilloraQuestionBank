@@ -54,8 +54,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--questions",
         type=int,
-        default=5,
-        help="number of sample questions; 5 covers every synthetic page size (default: 5)",
+        default=3,
+        help="number of sample questions; 3 covers every synthetic page size (default: 3)",
     )
     parser.add_argument("--header", default=_DEFAULT_HEADER, help="header text (question paper only)")
     parser.add_argument("--footer", default="Pillora Learning", help="footer label on every page")

@@ -3,6 +3,7 @@ import io
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pypdf import PdfReader
 
 from app.models.orm import Question
@@ -31,9 +32,10 @@ def _make_block(
     page_heights: list[int],
     source_label: str = "School 2024 Sec 3 EOY Q1",
     page_index: int = 0,
+    width_px: int = 2480,
 ) -> Block:
     pages = [
-        MagicMock(image_key=f"k_{label}_{i}.webp", height_px=h, width_px=2480, page_order=i)
+        MagicMock(image_key=f"k_{label}_{i}.webp", height_px=h, width_px=width_px, page_order=i)
         for i, h in enumerate(page_heights)
     ]
     return Block(label=label, source_label=source_label, pages=pages, page_index=page_index)
@@ -261,10 +263,24 @@ def test_layout_tall_block_starts_fresh():
 
 
 def test_layout_multipage_block_flows():
-    # Two 400px pages within one block, capacity 500: the block still starts on
-    # page 0; render flows the second page. compute_layout counts the start page.
+    # Two 400px pages within one block, capacity 500: the block starts on page 0
+    # and render flows the second page onto page 1. compute_layout now counts the
+    # overflow page too, so page_count is 2.
     plan = _engine(capacity_px=500).compute_layout([_make_block("1", [400, 400])])
     assert plan.blocks[0].page_index == 0
+    assert plan.page_count == 2
+
+
+def test_layout_multipage_block_packs_first_page():
+    # capacity 1000, Q1=600px leaves 400px. Q2 is multi-page (300px + 800px): its
+    # whole height (1100px) overflows, but its FIRST page (300px) fits — so Q2
+    # starts on the same page as Q1, and its large second page flows to page 1.
+    plan = _engine(capacity_px=1000).compute_layout(
+        [_make_block("1", [600]), _make_block("2", [300, 800])]
+    )
+    assert plan.blocks[0].page_index == 0
+    assert plan.blocks[1].page_index == 0  # first page packed onto the same page
+    assert plan.page_count == 2            # Q2's second page flowed to page 1
 
 
 def test_layout_preserves_labels_and_order():
@@ -378,6 +394,28 @@ def test_chrome_renders_with_logo(minimal_webp_bytes, tmp_path, monkeypatch):
     layout_engine._load_logo.cache_clear()
 
 
+def test_load_logo_reports_bottom_padding(tmp_path, monkeypatch):
+    # The logo asset is a square canvas with the mark inset; _load_logo returns
+    # the transparent bottom padding (scaled to the target width) so the header
+    # can sit the visible mark — not its padded box — on the rule.
+    from PIL import Image as PILImage
+
+    from app.pdf import layout_engine
+
+    # 200x200 canvas, opaque mark only in the top half → 100px transparent below.
+    img = PILImage.new("RGBA", (200, 200), (0, 0, 0, 0))
+    img.paste((134, 59, 255, 255), (0, 0, 200, 100))
+    logo = tmp_path / "pillora_logo.png"
+    img.save(logo)
+    layout_engine._load_logo.cache_clear()
+    monkeypatch.setattr(layout_engine, "LOGO_PATH", str(logo))
+
+    reader, w_px, h_px, bottom_pad_px = layout_engine._load_logo(100)  # half scale
+    assert (w_px, h_px) == (100, 100)
+    assert bottom_pad_px == pytest.approx(50)  # 100px padding at 0.5 scale
+    layout_engine._load_logo.cache_clear()
+
+
 def test_chrome_does_not_change_page_count(minimal_webp_bytes):
     # Chrome is drawn on every page but never adds pages.
     engine = _engine(capacity_px=1000)
@@ -486,12 +524,33 @@ def test_every_page_has_clickable_website_chrome(minimal_webp_bytes):
         assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
 
 
-def test_question_variant_has_no_block_gap():
+def test_question_variant_pads_between_blocks():
+    from app.pdf.layout_engine import _QUESTION_GAP_PX
+
     engine = LayoutEngine(fit_width=True)
-    assert engine.block_gap_px == 0
-    # Without a gap the two 400px (scaled) blocks comfortably share a page.
-    plan = engine.compute_layout([_make_block("1", [400]), _make_block("2", [400])])
+    assert engine.block_gap_px == engine.intra_gap_px == _QUESTION_GAP_PX
+    # With ample room the two blocks still share a page despite the gap.
+    plan = engine.compute_layout(
+        [_make_block("1", [400], width_px=1760), _make_block("2", [400], width_px=1760)]
+    )
     assert plan.blocks[0].page_index == plan.blocks[1].page_index == 0
+    # width_px=1760 → scale 1.0, so heights map 1:1. Capacity 858 fits 800px of
+    # image but not 400 + 59 gap + 400 = 859, so the gap pushes Q2 to a new page.
+    tight = LayoutEngine(page_capacity_px=858, fit_width=True)
+    plan = tight.compute_layout(
+        [_make_block("1", [400], width_px=1760), _make_block("2", [400], width_px=1760)]
+    )
+    assert [b.page_index for b in plan.blocks] == [0, 1]
+
+
+def test_question_variant_pads_between_pages_of_one_block():
+    # A single multi-page question: its two 400px pages would share a page
+    # (800 ≤ 858), but the 59px intra-question pad (859 > 858) flows the second
+    # page onto the next page. page_index stays 0; page_count counts the overflow.
+    engine = LayoutEngine(page_capacity_px=858, fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [400, 400], width_px=1760)])
+    assert plan.blocks[0].page_index == 0
+    assert plan.page_count == 2
 
 
 # ---------------------------------------------------------------------------
