@@ -33,7 +33,8 @@ const CONFIG = {
   subtitle1_placeholder: 'eg) subtitle 1',
   subtitle2_placeholder: 'eg) subtitle 2',
   cover_body: '<p>Dear students,</p>',
-  header_text: 'Answer all questions.',
+  header_text: 'Visit www.pillora.com.sg for more resources.',
+  additional_instructions: 'Answer all questions.',
   footer_text: 'Pillora 2026',
 }
 
@@ -57,6 +58,7 @@ describe('GenerationConfigPage', () => {
     expect(await screen.findByDisplayValue('eg) subtitle 1')).toBeInTheDocument()
     expect(screen.getByDisplayValue('eg) subtitle 2')).toBeInTheDocument()
     expect(screen.getByDisplayValue(CONFIG.cover_body)).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Visit www.pillora.com.sg for more resources.')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Answer all questions.')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Pillora 2026')).toBeInTheDocument()
     expect(screen.getByText('Topical Worksheets')).toBeInTheDocument()
@@ -74,7 +76,8 @@ describe('GenerationConfigPage', () => {
       subtitle1_placeholder: 'eg) subtitle 1',
       subtitle2_placeholder: 'eg) subtitle 2',
       cover_body: CONFIG.cover_body,
-      header_text: 'Answer all questions.',
+      header_text: 'Visit www.pillora.com.sg for more resources.',
+      additional_instructions: 'Answer all questions.',
       footer_text: 'New footer',
     })
     expect(await screen.findByText(/generation config saved/i)).toBeInTheDocument()

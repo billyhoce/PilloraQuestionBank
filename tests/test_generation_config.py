@@ -3,6 +3,7 @@
 from app.models.orm import CoverTitle
 from app.services.generation_config import (
     DEFAULT_COVER_BODY,
+    DEFAULT_HEADER_TEXT,
     DEFAULT_SUBTITLE1_PLACEHOLDER,
     DEFAULT_SUBTITLE2_PLACEHOLDER,
 )
@@ -11,7 +12,8 @@ _CONFIG_PAYLOAD = {
     "subtitle1_placeholder": "eg) subtitle 1",
     "subtitle2_placeholder": "eg) subtitle 2",
     "cover_body": "<p>New body</p>",
-    "header_text": "Answer all questions.",
+    "header_text": "Visit www.pillora.com.sg for resources.",
+    "additional_instructions": "Answer all questions.",
     "footer_text": "Pillora 2026",
 }
 
@@ -35,7 +37,8 @@ def test_get_generation_config_lazily_creates_defaults(public_client):
     assert data["cover_body"] == DEFAULT_COVER_BODY
     assert data["subtitle1_placeholder"] == DEFAULT_SUBTITLE1_PLACEHOLDER
     assert data["subtitle2_placeholder"] == DEFAULT_SUBTITLE2_PLACEHOLDER
-    assert data["header_text"] == ""
+    assert data["header_text"] == DEFAULT_HEADER_TEXT
+    assert data["additional_instructions"] == ""
     assert data["footer_text"] == ""
     assert data["titles"] == []
 

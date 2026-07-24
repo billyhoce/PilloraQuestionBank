@@ -82,8 +82,9 @@ GenerationConfig: {
   subtitle1_placeholder,       -- grey hint text for Subtitle 1 on the Generate form
   subtitle2_placeholder,       -- grey hint text for Subtitle 2
   cover_body (text),           -- rich-text HTML cover letter stamped on non-admin PDFs
-  header_text (text),          -- header preset applied to non-admin generations
-  footer_text                  -- footer preset, printed verbatim on every page
+  header_text (text),          -- branding preset: right-aligned on the top rule of every page
+  additional_instructions (text), -- instructions preset below the top rule, question paper page 1
+  footer_text                  -- footer preset, printed flush-left on every page
 }
 ```
 

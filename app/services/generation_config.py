@@ -16,6 +16,13 @@ DEFAULT_COVER_TITLE = "Topical Worksheets"
 DEFAULT_SUBTITLE1_PLACEHOLDER = "e.g. Secondary 3 Mathematics"
 DEFAULT_SUBTITLE2_PLACEHOLDER = "e.g. 2024 Prelim"
 
+# Branding drawn right-aligned on the top rule of every generated page. Newlines
+# stack upward so the last line sits on the rule; the URL token is auto-linked.
+DEFAULT_HEADER_TEXT = (
+    "Visit www.pillora.com.sg for more learning resources.\n"
+    "Join @PilloraSecondary on Telegram to learn together!"
+)
+
 # Rich-text HTML limited to the marks the cover renderer supports
 # (<p>/<br>/<b>/<i>/<u>/<a href>; see app/pdf/cover_body.py).
 DEFAULT_COVER_BODY = (
@@ -48,6 +55,7 @@ def get_or_create_config(db: Session) -> GenerationConfig:
             subtitle1_placeholder=DEFAULT_SUBTITLE1_PLACEHOLDER,
             subtitle2_placeholder=DEFAULT_SUBTITLE2_PLACEHOLDER,
             cover_body=DEFAULT_COVER_BODY,
+            header_text=DEFAULT_HEADER_TEXT,
         )
         db.add(cfg)
         db.flush()

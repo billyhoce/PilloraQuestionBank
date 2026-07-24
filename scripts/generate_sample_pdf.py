@@ -33,7 +33,11 @@ from app.pdf.layout_engine import CoverSpec, LayoutEngine, render_combined
 from app.pdf.sample_data import build_sample_blocks, sample_marks
 from pdf_to_images import pdf_to_pngs
 
-_DEFAULT_HEADER = "Answer all questions.\nShow your working clearly."
+_DEFAULT_INSTRUCTIONS = "Answer all questions.\nShow your working clearly."
+_DEFAULT_PAGE_HEADER = (
+    "Visit www.pillora.com.sg for more learning resources.\n"
+    "Join @PilloraSecondary on Telegram to learn together!"
+)
 _DEFAULT_BODY = (
     "<p>Dear student,</p>"
     "<p>This is a <b>sample</b> cover letter with <i>rich-text</i> markup and a "
@@ -57,7 +61,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=3,
         help="number of sample questions; 3 covers every synthetic page size (default: 3)",
     )
-    parser.add_argument("--header", default=_DEFAULT_HEADER, help="header text (question paper only)")
+    parser.add_argument(
+        "--page-header",
+        default=_DEFAULT_PAGE_HEADER,
+        help="branding header, right-aligned on the top rule of every page",
+    )
+    parser.add_argument(
+        "--instructions",
+        default=_DEFAULT_INSTRUCTIONS,
+        help="additional instructions below the top rule (question paper only)",
+    )
     parser.add_argument("--footer", default="Pillora Learning", help="footer label on every page")
     parser.add_argument(
         "--cover",
@@ -104,7 +117,8 @@ def generate(args) -> bytes:
     if args.variant == "combined":
         q_blocks, images = build_sample_blocks(args.questions, "question", args.image)
         q_engine = LayoutEngine(fit_width=True, show_credit=True)
-        q_plan = q_engine.compute_layout(q_blocks, header_text=args.header)
+        q_plan = q_engine.compute_layout(q_blocks, additional_instructions=args.instructions)
+        q_plan.header_text = args.page_header
         q_plan.footer_label = args.footer
         q_plan.cover = cover_for(True)
         sections = [(q_engine, q_plan)]
@@ -113,6 +127,7 @@ def generate(args) -> bytes:
             images.update(a_images)
             a_engine = LayoutEngine(fit_width=False)
             a_plan = a_engine.compute_layout(a_blocks)
+            a_plan.header_text = args.page_header
             a_plan.footer_label = args.footer
             a_plan.cover = cover_for(False)
             sections.append((a_engine, a_plan))
@@ -121,7 +136,10 @@ def generate(args) -> bytes:
     is_question = args.variant == "question"
     blocks, images = build_sample_blocks(args.questions, args.variant, args.image)
     engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
-    plan = engine.compute_layout(blocks, header_text=args.header if is_question else "")
+    plan = engine.compute_layout(
+        blocks, additional_instructions=args.instructions if is_question else ""
+    )
+    plan.header_text = args.page_header
     plan.footer_label = args.footer
     plan.cover = cover_for(is_question)
     return engine.render(plan, fetch_bytes=images.__getitem__)

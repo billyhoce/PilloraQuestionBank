@@ -9,6 +9,7 @@ from pypdf import PdfReader
 from app.models.orm import Question
 from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan, render_combined
 from app.services.generate import count_select, in_order_select, knapsack_select
+from app.services.generation_config import DEFAULT_HEADER_TEXT
 
 # The knapsack function, /api/generate/select, and the PDF layout engine +
 # /api/generate/paper route are all implemented — every test here runs for real.
@@ -290,20 +291,30 @@ def test_layout_preserves_labels_and_order():
     assert [b.label for b in plan.blocks] == ["1", "2", "3"]
 
 
-def test_layout_header_text_in_plan():
-    plan = _engine().compute_layout([], header_text="Attempt all questions.")
-    assert plan.header_text == "Attempt all questions."
+def test_layout_instructions_in_plan():
+    plan = _engine().compute_layout([], additional_instructions="Attempt all questions.")
+    assert plan.additional_instructions == "Attempt all questions."
+
+
+def test_layout_header_text_defaults_empty_and_is_settable():
+    # The branding header is set by the route, not compute_layout — it defaults
+    # empty and is threaded onto the plan for every page to draw.
+    plan = _engine().compute_layout([])
+    assert plan.header_text == ""
+    plan.header_text = "Visit www.pillora.com.sg"
+    assert plan.header_text == "Visit www.pillora.com.sg"
 
 
 def test_layout_empty_block_list_produces_at_least_one_page():
-    plan = _engine().compute_layout([], header_text="Instructions.")
+    plan = _engine().compute_layout([], additional_instructions="Instructions.")
     assert plan.page_count >= 1
     assert plan.blocks == []
 
 
 def test_layout_render_returns_pdf_bytes(minimal_webp_bytes):
     # End-to-end render with real ReportLab + a real WebP image.
-    plan = _engine().compute_layout([_make_block("1", [800])], header_text="Header")
+    plan = _engine().compute_layout([_make_block("1", [800])], additional_instructions="Header")
+    plan.header_text = "Visit www.pillora.com.sg for more resources."
     pdf = _engine().render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 0
@@ -514,14 +525,24 @@ def test_cover_body_rich_text_renders(minimal_webp_bytes):
     assert _page_count(pdf) == 1
 
 
-def test_every_page_has_clickable_website_chrome(minimal_webp_bytes):
-    # The www.pillora.com.sg header chrome links out on cover and content pages.
+def test_header_url_token_is_clickable_on_every_page(minimal_webp_bytes):
+    # A web-address token in the branding header is auto-linked on cover and
+    # content pages alike.
     engine = LayoutEngine(fit_width=True)
     plan = engine.compute_layout([_make_block("1", [800])])
+    plan.header_text = "Visit www.pillora.com.sg for more learning resources.\nJoin us!"
     plan.cover = _cover()
     pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
     for page_index in range(_page_count(pdf)):
         assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
+
+
+def test_empty_header_draws_no_link(minimal_webp_bytes):
+    # No branding header configured -> no header link annotation.
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    pdf = engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+    assert _page_link_uris(pdf, 0) == []
 
 
 def test_question_variant_pads_between_blocks():
@@ -587,7 +608,7 @@ def test_render_combined_appends_sections(minimal_webp_bytes):
 def test_render_combined_matches_separate_renders(minimal_webp_bytes):
     # Combined page count equals the sum of the separately rendered sections.
     e1 = LayoutEngine(fit_width=True)
-    p1 = e1.compute_layout([_make_block("1", [800])], header_text="Header")
+    p1 = e1.compute_layout([_make_block("1", [800])], additional_instructions="Header")
     e2 = LayoutEngine(fit_width=False)
     p2 = e2.compute_layout([_make_block("1", [800])])
     fetch = lambda key: minimal_webp_bytes  # noqa: E731
@@ -797,7 +818,7 @@ def test_generate_paper_returns_pdf(public_client, sample_paper, db_session, ref
         resp = public_client.post("/api/generate/paper", json={
             "question_ids": ids,
             "variant": "question",
-            "header_text": "Test paper",
+            "additional_instructions": "Test paper",
         })
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
@@ -819,10 +840,10 @@ def test_generate_paper_renumbers_in_selection_order(public_client, sample_paper
     ids = list(reversed(_question_ids(db_session, sample_paper)))
     captured = {}
 
-    def spy_compute(self, blocks, header_text=""):
+    def spy_compute(self, blocks, additional_instructions=""):
         captured["blocks"] = blocks
         captured["fit_width"] = self.fit_width
-        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
 
     with (
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
@@ -848,10 +869,10 @@ def test_generate_paper_question_variant_credits_source(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, header_text=""):
+    def spy_compute(self, blocks, additional_instructions=""):
         captured["blocks"] = blocks
         captured["show_credit"] = self.show_credit
-        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
 
     with (
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
@@ -871,9 +892,9 @@ def test_generate_paper_answer_variant_no_credit(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, header_text=""):
+    def spy_compute(self, blocks, additional_instructions=""):
         captured["show_credit"] = self.show_credit
-        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
 
     with (
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
@@ -894,10 +915,10 @@ def test_generate_paper_answer_variant_skips_questions_without_answers(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, header_text=""):
+    def spy_compute(self, blocks, additional_instructions=""):
         captured["blocks"] = blocks
         captured["fit_width"] = self.fit_width
-        return LayoutPlan(page_count=1, blocks=blocks, header_text=header_text)
+        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
 
     with (
         patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
@@ -924,7 +945,7 @@ def test_generate_paper_combined_returns_pdf(public_client, sample_paper, db_ses
         resp = public_client.post("/api/generate/paper", json={
             "question_ids": ids,
             "variant": "combined",
-            "header_text": "Test paper",
+            "additional_instructions": "Test paper",
         })
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
@@ -948,7 +969,7 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
         resp = admin_client.post("/api/generate/paper", json={
             "question_ids": ids,
             "variant": "combined",
-            "header_text": "Test paper",
+            "additional_instructions": "Test paper",
             "footer_text": "My footer",
         })
 
@@ -959,7 +980,10 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     q_engine, q_plan = sections[0]
     assert q_engine.fit_width is True
     assert q_engine.show_credit is True
-    assert q_plan.header_text == "Test paper"
+    # Instructions land on the question paper only; the branding header (from the
+    # config default) rides every section's pages.
+    assert q_plan.additional_instructions == "Test paper"
+    assert q_plan.header_text == DEFAULT_HEADER_TEXT
     assert q_plan.footer_label == "My footer"
     assert [b.label for b in q_plan.blocks] == ["1", "2", "3"]
 
@@ -969,7 +993,8 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     # The footer is the same verbatim text on both sections — the old
     # subtitle2-derived "… Questions"/"… Answers" labels are gone.
     assert a_plan.footer_label == "My footer"
-    assert a_plan.header_text == ""
+    assert a_plan.additional_instructions == ""
+    assert a_plan.header_text == DEFAULT_HEADER_TEXT
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]
     assert all(p.page_type == "answer" for p in a_plan.blocks[0].pages)
@@ -1121,11 +1146,12 @@ def test_generate_paper_public_forces_config_presets(
     public_client, sample_paper, db_session, reference_data
 ):
     """Non-admin requests can't override the admin presets: the cover page is
-    always included, and body/header/footer come from the generation config."""
+    always included, and body/header/instructions/footer come from the config."""
     _seed_generation_config(
         db_session,
         cover_body="<p>Config body</p>",
         header_text="Config header",
+        additional_instructions="Config instructions",
         footer_text="Config footer",
     )
     ids = _question_ids(db_session, sample_paper)
@@ -1144,7 +1170,7 @@ def test_generate_paper_public_forces_config_presets(
             "variant": "question",
             "include_cover": False,
             "cover_body": "<p>Client body</p>",
-            "header_text": "Client header",
+            "additional_instructions": "Client instructions",
             "footer_text": "Client footer",
             "cover_subtitle1": "Sec 3 Math",
         })
@@ -1156,6 +1182,7 @@ def test_generate_paper_public_forces_config_presets(
     assert plan.cover.title == ""  # no titles configured → untitled cover
     assert plan.cover.subtitle1 == "Sec 3 Math"  # subtitles stay free text
     assert plan.header_text == "Config header"
+    assert plan.additional_instructions == "Config instructions"
     assert plan.footer_label == "Config footer"
 
 
