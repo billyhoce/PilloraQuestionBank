@@ -37,7 +37,10 @@ Note: Pydantic schemas and ORM models live in separate `schemas/` and `models/` 
 POST   /api/auth/register       -- public registration (always role "public").
                                    Body: { first_name, last_name, email, password }.
                                    Names are trimmed; blank or >100 chars -> 422.
-POST   /api/auth/login          -- sets JWT in httpOnly cookie
+POST   /api/auth/login          -- sets JWT in httpOnly cookie. Unknown email and wrong
+                                   password are one generic 401. An account created with
+                                   Google (no password on file) instead gets 409 with a
+                                   "use Sign in with Google" message.
 POST   /api/auth/logout         -- clears cookie
 GET    /api/auth/me             -- returns current authenticated user, including
                                    first_name/last_name and the has_password /
@@ -476,7 +479,7 @@ workflow for verifying layout changes without standing up infrastructure. See
   - **CSRF:** `/google/login` mints a `secrets.token_urlsafe(32)` nonce, stores it in a 10-minute `httpOnly` `oauth_state` cookie, and passes it as `state`. The callback compares the two with `secrets.compare_digest` and aborts on any mismatch, so a callback the browser never initiated cannot log anyone in.
   - **Profile trust:** the callback reads the profile from Google's OIDC **userinfo endpoint** using the freshly exchanged access token, rather than verifying the `id_token` JWT locally. The response arrives over TLS straight from Google in a server-to-server call the client cannot influence, so it is equally trustworthy without a JWKS fetch and cache.
   - **Account linking:** matching is by `google_sub` first, then by email — but **only when Google reports `email_verified`**; an unverified address is rejected outright (`google_email_unverified`), since it is not proof of identity and would otherwise be a route to hijacking an existing account. A verified match attaches `google_sub` to the existing row and preserves its `role`. See [DATA_MODEL.md](./DATA_MODEL.md).
-  - **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts. `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise, so password login against such an account is a clean generic `401`, indistinguishable from a wrong password.
+  - **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts. `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise, so bcrypt can never raise on one. Password login against such an account short-circuits to a **`409`** telling the user to use "Sign in with Google" — a password attempt there can never succeed, so the generic 401 would just look like a forgotten password and loop them. This is a **deliberate user-enumeration trade-off**: it confirms that the address has a Google account. It is the only such disclosure — it fires only when the account has *no* password at all, so an account with both a password and a Google link (and every unknown email) still returns the single generic `401`.
 - **CORS:** **not implemented** — no `CORSMiddleware` is registered in `app/main.py`. Not needed for the OAuth flow either: Google redirects the browser to a same-origin backend route, it does not make a cross-origin request.
 - **Rate limiting:** **not implemented** — there is no limiter on `/api/auth/*` or anywhere else.
 

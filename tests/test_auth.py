@@ -173,6 +173,15 @@ def test_login_unknown_email_returns_401(client):
     assert resp.status_code == 401
 
 
+def test_login_unknown_email_is_indistinguishable_from_a_wrong_password(client, admin_user):
+    """The Google hint is the only case that reveals anything about an account;
+    these two must stay identical."""
+    unknown = client.post("/api/auth/login", json={"email": "nobody@example.com", "password": "Whatever1!"})
+    wrong = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "Whatever1!"})
+    assert unknown.status_code == wrong.status_code == 401
+    assert unknown.json() == wrong.json()
+
+
 def test_logout_clears_cookie(admin_client):
     resp = admin_client.post("/api/auth/logout")
     assert resp.status_code == 200

@@ -296,11 +296,61 @@ def test_callback_token_exchange_failure(client, db_session, monkeypatch, google
 # ---------------------------------------------------------------------------
 
 
-def test_google_only_account_cannot_password_login(client, google_configured, google_profile):
+def test_google_only_account_password_login_points_at_google(client, google_configured, google_profile):
     _callback(client, _start_flow(client))
     client.post("/api/auth/logout")
 
     resp = client.post(
         "/api/auth/login", json={"email": "grace@example.com", "password": "Secure123!"}
     )
-    assert resp.status_code == 401, "must be a clean 401, not a 500 from bcrypt"
+    # Not a 500 from bcrypt, and not the generic 401 either — a password login
+    # here can never succeed, so say what will work instead.
+    assert resp.status_code == 409
+    assert "Google" in resp.json()["detail"]
+
+
+def test_google_only_account_never_logs_in_with_a_password(client, google_configured, google_profile):
+    _callback(client, _start_flow(client))
+    client.post("/api/auth/logout")
+
+    resp = client.post(
+        "/api/auth/login", json={"email": "grace@example.com", "password": ""}
+    )
+    assert resp.status_code == 409
+    assert "access_token" not in resp.headers.get("set-cookie", "")
+
+
+def test_linked_account_still_logs_in_with_its_password(
+    client, db_session, google_configured, google_profile
+):
+    """An account with both a password and a Google link keeps working both ways."""
+    google_profile["email"] = "user@test.com"
+    from tests.conftest import _create_user
+
+    _create_user(db_session, "user@test.com", "Userpass123!", "public")
+    _callback(client, _start_flow(client))
+    client.post("/api/auth/logout")
+
+    resp = client.post(
+        "/api/auth/login", json={"email": "user@test.com", "password": "Userpass123!"}
+    )
+    assert resp.status_code == 200
+    assert "access_token" in resp.headers.get("set-cookie", "")
+
+
+def test_linked_account_wrong_password_stays_a_generic_401(
+    client, db_session, google_configured, google_profile
+):
+    """The Google hint must not leak for accounts that do have a password."""
+    google_profile["email"] = "user@test.com"
+    from tests.conftest import _create_user
+
+    _create_user(db_session, "user@test.com", "Userpass123!", "public")
+    _callback(client, _start_flow(client))
+    client.post("/api/auth/logout")
+
+    resp = client.post(
+        "/api/auth/login", json={"email": "user@test.com", "password": "WrongPass123!"}
+    )
+    assert resp.status_code == 401
+    assert "Google" not in resp.json()["detail"]

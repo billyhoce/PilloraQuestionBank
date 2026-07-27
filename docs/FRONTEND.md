@@ -346,6 +346,11 @@ Both pages offer a manual form and a Google button; the user picks either.
 - A failed Google sign-in lands on `/login?error=<code>`. `LoginPage` maps the four backend codes
   (`google_cancelled`, `google_state_mismatch`, `google_email_unverified`, `google_failed`) to
   copy shown in the shared `<ErrorBanner />`; an unrecognised code is ignored rather than echoed.
+- **Signing in with a password on a Google-created account** shows *"This account was created with
+  Google. Use \"Sign in with Google\" instead."* in the same banner, with the button right below it.
+  The backend sends this as a `409`, and `friendlyMessage` in `api/client.js` passes a 409 `detail`
+  through verbatim — the generic *"Unknown email or incorrect password"* rewrite applies only to a
+  `401` on `/api/auth/login`.
 
 ### Displaying the user
 

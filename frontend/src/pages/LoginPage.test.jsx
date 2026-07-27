@@ -84,6 +84,21 @@ describe('LoginPage Google sign-in', () => {
     expect(screen.queryByRole('link', { name: /Google/ })).not.toBeInTheDocument()
   })
 
+  it('tells a Google-only account to use the Google button', async () => {
+    api.auth.providers.mockResolvedValue({ google: true })
+    // The backend answers 409 for an account that has no password; client.js
+    // passes that detail through verbatim rather than using the generic 401 copy.
+    login.mockRejectedValue({
+      status: 409,
+      message: 'This account was created with Google. Use "Sign in with Google" instead.',
+    })
+    renderLogin()
+    await submitLogin()
+    expect(
+      await screen.findByText(/This account was created with Google/)
+    ).toBeInTheDocument()
+  })
+
   it('surfaces a failed Google sign-in from the ?error= redirect', async () => {
     api.auth.providers.mockResolvedValue({ google: true })
     renderLogin({ entry: '/login?error=google_email_unverified' })

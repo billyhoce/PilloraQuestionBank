@@ -108,8 +108,21 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
-    # A Google-only account has no password_hash; verify_password returns False
-    # for it, so it falls into the same generic 401 as a wrong password.
+
+    # An account created through Google has no password to check, so the generic
+    # 401 below would just look like a forgotten password and send the user
+    # round in circles. Point them at the button instead. This does disclose
+    # that the address has a Google account — a deliberate trade for an
+    # otherwise dead-end login, and only for accounts that have *no* password.
+    if user is not None and not user.password_hash and user.google_sub:
+        raise HTTPException(
+            status_code=409,
+            detail='This account was created with Google. Use "Sign in with Google" instead.',
+        )
+
+    # Everything else stays a single generic 401 — unknown email and wrong
+    # password must remain indistinguishable. An account that has *both* a
+    # password and a Google link lands here and logs in normally.
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     _set_session_cookie(response, user)
