@@ -42,27 +42,31 @@ def _source_label(q: Question) -> str:
 
 def _resolve_generation_options(
     payload: GeneratePaperRequest, current_user: User, db: Session
-) -> tuple[bool, str, str, str, str]:
-    """Resolve the effective (include_cover, title, body, header, footer).
+) -> tuple[bool, str, str, str, str, str]:
+    """Resolve the effective (include_cover, title, body, header, instructions,
+    footer).
 
-    Admins control every field verbatim. For non-admin users the admin-set
-    generation config wins: a cover page is always included, the body/header/
-    footer come from the config, and the title must be one of the configured
-    cover titles — an empty title falls back to the first configured one (so
-    generation still works if the client never loaded the config), and an
-    unknown title is rejected so the dropdown can't be bypassed with a
-    hand-crafted request. With no titles configured the cover is untitled.
+    The page-header branding always comes from the admin generation config — it
+    is page furniture, not a per-paper choice, so even admins can't override it
+    per generation. Admins control the remaining fields verbatim. For non-admin
+    users the admin-set generation config wins: a cover page is always included,
+    the body/instructions/footer come from the config, and the title must be one
+    of the configured cover titles — an empty title falls back to the first
+    configured one (so generation still works if the client never loaded the
+    config), and an unknown title is rejected so the dropdown can't be bypassed
+    with a hand-crafted request. With no titles configured the cover is untitled.
     """
+    cfg = get_or_create_config(db)
     if current_user.role == "admin":
         return (
             payload.include_cover,
             payload.cover_title,
             payload.cover_body,
-            payload.header_text,
+            cfg.header_text,
+            payload.additional_instructions,
             payload.footer_text,
         )
 
-    cfg = get_or_create_config(db)
     titles = [t.name for t in db.query(CoverTitle).order_by(CoverTitle.id).all()]
     if not titles:
         title = ""
@@ -75,7 +79,14 @@ def _resolve_generation_options(
             status_code=400,
             detail="Cover title must be one of the configured titles",
         )
-    return (True, title, cfg.cover_body, cfg.header_text, cfg.footer_text)
+    return (
+        True,
+        title,
+        cfg.cover_body,
+        cfg.header_text,
+        cfg.additional_instructions,
+        cfg.footer_text,
+    )
 
 
 def _cover_for(
@@ -239,15 +250,16 @@ def generate_paper(
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.
     total_marks = sum(q.marks or 0 for q in ordered)
-    include_cover, title, body, header_text, footer_text = _resolve_generation_options(
-        payload, current_user, db
+    include_cover, title, body, header_text, additional_instructions, footer_text = (
+        _resolve_generation_options(payload, current_user, db)
     )
 
     if payload.variant == "combined":
         q_engine = LayoutEngine(fit_width=True, show_credit=True)
         q_plan = q_engine.compute_layout(
-            _blocks_for(ordered, "question"), header_text=header_text
+            _blocks_for(ordered, "question"), additional_instructions=additional_instructions
         )
+        q_plan.header_text = header_text
         q_plan.footer_label = footer_text
         q_plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=True)
         sections = [(q_engine, q_plan)]
@@ -255,6 +267,7 @@ def generate_paper(
         if a_blocks:  # no trailing blank page when nothing has answers
             a_engine = LayoutEngine(fit_width=False)
             a_plan = a_engine.compute_layout(a_blocks)
+            a_plan.header_text = header_text
             a_plan.footer_label = footer_text
             a_plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=False)
             sections.append((a_engine, a_plan))
@@ -263,8 +276,9 @@ def generate_paper(
         is_question = payload.variant == "question"
         blocks = _blocks_for(ordered, payload.variant)
         engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
-        header = header_text if is_question else ""
-        plan = engine.compute_layout(blocks, header_text=header)
+        instructions = additional_instructions if is_question else ""
+        plan = engine.compute_layout(blocks, additional_instructions=instructions)
+        plan.header_text = header_text
         plan.footer_label = footer_text
         plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=is_question)
         pdf = engine.render(plan, fetch_bytes=get_image_bytes)

@@ -10,12 +10,13 @@ class CoverTitleResponse(BaseModel):
 
 
 class GenerationConfigUpdate(BaseModel):
-    """Admin update of the generation presets (all five scalar fields)."""
+    """Admin update of the generation presets (all six scalar fields)."""
 
     subtitle1_placeholder: str
     subtitle2_placeholder: str
     cover_body: str
     header_text: str
+    additional_instructions: str
     footer_text: str
 
 
@@ -30,4 +31,5 @@ class GenerationConfigResponse(BaseModel):
     subtitle2_placeholder: str
     cover_body: str
     header_text: str
+    additional_instructions: str
     footer_text: str

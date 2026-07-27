@@ -25,8 +25,9 @@ page image is a crop of one 300-DPI A4 scan page, width-capped at 1760 px by
 `app/pdf/image_processing.standardize` — so ≤ 1760 px wide and ≤ ~2490 px tall, which always
 fits a page's content band. Sizes outside those bounds are deliberately not simulated.
 
-Flags mirror `GeneratePaperRequest` (`--variant`, `--header`/`--footer`, `--cover*`, rich-text
-`--cover-body`), plus `--questions N` (default 5 — one of each synthetic size), `--out`,
+Flags mirror `GeneratePaperRequest` (`--variant`, `--instructions`/`--footer`, `--cover*`, rich-text
+`--cover-body`) plus `--page-header` for the branding header, `--questions N` (default 5 — one of
+each synthetic size), `--out`,
 `--png`/`--dpi`, and repeatable `--image PATH` to substitute real image files. `fetch_bytes` is
 an in-memory dict lookup — the same injection seam the route fills with `get_image_bytes`.
 

@@ -130,7 +130,7 @@ export default function GeneratePage() {
   const [coverSubtitle1, setCoverSubtitle1] = useState('')
   const [coverSubtitle2, setCoverSubtitle2] = useState('')
   const [coverBody, setCoverBody] = useState(null)
-  const [headerText, setHeaderText] = useState(null)
+  const [instructionsText, setInstructionsText] = useState(null)
   const [footerText, setFooterText] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [genProgress, setGenProgress] = useState(0)
@@ -153,7 +153,7 @@ export default function GeneratePage() {
         if (isAdmin) {
           if (cfg.titles.length === 0) setTitleMode('custom')
           setCoverBody(prev => prev ?? cfg.cover_body)
-          setHeaderText(prev => prev ?? cfg.header_text)
+          setInstructionsText(prev => prev ?? cfg.additional_instructions)
           setFooterText(prev => prev ?? cfg.footer_text)
         }
       })
@@ -387,12 +387,13 @@ export default function GeneratePage() {
       if (coverBody !== null) cover.cover_body = coverBody
       if (footerText !== null) cover.footer_text = footerText
     }
-    // Header only appears on question pages; the answer request always sends ''.
-    const header = isAdmin ? { header_text: headerText ?? '' } : {}
+    // Additional instructions only appear on question pages; the answer request
+    // always sends ''.
+    const instructions = isAdmin ? { additional_instructions: instructionsText ?? '' } : {}
     try {
       if (outputMode === 'combined') {
         const blob = await api.generate.paper({
-          question_ids: ids, variant: 'combined', ...header, ...cover,
+          question_ids: ids, variant: 'combined', ...instructions, ...cover,
         })
         stopProgress()
         setGenProgress(100)
@@ -400,8 +401,8 @@ export default function GeneratePage() {
         setNotice({ type: 'success', text: 'Generated combined PDF.' })
       } else {
         const [questionBlob, answerBlob] = await Promise.all([
-          api.generate.paper({ question_ids: ids, variant: 'question', ...header, ...cover }),
-          api.generate.paper({ question_ids: ids, variant: 'answer', ...(isAdmin ? { header_text: '' } : {}), ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'question', ...instructions, ...cover }),
+          api.generate.paper({ question_ids: ids, variant: 'answer', ...(isAdmin ? { additional_instructions: '' } : {}), ...cover }),
         ])
         stopProgress()
         setGenProgress(100)
@@ -736,14 +737,14 @@ export default function GeneratePage() {
               {isAdmin ? (
                 <>
                   <div className="space-y-1 pt-1">
-                    <label className="text-xs text-gray-600" htmlFor="header-text">
-                      Header / instructions (optional)
+                    <label className="text-xs text-gray-600" htmlFor="additional-instructions">
+                      Additional instructions (optional)
                     </label>
                     <textarea
-                      id="header-text"
+                      id="additional-instructions"
                       rows={2}
-                      value={headerText ?? ''}
-                      onChange={e => setHeaderText(e.target.value)}
+                      value={instructionsText ?? ''}
+                      onChange={e => setInstructionsText(e.target.value)}
                       placeholder="e.g. Answer all questions. Time: 2 hours."
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
                     />

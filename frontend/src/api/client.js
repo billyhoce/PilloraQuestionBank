@@ -177,7 +177,8 @@ export const api = {
 
   // Admin-set generation presets + the cover-title list, readable by any
   // authenticated user ({ titles, subtitle1_placeholder, subtitle2_placeholder,
-  // cover_body, header_text, footer_text }); writes are admin-only.
+  // cover_body, header_text, additional_instructions, footer_text }); writes are
+  // admin-only.
   generationConfig: {
     get: (signal) => request('GET', '/api/generation-config', undefined, signal),
     update: (body) => request('PUT', '/api/generation-config', body),
@@ -195,10 +196,11 @@ export const api = {
     // body: { filters, target_type, target_value, algorithm, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
     // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
-    // header_text, footer_text, include_cover, cover_title, cover_subtitle1,
-    // cover_subtitle2, cover_body }. Non-admins may only send the title (from
-    // the configured list) and subtitles — the server forces the config presets
-    // for everything else. Returns a Blob (binary) — bypasses `request`, which
+    // additional_instructions, footer_text, include_cover, cover_title,
+    // cover_subtitle1, cover_subtitle2, cover_body }. The page-header branding is
+    // config-only (no per-request field). Non-admins may only send the title
+    // (from the configured list) and subtitles — the server forces the config
+    // presets for everything else. Returns a Blob (binary) — bypasses `request`, which
     // is JSON-only.
     paper: async (body) => {
       const res = await fetch('/api/generate/paper', {

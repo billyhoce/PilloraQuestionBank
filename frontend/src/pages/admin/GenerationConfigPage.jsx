@@ -7,7 +7,8 @@ import ErrorBanner from '../../components/ErrorBanner'
 
 // Admin page for the generation presets applied to every non-admin generation:
 // the cover-title list users pick from, the subtitle placeholders shown in the
-// Generate form, and the cover body / header / footer stamped on their PDFs.
+// Generate form, and the cover body / header / additional instructions / footer
+// stamped on their PDFs.
 export default function GenerationConfigPage() {
   const [titles, setTitles] = useState([])
   const [form, setForm] = useState(null) // null until the config loads
@@ -25,6 +26,7 @@ export default function GenerationConfigPage() {
           subtitle2_placeholder: cfg.subtitle2_placeholder,
           cover_body: cfg.cover_body,
           header_text: cfg.header_text,
+          additional_instructions: cfg.additional_instructions,
           footer_text: cfg.footer_text,
         })
       })
@@ -87,8 +89,8 @@ export default function GenerationConfigPage() {
           <h2 className="text-lg font-medium text-gray-900">Generation Presets</h2>
           <p className="text-sm text-gray-500">
             Applied to every paper a user generates: their PDFs always include a cover page with
-            this cover body, plus this header and footer. The subtitle placeholders are the grey
-            hint text shown in the Generate form's subtitle fields.
+            this cover body, plus this header, additional instructions, and footer. The subtitle
+            placeholders are the grey hint text shown in the Generate form's subtitle fields.
           </p>
 
           <div className="space-y-1">
@@ -129,13 +131,34 @@ export default function GenerationConfigPage() {
 
           <div className="space-y-1">
             <label className="text-sm text-gray-700" htmlFor="config-header-text">
-              Header / instructions
+              Header
             </label>
+            <p className="text-xs text-gray-500">
+              Branding shown right-aligned on the top rule of every page. Each line stacks
+              upward so the last line sits on the rule; any web address is auto-linked.
+            </p>
             <textarea
               id="config-header-text"
               rows={2}
               value={form.header_text}
               onChange={e => setField('header_text', e.target.value)}
+              placeholder="e.g. Visit www.pillora.com.sg for more learning resources."
+              className="w-full px-3 py-2 border border-gray-300 rounded text-sm resize-y"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm text-gray-700" htmlFor="config-additional-instructions">
+              Additional instructions
+            </label>
+            <p className="text-xs text-gray-500">
+              Shown below the top rule on the first page of the question paper.
+            </p>
+            <textarea
+              id="config-additional-instructions"
+              rows={2}
+              value={form.additional_instructions}
+              onChange={e => setField('additional_instructions', e.target.value)}
               placeholder="e.g. Answer all questions. Time: 2 hours."
               className="w-full px-3 py-2 border border-gray-300 rounded text-sm resize-y"
             />

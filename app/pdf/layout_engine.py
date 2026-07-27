@@ -18,6 +18,7 @@ Layout rules:
 """
 import io
 import os
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -37,17 +38,32 @@ PAGE_W_PX = 2480
 PAGE_H_PX = 3508
 
 # Page chrome (drawn on every page): purple rule lines near the top and bottom,
-# the Pillora logo top-left, the website centered in the header, a footer label
-# centered below the footer line, and a page number bottom-right. The content
-# band sits between the two rule lines.
+# the Pillora logo top-left, the admin-configured header right-aligned on the top
+# rule (multi-line, last line on the rule), a footer label flush-left below the
+# footer line, and a page number bottom-right. The content band sits between the
+# two rule lines.
 PURPLE = Color(119 / 255, 102 / 255, 135 / 255)
-WEBSITE = "www.pillora.com.sg"
-WEBSITE_URL = "https://www.pillora.com.sg"
 _MARGIN_X_PX = 213                     # horizontal inset of the header/footer rule lines
 _HEADER_LINE_Y_PX = 250                # header rule, px from the top
 _FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
 _CHROME_FONT = "Helvetica"
-_CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (website / footer / page number)
+_CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (header / footer / page number)
+_CHROME_HEADER_LINE_PX = 52            # line advance for the multi-line page header
+# Tokens in the page header that look like a web address are turned into
+# clickable links (matches "https://…", "www.pillora.com.sg", "pillora.com.sg").
+# A bare domain needs a 2+ letter TLD, so ordinary text like "e.g." is left alone.
+_URL_TOKEN = re.compile(
+    r"https?://\S+|www\.\S+|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:/\S*)?",
+    re.I,
+)
+
+
+def _link_target(token: str) -> str:
+    """Normalize a matched header token to an absolute URL for ``linkURL``."""
+    stripped = token.rstrip(".,;:!?)")
+    if stripped.lower().startswith(("http://", "https://")):
+        return stripped
+    return "https://" + stripped
 _CHROME_RULE_PX = 4                    # rule line thickness
 _LOGO_W_PX = 250                       # header logo width (aspect preserved)
 _LOGO_RULE_GAP_PX = 12                 # gap between the logo's visible bottom and the header rule
@@ -104,11 +120,11 @@ _CREDIT_BAND_PX = _CREDIT_FONT_PX + _CREDIT_GAP_PX  # vertical space one credit 
 _CREDIT_GREY = 0.35
 
 
-def _header_height_px(header_text: str) -> int:
-    """Vertical band reserved for the header on the first page (0 if no header)."""
-    if not header_text:
+def _instructions_height_px(additional_instructions: str) -> int:
+    """Vertical band reserved for the instructions on the first page (0 if none)."""
+    if not additional_instructions:
         return 0
-    lines = header_text.splitlines() or [header_text]
+    lines = additional_instructions.splitlines() or [additional_instructions]
     return len(lines) * _HEADER_LINE_PX + _HEADER_PAD_PX
 
 
@@ -139,8 +155,11 @@ class CoverSpec:
 class LayoutPlan:
     page_count: int
     blocks: list[Block]
+    # header_text: branding drawn right-aligned on the top rule of every page.
+    # additional_instructions: exam instructions drawn below the top rule on page 1.
     header_text: str = ""
-    footer_label: str = ""   # centered under the footer rule on every page of this section
+    additional_instructions: str = ""
+    footer_label: str = ""   # flush-left under the footer rule on every page of this section
     cover: "CoverSpec | None" = None  # optional cover page rendered as the section's first page
 
 
@@ -201,7 +220,7 @@ class LayoutEngine:
             return _TARGET_CONTENT_W_PX / pg.width_px
         return 1.0
 
-    def compute_layout(self, blocks: list[Block], header_text: str = "") -> LayoutPlan:
+    def compute_layout(self, blocks: list[Block], additional_instructions: str = "") -> LayoutPlan:
         """Assign each block the page it starts on, packing greedily by height.
 
         A block starts a new page only when its *first* page-image (plus the
@@ -210,9 +229,9 @@ class LayoutEngine:
         renders it. This walk mirrors that flow, so ``page_count`` counts those
         overflow pages too.
         """
-        header_px = _header_height_px(header_text)
+        header_px = _instructions_height_px(additional_instructions)
         page = 0
-        cursor = header_px  # px used on the current page (header reserved on page 0)
+        cursor = header_px  # px used on the current page (instructions reserved on page 0)
         for block in blocks:
             gap = self.block_gap_px if cursor > 0 else 0
             if cursor > 0 and cursor + gap + self._first_unit_height_px(block) > self.page_capacity_px:
@@ -232,7 +251,11 @@ class LayoutEngine:
                     igap = 0
                 cursor += igap + eff_h
         page_count = page + 1 if blocks else 1
-        return LayoutPlan(page_count=page_count, blocks=blocks, header_text=header_text)
+        return LayoutPlan(
+            page_count=page_count,
+            blocks=blocks,
+            additional_instructions=additional_instructions,
+        )
 
     def render(self, plan: LayoutPlan, fetch_bytes) -> bytes:
         """Render the plan to PDF bytes. ``fetch_bytes(image_key) -> bytes``."""
@@ -260,25 +283,25 @@ class LayoutEngine:
             nonlocal page_num
             c.showPage()
             page_num += 1
-            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+            self._draw_chrome(c, page_num, plan.header_text, plan.footer_label, scale, y_pt)
 
         # Optional cover as the section's first page; content then starts on the
         # next page (skipped when there is nothing to render, so a cover-only
         # section is a single page). Otherwise draw chrome for the first content
         # page directly.
         if plan.cover is not None:
-            self._draw_cover(c, plan.cover, plan.footer_label, page_num, scale, y_pt)
+            self._draw_cover(c, plan.cover, plan.header_text, plan.footer_label, page_num, scale, y_pt)
             if plan.blocks:
                 new_page()
         else:
-            self._draw_chrome(c, page_num, plan.footer_label, scale, y_pt)
+            self._draw_chrome(c, page_num, plan.header_text, plan.footer_label, scale, y_pt)
 
         used = 0.0  # px consumed in the content area of the current page
 
-        header_px = _header_height_px(plan.header_text)
-        if header_px:
-            self._draw_header(c, plan.header_text, scale, y_pt)
-            used = header_px
+        instructions_px = _instructions_height_px(plan.additional_instructions)
+        if instructions_px:
+            self._draw_instructions(c, plan.additional_instructions, scale, y_pt)
+            used = instructions_px
 
         for block in plan.blocks:
             # Start a new page only if the block's first page (plus its credit
@@ -374,11 +397,11 @@ class LayoutEngine:
         """Whether this block gets a provenance credit line drawn above it."""
         return self.show_credit and bool(block.source_label)
 
-    def _draw_chrome(self, c, page_num, footer_label, scale, y_pt) -> None:
-        """Draw the page furniture: purple rule lines, logo, website, footer
-        label, and page number. Called once per page (page 1 restarts each
-        section, so combined PDFs number the question and answer papers 1..N
-        independently)."""
+    def _draw_chrome(self, c, page_num, header_text, footer_label, scale, y_pt) -> None:
+        """Draw the page furniture: purple rule lines, logo, the right-aligned
+        header on the top rule, the flush-left footer label, and the page number.
+        Called once per page (page 1 restarts each section, so combined PDFs
+        number the question and answer papers 1..N independently)."""
         left = _MARGIN_X_PX * scale
         right = (PAGE_W_PX - _MARGIN_X_PX) * scale
 
@@ -404,25 +427,41 @@ class LayoutEngine:
                 mask="auto",
             )
 
-        # Website centered on the header rule; footer label + page number below
-        # the footer rule.
+        # Header right-aligned on the top rule; footer label flush-left and the
+        # page number flush-right below the footer rule.
         c.setFillGray(0)
+        self._draw_page_header(c, header_text, right, scale, y_pt)
         c.setFont(_CHROME_FONT, _CHROME_FONT_PX * scale)
-        cx = PAGE_W_PX / 2 * scale
-        website_baseline = y_pt(_HEADER_LINE_Y_PX - 15)
-        c.drawCentredString(cx, website_baseline, WEBSITE)
-        w = c.stringWidth(WEBSITE, _CHROME_FONT, _CHROME_FONT_PX * scale)
-        c.linkURL(
-            WEBSITE_URL,
-            (cx - w / 2, website_baseline, cx + w / 2, website_baseline + _CHROME_FONT_PX * scale),
-            relative=0,
-        )
         footer_baseline = y_pt(_FOOTER_LINE_Y_PX + _CHROME_FONT_PX + 20)
         if footer_label:
-            c.drawCentredString(PAGE_W_PX / 2 * scale, footer_baseline, footer_label)
+            c.drawString(left, footer_baseline, footer_label)
         c.drawRightString(right, footer_baseline, f"Page {page_num}")
 
-    def _draw_cover(self, c, cover, footer_label, page_num, scale, y_pt) -> None:
+    def _draw_page_header(self, c, header_text, right, scale, y_pt) -> None:
+        """Draw the admin-configured header right-aligned on the top rule.
+
+        Lines stack upward so the *last* line sits on the rule (matching the
+        website's former baseline). Any web-address token is turned into a
+        clickable link positioned within its right-aligned line."""
+        if not header_text:
+            return
+        lines = header_text.splitlines() or [header_text]
+        font_pt = _CHROME_FONT_PX * scale
+        c.setFont(_CHROME_FONT, font_pt)
+        for i, line in enumerate(reversed(lines)):
+            baseline = y_pt(_HEADER_LINE_Y_PX - 15 - i * _CHROME_HEADER_LINE_PX)
+            c.drawRightString(right, baseline, line)
+            line_left = right - c.stringWidth(line, _CHROME_FONT, font_pt)
+            for m in _URL_TOKEN.finditer(line):
+                x0 = line_left + c.stringWidth(line[: m.start()], _CHROME_FONT, font_pt)
+                x1 = line_left + c.stringWidth(line[: m.end()], _CHROME_FONT, font_pt)
+                c.linkURL(
+                    _link_target(m.group()),
+                    (x0, baseline, x1, baseline + font_pt),
+                    relative=0,
+                )
+
+    def _draw_cover(self, c, cover, header_text, footer_label, page_num, scale, y_pt) -> None:
         """Render the branded cover page: logo, title, subtitles, the letter
         paragraph, a marks box top-right, a copyright line, and the standard
         page chrome. Drawn as the section's first page."""
@@ -488,7 +527,7 @@ class LayoutEngine:
         c.setFont(_HEADER_FONT, _COVER_COPYRIGHT_FONT_PX * scale)
         c.drawCentredString(cx, y_pt(_CONTENT_BOTTOM_PX - 20), _COVER_COPYRIGHT)
 
-        self._draw_chrome(c, page_num, footer_label, scale, y_pt)
+        self._draw_chrome(c, page_num, header_text, footer_label, scale, y_pt)
 
     def _draw_marks_box(self, c, total_marks, scale, y_pt) -> None:
         """A bordered score box top-right of the cover: ``____ / {total}``."""
@@ -511,10 +550,10 @@ class LayoutEngine:
             f"______ / {total_marks}",
         )
 
-    def _draw_header(self, c, header_text, scale, y_pt) -> None:
+    def _draw_instructions(self, c, additional_instructions, scale, y_pt) -> None:
         c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)
         top = _CONTENT_TOP_PX + _HEADER_FONT_PX
-        for line in (header_text.splitlines() or [header_text]):
+        for line in (additional_instructions.splitlines() or [additional_instructions]):
             c.drawString(_LEFT_MARGIN_PX * scale, y_pt(top), line)
             top += _HEADER_LINE_PX
 

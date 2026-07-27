@@ -112,8 +112,11 @@ class CoverTitle(Base):
 
 class GenerationConfig(Base):
     """Singleton row (id=1) of admin-set paper-generation presets. Non-admin
-    generations always use the cover body / header / footer stored here; the
-    subtitle placeholders are the grey hint text shown in the Generate form."""
+    generations always use the cover body / header / additional instructions /
+    footer stored here; the subtitle placeholders are the grey hint text shown
+    in the Generate form. ``header_text`` is the branding drawn right-aligned on
+    the top rule of every page; ``additional_instructions`` is the exam
+    instructions drawn below the top rule on the first page."""
 
     __tablename__ = "generation_config"
     __table_args__ = (CheckConstraint("id = 1", name="ck_generation_config_singleton"),)
@@ -123,6 +126,7 @@ class GenerationConfig(Base):
     subtitle2_placeholder: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     cover_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     header_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    additional_instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
     footer_text: Mapped[str] = mapped_column(String(255), nullable=False, default="")
 
 

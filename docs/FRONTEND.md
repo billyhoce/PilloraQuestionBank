@@ -223,16 +223,17 @@ scrolls the sidebar rather than the page.
 
 ### Generate PDF (right)
 
-The cover/header/footer controls are **role-aware** (`useAuth()`), driven by the admin-set
-generation config fetched once from `GET /api/generation-config` (titles, subtitle placeholders,
-and the preset body/header/footer — see [Generation Config](#generation-config) below and
+The cover / instructions / footer controls are **role-aware** (`useAuth()`), driven by the
+admin-set generation config fetched once from `GET /api/generation-config` (titles, subtitle
+placeholders, and the preset body / header / additional instructions / footer — see
+[Generation Config](#generation-config) below and
 [BACKEND.md](./BACKEND.md#generation-config--cover-titles-implemented)):
 
 - **Non-admin users** always generate with a cover page (no checkbox). They pick the **title**
   from a `<select>` of the configured cover titles (defaults to the first; disabled when the list
   is empty) and may fill the free-text **subtitle 1 / subtitle 2** inputs, whose grey placeholder
-  text comes from the config. There is **no** body editor, header, or footer control — the server
-  stamps the config presets on their PDFs, which they first see in the download. Their request
+  text comes from the config. There is **no** body editor, instructions, or footer control — the
+  server stamps the config presets on their PDFs, which they first see in the download. Their request
   carries only `question_ids, variant, cover_title, cover_subtitle1, cover_subtitle2`.
 - **Admins** keep the full controls: an **"Include cover page"** checkbox (on by default), a title
   `<select>` of the configured titles plus a **"Custom…"** option revealing a free-text input, the
@@ -242,21 +243,22 @@ and the preset body/header/footer — see [Generation Config](#generation-config
   supports: paragraphs plus **bold / italic / underline / link** (a small toolbar; link URLs via
   prompt) — headings, lists, etc. are disabled. `cover_body` is sent as HTML and sanitized
   server-side (`app/pdf/cover_body.py`); links come out clickable in the PDF. Admin requests carry
-  the full field set including `include_cover`, `cover_body`, `header_text`, and `footer_text`.
+  the full field set including `include_cover`, `cover_body`, `additional_instructions`, and
+  `footer_text`. The page-header branding is config-only — there is no per-generation field for it.
 - If the config fetch fails, the fields are simply omitted from the request so the server-side
   presets (and the first-title fallback) still apply. Cover fields are sent on **every** call (the
   answer PDF's cover reads "Answers"). The cover's marks box is filled server-side from the
   selected questions' total.
-- **Admin only:** an optional **header / instructions** `<textarea>` printed on the first page of
+- **Admin only:** an optional **additional instructions** `<textarea>` printed on the first page of
   the question PDF, and a **footer** input printed verbatim under the footer rule of every page —
   both prefilled from the config presets.
 - A **"Download as"** radio selector chooses the output mode, defaulting to **1 combined PDF**:
   - **Combined (default):** one call to `api.generate.paper` with `variant: "combined"` (and
-    `header_text`) — question paper first, answer paper appended behind it, downloaded as the
-    `Paper` type.
+    `additional_instructions`) — question paper first, answer paper appended behind it, downloaded
+    as the `Paper` type.
   - **Separate:** calls `api.generate.paper` **twice in parallel** — `variant: "question"` (with
-    `header_text`) and `variant: "answer"` — downloaded as the `Questions` and `Answers` types (a
-    short gap between the two so browsers don't drop the second download).
+    `additional_instructions`) and `variant: "answer"` — downloaded as the `Questions` and `Answers`
+    types (a short gap between the two so browsers don't drop the second download).
 - Each call returns a PDF `Blob` (a binary fetch that bypasses the JSON-only `request` helper) and
   auto-downloads via a local `downloadBlob` helper.
 
@@ -309,7 +311,9 @@ the presets applied to every non-admin generation (see
   can also type a custom title during generation.
 - **Generation Presets** form — **subtitle 1 / subtitle 2 placeholders** (the grey hint text in
   the Generate form), the **cover body** (same `CoverBodyEditor` as the Generate page), the
-  **header / instructions**, and the **footer**. Saved via `PUT /api/generation-config`
+  **header** (branding drawn right-aligned on the top rule of every page — multi-line, with any web
+  address auto-linked), the **additional instructions** (below the top rule on the question paper),
+  and the **footer**. Saved via `PUT /api/generation-config`
   (`api.generationConfig.update`) with an inline success/error notice.
 
 ## Auth UI

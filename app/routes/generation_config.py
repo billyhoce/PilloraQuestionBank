@@ -33,6 +33,7 @@ def _config_response(db: Session) -> GenerationConfigResponse:
         subtitle2_placeholder=cfg.subtitle2_placeholder,
         cover_body=cfg.cover_body,
         header_text=cfg.header_text,
+        additional_instructions=cfg.additional_instructions,
         footer_text=cfg.footer_text,
     )
 
@@ -59,6 +60,7 @@ def update_generation_config(
     cfg.subtitle2_placeholder = payload.subtitle2_placeholder
     cfg.cover_body = payload.cover_body
     cfg.header_text = payload.header_text
+    cfg.additional_instructions = payload.additional_instructions
     cfg.footer_text = payload.footer_text
     db.flush()
     return _config_response(db)

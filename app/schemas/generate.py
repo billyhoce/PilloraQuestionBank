@@ -57,14 +57,16 @@ class GeneratePaperRequest(BaseModel):
     verbatim under the footer rule of every page.
 
     Only admins control all of these: for non-admin users the server forces
-    ``include_cover=True`` and replaces ``cover_body``/``header_text``/
-    ``footer_text`` with the admin-set generation config, and ``cover_title``
-    must be one of the configured cover titles (see app/routes/generate.py).
+    ``include_cover=True`` and replaces
+    ``cover_body``/``additional_instructions``/``footer_text`` with the admin-set
+    generation config, and ``cover_title`` must be one of the configured cover
+    titles (see app/routes/generate.py). The page-header branding always comes
+    from the generation config; there is no per-generation override for it.
     """
 
     question_ids: list[int] = Field(min_length=1)  # empty -> 422
     variant: Literal["question", "answer", "combined"] = "question"
-    header_text: str = ""
+    additional_instructions: str = ""
     footer_text: str = ""
     include_cover: bool = True
     cover_title: str = ""

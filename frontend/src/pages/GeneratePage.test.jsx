@@ -54,6 +54,7 @@ const CONFIG = {
   subtitle2_placeholder: 'eg) subtitle 2',
   cover_body: '<p>Dear students,</p><p>Practise well.</p>',
   header_text: 'Config header',
+  additional_instructions: 'Config instructions',
   footer_text: 'Config footer',
 }
 
@@ -194,14 +195,14 @@ describe('GeneratePage cover controls (admin)', () => {
     globalThis.URL.revokeObjectURL = vi.fn()
   })
 
-  it('prefills body, header, and footer from the config', async () => {
+  it('prefills body, instructions, and footer from the config', async () => {
     render(
       <MemoryRouter>
         <GeneratePage />
       </MemoryRouter>
     )
     expect(await screen.findByDisplayValue(CONFIG.cover_body)).toBeInTheDocument()
-    expect(screen.getByLabelText(/header \/ instructions/i)).toHaveValue('Config header')
+    expect(screen.getByLabelText(/additional instructions/i)).toHaveValue('Config instructions')
     expect(screen.getByLabelText(/footer/i)).toHaveValue('Config footer')
     expect(screen.getByRole('checkbox', { name: /include cover page/i })).toBeChecked()
   })
@@ -214,7 +215,7 @@ describe('GeneratePage cover controls (admin)', () => {
     expect(api.generate.paper).toHaveBeenCalledWith({
       question_ids: [1],
       variant: 'combined',
-      header_text: 'Config header',
+      additional_instructions: 'Config instructions',
       footer_text: 'Config footer',
       include_cover: true,
       cover_title: 'Topical Worksheets',
@@ -224,7 +225,7 @@ describe('GeneratePage cover controls (admin)', () => {
     })
   })
 
-  it('separate mode sends the header only on the question request', async () => {
+  it('separate mode sends the instructions only on the question request', async () => {
     const user = await renderWithCartItem()
     await screen.findByDisplayValue(CONFIG.cover_body)
     await user.click(screen.getByRole('radio', { name: /separate question & answer/i }))
@@ -232,9 +233,9 @@ describe('GeneratePage cover controls (admin)', () => {
     await waitFor(() => expect(api.generate.paper).toHaveBeenCalledTimes(2))
     const [[questionBody], [answerBody]] = api.generate.paper.mock.calls
     expect(questionBody.variant).toBe('question')
-    expect(questionBody.header_text).toBe('Config header')
+    expect(questionBody.additional_instructions).toBe('Config instructions')
     expect(answerBody.variant).toBe('answer')
-    expect(answerBody.header_text).toBe('')
+    expect(answerBody.additional_instructions).toBe('')
   })
 
   it('allows a free-text title via the Custom… option', async () => {

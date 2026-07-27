@@ -127,9 +127,11 @@ POST   /api/generate/select      -- auto-select a set of questions for a target.
                                     total_marks, count, exact, warning }.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
-                                    "question"|"answer"|"combined", header_text,
-                                    footer_text, include_cover, cover_title,
-                                    cover_subtitle1, cover_subtitle2, cover_body }.
+                                    "question"|"answer"|"combined",
+                                    additional_instructions, footer_text,
+                                    include_cover, cover_title, cover_subtitle1,
+                                    cover_subtitle2, cover_body }. The page-header
+                                    branding is config-only (no per-request field).
                                     "combined" returns one PDF with the answer
                                     paper appended after the question paper.
                                     Each page carries branded header/footer chrome;
@@ -145,7 +147,9 @@ non-admin users (`public` and `premium`) the admin-set [generation config](#gene
 wins (`_resolve_generation_options` in `app/routes/generate.py`):
 
 - `include_cover` is forced to `true` — users always get a cover page.
-- `cover_body`, `header_text`, and `footer_text` are replaced with the config presets.
+- `cover_body`, `additional_instructions`, and `footer_text` are replaced with the config presets.
+- The page-header branding (`header_text`) always comes from the config — it is page furniture,
+  so even admins can't override it per generation.
 - `cover_title` must be one of the configured cover titles: an unknown title -> `400`
   (a hand-crafted POST can't bypass the dropdown); an empty/omitted title falls back to
   the **first** configured title; with no titles configured the cover is untitled.
@@ -191,7 +195,8 @@ the seeded defaults, so the app self-heals on an unseeded database).
 GET    /api/generation-config    -- any authenticated user. Returns { titles: [{id, name}] (id
                                     order — the first is the non-admin dropdown default),
                                     subtitle1_placeholder, subtitle2_placeholder, cover_body,
-                                    header_text, footer_text }. Nothing here is secret (every
+                                    header_text, additional_instructions, footer_text }. Nothing
+                                    here is secret (every
                                     value is printed in the PDFs users generate); writes are
                                     what's restricted.
 PUT    /api/generation-config    -- admin. Replaces the five preset fields; returns the GET shape.
@@ -291,8 +296,8 @@ answer pages. There is no server-side autofill-at-generate: the selection is alr
   answer keeps the number of its question. For `variant="answer"`, a question with no answer pages
   is **skipped**, but its number stays reserved so the remaining answers still match the question
   paper.
-- `header_text` is printed only on the question variant (in `combined`, only on the question
-  section's first page).
+- `additional_instructions` is printed only on the question variant (in `combined`, only on the
+  question section's first page). The `header_text` branding rides every page of every variant.
 - Returns `Response(pdf, media_type="application/pdf")`. Empty `question_ids` → 422 (schema).
 
 ### Layout engine (`app/pdf/layout_engine.py`)
@@ -325,7 +330,7 @@ fetch_bytes)` draws a plan onto an existing ReportLab canvas (ending on a fresh 
 `render_combined(sections, fetch_bytes)` takes `(engine, plan)` pairs and renders them into one
 PDF — how the `combined` variant appends the answer paper after the question paper.
 
-- `compute_layout(blocks, header_text="") -> LayoutPlan`: greedy **packing** — keeps a running
+- `compute_layout(blocks, additional_instructions="") -> LayoutPlan`: greedy **packing** — keeps a running
   cursor and places each block (one question's pages for this variant) on the current page. A block
   starts a new page only when its **first page-image** (plus its credit band) won't fit in the space
   left — so a multi-page question packs its first page onto the current page when there is room and
@@ -335,7 +340,9 @@ PDF — how the `combined` variant appends the answer paper after the question p
   with a page-tall image clamped to `page_capacity_px` (`_page_height_px`); the block-start test uses
   `_first_unit_height_px` (credit band + first page) plus `block_gap_px`, and each subsequent page in
   the block adds `intra_gap_px` before its fit test — so the inter-question and intra-question pads
-  are honoured when packing. Header height is reserved on the first page. The walk mirrors
+  are honoured when packing. The `additional_instructions` band height is reserved on the first page
+  (`_instructions_height_px`); the `header_text` branding sits in the top margin and consumes no
+  content capacity. The walk mirrors
   `render_onto`'s per-image flow, so `page_count` counts multi-page overflow pages too (render remains
   authoritative).
 - `render(plan, fetch_bytes) -> bytes`: **ReportLab** canvas at A4, scaling px→points. For each
@@ -347,7 +354,7 @@ PDF — how the `combined` variant appends the answer paper after the question p
   bytes and vice-versa, so no image is fetched twice across the two requests.
 
 Dataclasses: `Block(label, source_label, pages, page_index)`,
-`LayoutPlan(page_count, blocks, header_text, footer_label, cover)`, and
+`LayoutPlan(page_count, blocks, header_text, additional_instructions, footer_label, cover)`, and
 `CoverSpec(title, subtitle1, subtitle2, body, total_marks, is_questions)`.
 
 **Per-question source credit (`show_credit`):** on the question paper, each block is drawn with a
@@ -376,17 +383,20 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
   `_draw_chrome` offsets the padded box by it, keeping the mark on the line for any future
   padded asset. The asset is **optional**: if absent/unreadable the page renders without it (no
   error).
-- **Website** (`WEBSITE = www.pillora.com.sg`) centered on the header rule, with a clickable
-  link annotation (`canvas.linkURL`) pointing at `WEBSITE_URL`.
-- **Footer label** (`LayoutPlan.footer_label`) centered under the footer rule, plus **`Page {n}`**
+- **Header** (`LayoutPlan.header_text`, the admin-configured branding) drawn **right-aligned on the
+  header rule** by `_draw_page_header`. Lines stack **upward** so the *last* line sits on the rule;
+  any web-address token (`_URL_TOKEN`) is auto-linked via `canvas.linkURL` to its normalized
+  `https://…` target. An empty header draws nothing. The default preset is the two-line
+  Pillora/Telegram tagline (`DEFAULT_HEADER_TEXT`).
+- **Footer label** (`LayoutPlan.footer_label`) **flush-left** under the footer rule, plus **`Page {n}`**
   bottom-right. The route sets the footer label to the resolved `footer_text` **verbatim** —
   admins' request field, or the generation-config preset for non-admins. The same text appears on
   every section (the old subtitle2-derived `"… Questions"` / `"… Answers"` labels are gone —
   identical footers on the question and answer sections are intentional).
 
 Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined`
-PDF the question and answer papers number independently. The free-text `header_text` instructions
-still render on the first content page, below the header rule.
+PDF the question and answer papers number independently. The free-text `additional_instructions`
+still render on the first content page, below the header rule (drawn by `_draw_instructions`).
 
 ### Cover page
 
