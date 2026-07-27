@@ -72,7 +72,10 @@ QuestionSubtopic: {
 User: {
   id,
   email (unique),
-  password_hash,
+  first_name,                                -- '' for accounts predating the field
+  last_name,                                 -- '' for accounts predating the field
+  password_hash (nullable),                  -- NULL for accounts created via Google
+  google_sub (unique, nullable),             -- Google's 'sub' claim; set once linked to Google
   role ENUM('admin', 'public', 'premium'),   -- 'public' is shown as "Normal" in the UI
   created_at
 }
@@ -104,6 +107,29 @@ self-serve payment yet — the Subscribe page is a stub). A paper flagged
 `is_premium = true` is gated: only `admin` and `premium` users may view its question
 images or generate papers from its questions. Non-premium (and anonymous) users still
 see the question tiles and all metadata, but the backend withholds the image URLs.
+
+**Names.** `first_name` / `last_name` are `NOT NULL DEFAULT ''`. Manual registration requires both
+(non-blank, ≤100 chars); Google supplies them from `given_name` / `family_name`, which it does not
+always send. Rows created before this field existed keep `''`, so the UI falls back to the email
+address wherever a name is displayed (`frontend/src/utils/userName.js`).
+
+**Google-linked accounts.** `google_sub` holds Google's `sub` claim — unique per Google account and
+stable even if the user changes the email address on it, which is why sign-in matches on it rather
+than on email. An account may have a password, a Google link, or both:
+
+| `password_hash` | `google_sub` | How it was created |
+|---|---|---|
+| set | NULL | Manual registration |
+| NULL | set | First sign-in with Google |
+| set | set | Registered manually, later signed in with Google on the same verified address |
+
+The third row is produced by **auto-linking**: when Google reports `email_verified = true` for an
+address that already has an account, that account gains the `google_sub` and keeps its existing
+`role` — Google has proven ownership of the address, so this is safe, and it avoids a duplicate
+account. Both sign-in methods then work. Blank names are backfilled from Google at that point, but
+a name the user typed is never overwritten. `password_hash` is nullable purely to represent the
+second row; `verify_password` rejects a NULL/empty hash, so a Google-only account cannot be
+password-logged-in.
 
 ## Image Storage Conventions
 

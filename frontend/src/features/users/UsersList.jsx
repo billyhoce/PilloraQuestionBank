@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import { useAuth } from '../../context/AuthContext'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
+import { fullName } from '../../utils/userName'
 
 // The stored role value 'public' is shown as "Normal" in the UI; 'premium' and
 // 'admin' map to themselves.
@@ -60,6 +61,7 @@ export default function UsersList() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tier</th>
             </tr>
@@ -70,9 +72,10 @@ export default function UsersList() {
               return (
                 <tr key={u.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm text-gray-900">
-                    {u.email}
+                    {fullName(u) || <span className="text-gray-400">—</span>}
                     {isSelf && <span className="ml-2 text-xs text-gray-400">(you)</span>}
                   </td>
+                  <td className="px-4 py-3 text-sm text-gray-900">{u.email}</td>
                   <td className="px-4 py-3 text-sm">
                     <select
                       value={u.role}

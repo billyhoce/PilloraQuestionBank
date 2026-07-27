@@ -10,6 +10,8 @@ VALID_ROLES = ("admin", "public", "premium")
 class UserListItem(BaseModel):
     id: int
     email: str
+    first_name: str
+    last_name: str
     role: str
     created_at: datetime
 

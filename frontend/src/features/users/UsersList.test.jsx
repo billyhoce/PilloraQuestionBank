@@ -11,8 +11,10 @@ vi.mock('../../api/client', () => ({
 vi.mock('../../context/AuthContext', () => ({ useAuth: vi.fn() }))
 
 const users = [
-  { id: 1, email: 'admin@test.com', role: 'admin', created_at: '2026-01-01T00:00:00Z' },
-  { id: 2, email: 'user@test.com', role: 'public', created_at: '2026-01-02T00:00:00Z' },
+  { id: 1, email: 'admin@test.com', first_name: 'Al', last_name: 'Min', role: 'admin', created_at: '2026-01-01T00:00:00Z' },
+  { id: 2, email: 'user@test.com', first_name: 'Ada', last_name: 'Lovelace', role: 'public', created_at: '2026-01-02T00:00:00Z' },
+  // Predates the name fields — the table must still render the row.
+  { id: 3, email: 'legacy@test.com', first_name: '', last_name: '', role: 'premium', created_at: '2026-01-03T00:00:00Z' },
 ]
 
 describe('UsersList', () => {
@@ -27,6 +29,18 @@ describe('UsersList', () => {
     render(<UsersList />)
     expect(await screen.findByText('user@test.com')).toBeInTheDocument()
     expect(screen.getByText('admin@test.com')).toBeInTheDocument()
+  })
+
+  it('lists users with their name', async () => {
+    render(<UsersList />)
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText('Al Min')).toBeInTheDocument()
+  })
+
+  it('shows a dash for accounts with no name on file', async () => {
+    render(<UsersList />)
+    await screen.findByText('legacy@test.com')
+    expect(screen.getByText('—')).toBeInTheDocument()
   })
 
   it('calls updateRole when a tier is changed', async () => {

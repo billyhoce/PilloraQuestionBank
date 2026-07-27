@@ -21,7 +21,11 @@ Papers carry an `is_premium` flag; their images/questions are gated to premium &
 Premium is granted by an admin via the User Management page — the Subscribe page is a payment
 stub for now.
 
-Auth is email/password with bcrypt hashing. Session-based or JWT. No OAuth in v1.
+Users hold a first name, last name and email address. Accounts are created either manually
+(email + password, bcrypt-hashed) or with **Google OAuth 2.0** — a server-side authorization-code
+flow; the browser never handles the client ID, the client secret or any Google token. Signing in
+with Google on an address that already has a password account links the two, keeping the existing
+role. Either way the session is a JWT in an httpOnly cookie.
 
 ## Tech Stack (Summary)
 
@@ -87,5 +91,6 @@ Every new feature or behavior change must, **in the same change**:
 - OCR for full-text search within questions
 - Difficulty rating / analytics per topic
 - Student-facing mode (practice tests, tracking)
-- OAuth / social login
+- Social login beyond Google (Facebook, Apple, …)
+- Self-service profile editing / password reset
 - CDN for image delivery

@@ -78,8 +78,11 @@ export const api = {
   auth: {
     me: () => request('GET', '/api/auth/me'),
     login: (email, password) => request('POST', '/api/auth/login', { email, password }),
-    register: (email, password) => request('POST', '/api/auth/register', { email, password }),
+    // payload: { first_name, last_name, email, password }
+    register: (payload) => request('POST', '/api/auth/register', payload),
     logout: () => request('POST', '/api/auth/logout'),
+    // Which third-party sign-in methods this deployment has configured.
+    providers: () => request('GET', '/api/auth/providers'),
   },
 
   users: {

@@ -21,7 +21,10 @@ function renderMenu() {
 describe('UserMenu dropdown', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useAuth.mockReturnValue({ user: { email: 'user@example.com', role: 'public' }, logout })
+    useAuth.mockReturnValue({
+      user: { email: 'user@example.com', first_name: '', last_name: '', role: 'public' },
+      logout,
+    })
   })
 
   it('hides Log out until the account button is clicked', async () => {
@@ -54,5 +57,28 @@ describe('UserMenu dropdown', () => {
     await user.click(screen.getByRole('button', { name: /user@example\.com/ }))
     await user.click(screen.getByText('outside'))
     expect(screen.queryByRole('menuitem', { name: 'Log out' })).not.toBeInTheDocument()
+  })
+})
+
+describe('UserMenu account label', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('shows the user name when one is on file', () => {
+    useAuth.mockReturnValue({
+      user: { email: 'ada@example.com', first_name: 'Ada', last_name: 'Lovelace', role: 'public' },
+      logout,
+    })
+    renderMenu()
+    expect(screen.getByRole('button', { name: /Ada Lovelace/ })).toBeInTheDocument()
+    expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the email for accounts with no name', () => {
+    useAuth.mockReturnValue({
+      user: { email: 'ada@example.com', first_name: '', last_name: '', role: 'public' },
+      logout,
+    })
+    renderMenu()
+    expect(screen.getByRole('button', { name: /ada@example\.com/ })).toBeInTheDocument()
   })
 })

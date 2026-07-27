@@ -32,6 +32,12 @@ def test_verify_password_incorrect():
     assert verify_password("wrong", hashed) is False
 
 
+@pytest.mark.parametrize("hashed", [None, ""])
+def test_verify_password_rejects_missing_hash(hashed):
+    """Google-only accounts store no password_hash — reject rather than raise."""
+    assert verify_password("anything", hashed) is False
+
+
 def test_create_access_token_contains_subject_and_exp():
     token = create_access_token({"sub": "42"})
     payload = decode_access_token(token)
@@ -65,29 +71,71 @@ def test_decode_tampered_token():
 # ---------------------------------------------------------------------------
 
 
+def _register_payload(**overrides):
+    payload = {
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "email": "new@example.com",
+        "password": "Secure123!",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_register_success(client):
-    resp = client.post("/api/auth/register", json={"email": "new@example.com", "password": "Secure123!"})
+    resp = client.post("/api/auth/register", json=_register_payload())
     assert resp.status_code == 201
     body = resp.json()
     assert body["email"] == "new@example.com"
+    assert body["first_name"] == "Ada"
+    assert body["last_name"] == "Lovelace"
     assert "password_hash" not in body
     assert "password" not in body
 
 
+def test_register_reports_password_account_not_google(client):
+    resp = client.post("/api/auth/register", json=_register_payload())
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["has_password"] is True
+    assert body["has_google"] is False
+
+
+def test_register_trims_surrounding_whitespace_from_names(client):
+    resp = client.post("/api/auth/register", json=_register_payload(first_name="  Ada  ", last_name=" Lovelace "))
+    assert resp.status_code == 201
+    assert resp.json()["first_name"] == "Ada"
+    assert resp.json()["last_name"] == "Lovelace"
+
+
+@pytest.mark.parametrize("field", ["first_name", "last_name"])
+def test_register_blank_name_returns_422(client, field):
+    resp = client.post("/api/auth/register", json=_register_payload(**{field: "   "}))
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["first_name", "last_name"])
+def test_register_missing_name_returns_422(client, field):
+    payload = _register_payload()
+    del payload[field]
+    resp = client.post("/api/auth/register", json=payload)
+    assert resp.status_code == 422
+
+
 def test_register_duplicate_email_returns_409(client):
-    payload = {"email": "dup@example.com", "password": "Secure123!"}
+    payload = _register_payload(email="dup@example.com")
     client.post("/api/auth/register", json=payload)
     resp = client.post("/api/auth/register", json=payload)
     assert resp.status_code == 409
 
 
 def test_register_invalid_email_returns_422(client):
-    resp = client.post("/api/auth/register", json={"email": "notanemail", "password": "Secure123!"})
+    resp = client.post("/api/auth/register", json=_register_payload(email="notanemail"))
     assert resp.status_code == 422
 
 
 def test_register_short_password_returns_422(client):
-    resp = client.post("/api/auth/register", json={"email": "ok@example.com", "password": "short"})
+    resp = client.post("/api/auth/register", json=_register_payload(password="short"))
     assert resp.status_code == 422
 
 
@@ -98,7 +146,7 @@ def test_register_short_password_returns_422(client):
     "Secure1234",    # no special character
 ])
 def test_register_weak_password_returns_422(client, password):
-    resp = client.post("/api/auth/register", json={"email": "ok@example.com", "password": password})
+    resp = client.post("/api/auth/register", json=_register_payload(password=password))
     assert resp.status_code == 422
 
 

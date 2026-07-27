@@ -13,7 +13,8 @@ def test_list_users_admin_only(admin_client, public_user, premium_user):
     assert {"admin@test.com", "user@test.com", "premium@test.com"} <= emails
     # Every row exposes the fields the management UI needs.
     row = resp.json()["data"][0]
-    assert set(row) >= {"id", "email", "role", "created_at"}
+    assert set(row) >= {"id", "email", "first_name", "last_name", "role", "created_at"}
+    assert "password_hash" not in row
 
 
 def test_list_users_forbidden_for_public(public_client):

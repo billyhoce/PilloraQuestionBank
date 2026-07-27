@@ -14,7 +14,11 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
-def verify_password(password: str, hashed: str) -> bool:
+def verify_password(password: str, hashed: Optional[str]) -> bool:
+    # Google-only accounts have no password_hash; bcrypt.checkpw raises on an
+    # empty/malformed hash, so reject those up front rather than 500-ing.
+    if not hashed:
+        return False
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
