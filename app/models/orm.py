@@ -136,7 +136,13 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
+    last_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
+    # Null for accounts created via Google — they have no password to verify.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Google's stable subject id. Set once an account signs in with Google; we key
+    # off this rather than email, which a Google account can change.
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False, server_default="public")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

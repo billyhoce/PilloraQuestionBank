@@ -118,10 +118,19 @@ def client(db_session):
 # ---------------------------------------------------------------------------
 
 
-def _create_user(db_session: Session, email: str, password: str, role: str) -> User:
+def _create_user(
+    db_session: Session,
+    email: str,
+    password: str,
+    role: str,
+    first_name: str = "Test",
+    last_name: str = "User",
+) -> User:
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=4)).decode()
     user = User(
         email=email,
+        first_name=first_name,
+        last_name=last_name,
         password_hash=hashed,
         role=role,
         created_at=datetime.now(UTC),

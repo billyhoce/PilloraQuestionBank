@@ -52,9 +52,10 @@ user's role — there is no "Admin" button to unlock it:
   Generation Config (`/admin/generation-config`).
 - **Normal (`public`) users:** a **⭐ Go Premium** link (to `/subscribe`) appears at the top
   right. Premium and admin users don't see it.
-- **Top right:** signed-in users get an account button (their email) opening a dropdown
-  (`<UserMenu />`) with **Log out** (closes on outside click / Escape; logging out returns to
-  `/`). Signed-out visitors see a **Log in** link instead.
+- **Top right:** signed-in users get an account button (their name, or their email when no name is
+  on file — see [Displaying the user](#displaying-the-user)) opening a dropdown (`<UserMenu />`)
+  with **Log out** (closes on outside click / Escape; logging out returns to `/`). Signed-out
+  visitors see a **Log in** link instead.
 
 ## Premium paywall (UI)
 
@@ -295,9 +296,11 @@ A simple management surface — list / create / edit / delete — for each of:
 - Topics (scoped to a Subject + Stream; includes `topic_number` and a nested editor for Subtopics)
 
 ### User Management
-- List users.
-- Promote/demote between `public` and `admin`.
-- Delete accounts.
+- List users — **Name**, Email and Tier columns. The Name column shows `first_name last_name`, or a
+  dash for accounts with neither on file (`fullName` in `utils/userName.js`).
+- Change a user's tier between the three roles via the per-row select (see
+  [Premium paywall (UI)](#premium-paywall-ui) for the details and the disabled own-row rule).
+- There is no delete-account flow — the backend exposes no such endpoint.
 
 ### Generation Config
 
@@ -324,3 +327,37 @@ the presets applied to every non-admin generation (see
   to `/`** (Question Bank).
 - Role-aware routing: redirect non-admins away from `/admin/*`.
 - Persist session in `httpOnly` cookie (set by backend) — no token handling in JS.
+
+### Two ways in
+
+Both pages offer a manual form and a Google button; the user picks either.
+
+- **Register** (`pages/RegisterPage.jsx`) collects **First name, Last name**, Email, Password and
+  Confirm password. Passwords are matched client-side; the strength rules are enforced server-side
+  and only described in hint text. On success it redirects to `/login` (it does not auto-authenticate).
+- **Sign in with Google** (`components/GoogleSignInButton.jsx`) is a plain `<a href="/api/auth/google/login">`,
+  **not** a react-router `<Link>` — the flow needs a real browser navigation so the backend can set
+  the `oauth_state` cookie and redirect on to Google. No Google JavaScript, no client ID in the
+  bundle, and consequently **no `VITE_*` env vars anywhere in this app**. Availability comes from
+  `GET /api/auth/providers` at page load; when it reports `google: false` (or the call fails) the
+  button and its "or" divider are hidden.
+- The Google callback finishes with a **full page load** of `/`, so `AuthContext`'s existing
+  `api.auth.me()` on mount picks up the session — no extra client wiring.
+- A failed Google sign-in lands on `/login?error=<code>`. `LoginPage` maps the four backend codes
+  (`google_cancelled`, `google_state_mismatch`, `google_email_unverified`, `google_failed`) to
+  copy shown in the shared `<ErrorBanner />`; an unrecognised code is ignored rather than echoed.
+- **Signing in with a password on a Google-created account** shows *"This account was created with
+  Google. Use \"Sign in with Google\" instead."* in the same banner, with the button right below it.
+  The backend sends this as a `409`, and `friendlyMessage` in `api/client.js` passes a 409 `detail`
+  through verbatim — the generic *"Unknown email or incorrect password"* rewrite applies only to a
+  `401` on `/api/auth/login`.
+
+### Displaying the user
+
+`utils/userName.js` owns the fallback, since accounts predating the name fields (and Google
+accounts that report no given/family name) store empty strings:
+
+- `fullName(user)` → `"First Last"`, or `''`. Used in the admin Users table, where the email is
+  already in its own column.
+- `displayName(user)` → the same, falling back to the **email address**. Used by `<UserMenu />` for
+  the account button.

@@ -160,6 +160,42 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 | `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
 | `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-backups`) |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
+| `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup)) |
+| `GOOGLE_CLIENT_SECRET` | Backend | OAuth client secret. Never reaches the browser |
+| `GOOGLE_REDIRECT_URI` | Backend | `https://questionbank.pillora.com.sg/api/auth/google/callback` — must match a URI registered on the OAuth client exactly |
+
+The three `GOOGLE_*` vars are **optional**: leave them unset and Google sign-in is simply off
+(`GET /api/auth/providers` returns `{"google": false}` and the frontend hides the button). The rest
+of the app is unaffected.
+
+## Google OAuth setup
+
+One-time setup in the [Google Cloud Console](https://console.cloud.google.com). Google Workspace is
+**not** required — a plain free Google Cloud project is enough.
+
+1. **Create a project** — project picker → **New Project** → e.g. `Pillora Question Bank`.
+2. **Configure the OAuth consent screen** — APIs & Services → **OAuth consent screen**, user type
+   **External**.
+   - App name `Pillora Question Bank`; user-support and developer-contact email addresses.
+   - Authorized domain: `pillora.com.sg`.
+   - Scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile` — **and nothing
+     else**. All three are non-sensitive, so Google requires no verification review.
+3. **Publish the app.** While it is in "Testing" only explicitly listed test accounts can sign in
+   (100 max). **Publish app** opens it to anyone; with only the scopes above this is immediate.
+4. **Create the OAuth client** — APIs & Services → **Credentials** → **Create credentials** →
+   **OAuth client ID** → **Web application**.
+   - **Authorized JavaScript origins:** leave empty. The server-side flow never uses them.
+   - **Authorized redirect URIs** — these must match `GOOGLE_REDIRECT_URI` byte-for-byte:
+     - `https://questionbank.pillora.com.sg/api/auth/google/callback` (production)
+     - `http://localhost:5173/api/auth/google/callback` (local dev — the Vite dev server proxies
+       `/api` to the backend. Google permits plain `http` only for `localhost`.)
+5. **Store the credentials.** Add the three vars to `/opt/pillora/.env` (`chmod 600`) and restart
+   the API container. For local development put them in the gitignored `.env` with the
+   `localhost:5173` redirect URI. **Nothing goes in GitHub secrets** — like `JWT_SECRET_KEY` and the
+   AWS keys, these live only on the VM.
+
+Rotating the client secret is a console action plus an `/opt/pillora/.env` edit and a container
+restart; no redeploy or migration is involved.
 
 ## Backup Strategy
 

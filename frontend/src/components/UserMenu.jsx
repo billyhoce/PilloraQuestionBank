@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { displayName } from '../utils/userName'
 
-// Top-right account button: shows the user's email and toggles a dropdown
-// holding "Log out". Closes on outside click or Escape.
+// Top-right account button: shows the user's name (or email, for accounts with
+// no name on file) and toggles a dropdown holding "Log out". Closes on outside
+// click or Escape.
 export default function UserMenu() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -41,7 +43,7 @@ export default function UserMenu() {
         onClick={() => setOpen(o => !o)}
         className="flex items-center gap-1.5 text-sm text-gray-700 border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
       >
-        {user?.email}
+        {displayName(user)}
         <span aria-hidden="true" className="text-gray-400 text-xs">▾</span>
       </button>
       {open ? (

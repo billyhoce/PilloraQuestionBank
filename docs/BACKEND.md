@@ -9,7 +9,7 @@
 - **PDF → Image:** **PyMuPDF** (`fitz`), rendered at 300 dpi. *(Not `pdf2image`/Poppler as originally planned — no system dependency required.)*
 - **Image processing:** Pillow (WebP encoder)
 - **PDF generation:** ReportLab (see [Paper Generation Engine](#paper-generation-engine-implemented))
-- **Auth:** bcrypt for password hashing, JWT (httpOnly cookie) via `python-jose`
+- **Auth:** bcrypt for password hashing, JWT (httpOnly cookie) via `python-jose`; Google OAuth 2.0 (server-side authorization-code flow) over `httpx`
 
 ## Project Layout (Actual)
 
@@ -18,7 +18,7 @@ app/
 ├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py, generate.py
 ├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
-├── services/       # business logic — auth.py, ingest.py, generate.py (question selection)
+├── services/       # business logic — auth.py, google_oauth.py, ingest.py, generate.py (question selection)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py (PDF packing + render), sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py (see AI_INTEGRATION.md)
@@ -34,16 +34,44 @@ Note: Pydantic schemas and ORM models live in separate `schemas/` and `models/` 
 ### Auth (Implemented)
 
 ```
-POST   /api/auth/register       -- public registration (always role "public")
-POST   /api/auth/login          -- sets JWT in httpOnly cookie
+POST   /api/auth/register       -- public registration (always role "public").
+                                   Body: { first_name, last_name, email, password }.
+                                   Names are trimmed; blank or >100 chars -> 422.
+POST   /api/auth/login          -- sets JWT in httpOnly cookie. Unknown email and wrong
+                                   password are one generic 401. An account created with
+                                   Google (no password on file) instead gets 409 with a
+                                   "use Sign in with Google" message.
 POST   /api/auth/logout         -- clears cookie
-GET    /api/auth/me             -- returns current authenticated user
+GET    /api/auth/me             -- returns current authenticated user, including
+                                   first_name/last_name and the has_password /
+                                   has_google flags describing how it signs in
+GET    /api/auth/providers      -- { "google": bool } — whether Google sign-in is
+                                   configured on this deployment. Public.
 ```
+
+### Google OAuth 2.0 (Implemented)
+
+```
+GET    /api/auth/google/login    -- 307 to Google's consent screen. Plants a random
+                                    `state` nonce in a 10-minute httpOnly cookie.
+                                    503 if the GOOGLE_* env vars are unset.
+GET    /api/auth/google/callback -- Google redirects the browser here with ?code&state.
+                                    On success: sets the same JWT cookie as /login and
+                                    307s to "/". On failure: 307 to /login?error=<code>,
+                                    where <code> is one of google_cancelled,
+                                    google_state_mismatch, google_email_unverified,
+                                    google_failed.
+```
+
+Both are browser navigations, not XHR — the frontend links to `/api/auth/google/login`
+directly. Failures redirect rather than returning JSON because the user is mid-redirect in
+a browser, where a JSON body would be a dead end. See
+[Auth & Security](#auth--security) for the flow and the account-linking rule.
 
 ### User Management — Admin only (Implemented)
 
 ```
-GET    /api/users               -- list all users (id, email, role, created_at)
+GET    /api/users               -- list all users (id, email, first_name, last_name, role, created_at)
 PATCH  /api/users/{id}/role     -- change a user's tier. Body: { role: "admin"|"public"|"premium" }.
                                    An admin cannot change their own role (400). Unknown user -> 404.
                                    Invalid role value -> 422.
@@ -447,7 +475,12 @@ workflow for verifying layout changes without standing up infrastructure. See
 - **Roles / premium tier:** three tiers — `admin`, `public` ("Normal"), `premium`. `can_view_premium(user)` (in `app/routes/auth.py`) returns true for `admin`/`premium`. `get_current_user_optional` is the non-raising variant used by the public browse endpoints so they can tailor responses to the viewer's tier. Implemented.
 - **Image access:** images are never proxied through the backend — every question/page response embeds an S3 **presigned URL** (`get_presigned_url`), keeping VM bandwidth free for HTML/JSON. The premium paywall works *by withholding this URL*: for a premium paper viewed by a non-entitled user, the backend simply omits `get_presigned_url` and returns `null` + `locked: true`, so the URL never reaches an unauthorized client. Implemented.
 - **Input validation:** all API inputs are Pydantic models (`app/schemas/`), including password-strength validation on registration. Implemented.
-- **CORS:** **not implemented** — no `CORSMiddleware` is registered in `app/main.py`.
+- **Google OAuth 2.0:** server-side **authorization-code** flow, implemented in `app/services/google_oauth.py` (pure helpers) + the two `/api/auth/google/*` routes. Implemented. The browser only ever sees a redirect URL — the client ID, the client secret and every Google token stay on the server, and no Google JavaScript is loaded. Configured by `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI`; when any is unset `is_configured()` is false, `/api/auth/providers` reports `{"google": false}` and the UI hides the button. Scopes are `openid email profile` only — all non-sensitive, so the OAuth consent screen needs no Google verification review.
+  - **CSRF:** `/google/login` mints a `secrets.token_urlsafe(32)` nonce, stores it in a 10-minute `httpOnly` `oauth_state` cookie, and passes it as `state`. The callback compares the two with `secrets.compare_digest` and aborts on any mismatch, so a callback the browser never initiated cannot log anyone in.
+  - **Profile trust:** the callback reads the profile from Google's OIDC **userinfo endpoint** using the freshly exchanged access token, rather than verifying the `id_token` JWT locally. The response arrives over TLS straight from Google in a server-to-server call the client cannot influence, so it is equally trustworthy without a JWKS fetch and cache.
+  - **Account linking:** matching is by `google_sub` first, then by email — but **only when Google reports `email_verified`**; an unverified address is rejected outright (`google_email_unverified`), since it is not proof of identity and would otherwise be a route to hijacking an existing account. A verified match attaches `google_sub` to the existing row and preserves its `role`. See [DATA_MODEL.md](./DATA_MODEL.md).
+  - **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts. `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise, so bcrypt can never raise on one. Password login against such an account short-circuits to a **`409`** telling the user to use "Sign in with Google" — a password attempt there can never succeed, so the generic 401 would just look like a forgotten password and loop them. This is a **deliberate user-enumeration trade-off**: it confirms that the address has a Google account. It is the only such disclosure — it fires only when the account has *no* password at all, so an account with both a password and a Google link (and every unknown email) still returns the single generic `401`.
+- **CORS:** **not implemented** — no `CORSMiddleware` is registered in `app/main.py`. Not needed for the OAuth flow either: Google redirects the browser to a same-origin backend route, it does not make a cross-origin request.
 - **Rate limiting:** **not implemented** — there is no limiter on `/api/auth/*` or anywhere else.
 
 ## Object Store Integration
