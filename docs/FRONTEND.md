@@ -132,24 +132,47 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 - Show a summary: # questions, # answers, metadata.
 - On confirm, call `POST /api/import/confirm`. Saves Paper + Questions + QuestionPages and uploads images to canonical paths.
 
-### Step 9 — AI Topic Labeling (Review)
-- After confirm, frontend calls `POST /api/import/ai-topics` and shows progress.
-- For each question, render: question image(s) + AI-suggested topic/subtopic chips.
-- User can accept, modify, or replace suggestions before saving. See [AI_INTEGRATION.md](./AI_INTEGRATION.md).
+### Step 9 — AI Part Split, Topics & Marks (Review)
+`TopicReview.jsx`. After confirm, the browser fires `POST /api/import/ai-topics`
+once per question through a rate-limited queue (`REQUEST_INTERVAL_MS`, staggering
+request *starts*) and shows per-question progress with a Re-run/Retry button.
 
-### Step 10 — Set Marks
-- Per-question numeric input.
-- Save to `Question.marks` via API.
+For each question it renders the question image(s) beside a `<PartsEditor />`
+pre-filled with the AI's suggested split. The admin can edit any part's label,
+marks and topics, **add or delete parts**, and then save the whole paper with
+`POST /api/import/save-topics`. Marks are entered per part — there is no
+question-level marks field; the editor shows the running total instead. See
+[AI_INTEGRATION.md](./AI_INTEGRATION.md).
 
-### Components Suggested
+There is no separate "set marks" step — marks come from the parts.
+
+### Components
 
 - `<UploadDropZone />`
 - `<PageGrid />` + `<PageThumbnail />` + `<Lightbox />`
 - `<QuestionGroupingControls />` (the merge / un-merge toggle, with auto-renumbering)
 - `<QADivider />`
 - `<MetadataSidebar />`
-- `<TopicReviewer />` (step 9)
-- `<MarksEntry />` (step 10)
+- `<PartsEditor />` (step 9; shared with the admin question editor)
+
+### `<PartsEditor />` (`src/components/PartsEditor.jsx`)
+
+The single place a question's parts are edited, used by **both** the import
+review step and the admin question editor (`QuestionEditor.jsx`) — the two
+previously carried near-identical topic-chip + combobox blocks.
+
+Per part it renders a label input, a marks input, the selected topic chips with
+remove buttons, and its own `<TopicCombobox />`; below the list sit "+ Add part"
+and a live total. Because each part passes its own `selected` array to the
+combobox, the same subtopic can be picked on two different parts while still
+being de-duplicated within one. Deleting the last part leaves one blank part —
+every question has at least one.
+
+Its working shape is `{label, marks, selected: [{topic_id, subtopic_id}]}`.
+`src/features/import/topicUtils.js` converts to and from the API:
+`partsFromApi` (tolerating both the detail and editor payload shapes, and always
+returning at least one part), `partsToPayload`, and `partsTotalMarks` (which
+returns `null` when no part carries marks, matching the backend's `SUM`).
 
 ## Browse / Filter UI
 
@@ -176,8 +199,8 @@ The full UX sequence the admin walks through. Each step is a UI state in the sam
 ### Results View
 
 - Grid (or list) of matching questions.
-- Each card shows: thumbnail of first page, paper-local question number, paper info (school / year / level / exam type), marks, topic chips.
-- **Click to expand** — show all pages of the question (use the same `<Lightbox />` as the import flow).
+- Each card shows: thumbnail of first page, paper-local question number, paper info (school / year / level / exam type), marks (summed across the question's parts), topic chips (the union across its parts).
+- **Click to expand** — `QuestionDetailModal.jsx` shows all pages plus a **Breakdown** section listing each part's label, marks and topics. The breakdown is hidden for a question that is a single unlabelled part, where it would only repeat the topic chips above it.
 - **Pagination or infinite scroll.**
 
 ## Paper Generation UI
@@ -297,6 +320,19 @@ A simple management surface — list / create / edit / delete — for each of:
 - Schools
 - Exam Types
 - Topics (scoped to a Subject + Stream; includes `topic_number` and a nested editor for Subtopics)
+
+### Manage Papers
+
+`/admin/papers` lists imported papers; `PaperEditor.jsx` opens one for editing.
+Each question is a `QuestionEditor.jsx` card: question number, page-image
+editors, tags, and a `<PartsEditor />` (see
+[above](#partseditor-srccomponentsparts-editorjsx)) for its parts. There is no
+question-level marks field — marks are per part and the total is derived.
+
+**Re-run AI** re-labels a question through `POST /api/import/ai-topics` and
+replaces its parts with the suggestion; the paper-level re-label (triggered when
+an admin changes the paper's subject or stream, which invalidates the existing
+topic labels) does the same for every question in the paper.
 
 ### User Management
 - List users — **Name**, Email and Tier columns. The Name column shows `first_name last_name`, or a

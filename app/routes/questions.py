@@ -13,6 +13,7 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionPart,
     QuestionSubtopic,
     QuestionTag,
     QuestionTopic,
@@ -59,12 +60,21 @@ def _apply_filters(
         q = q.filter(Paper.exam_type_id == exam_type_id)
 
     if topic_ids:
+        # Topics hang off parts, so both clauses reach through question_part.
+        # Semantics are unchanged from when topics were question-level: match
+        # if *any* part touches a selected topic, and under `exclusive` require
+        # that *no* part carries a topic outside the selection — i.e. the union
+        # of the question's topics is a subset of the selection.
         q = q.filter(
-            Question.topics.any(QuestionTopic.topic_id.in_(topic_ids))
+            Question.parts.any(
+                QuestionPart.topics.any(QuestionTopic.topic_id.in_(topic_ids))
+            )
         )
         if exclusive:
             q = q.filter(
-                ~Question.topics.any(QuestionTopic.topic_id.notin_(topic_ids))
+                ~Question.parts.any(
+                    QuestionPart.topics.any(QuestionTopic.topic_id.notin_(topic_ids))
+                )
             )
 
     if tag_ids:
@@ -84,11 +94,15 @@ def _apply_filters(
         if kw:
             pattern = f"%{kw}%"
             clauses = [
-                Question.topics.any(
-                    QuestionTopic.topic.has(Topic.name.ilike(pattern))
+                Question.parts.any(
+                    QuestionPart.topics.any(
+                        QuestionTopic.topic.has(Topic.name.ilike(pattern))
+                    )
                 ),
-                Question.question_subtopics.any(
-                    QuestionSubtopic.subtopic.has(Subtopic.name.ilike(pattern))
+                Question.parts.any(
+                    QuestionPart.part_subtopics.any(
+                        QuestionSubtopic.subtopic.has(Subtopic.name.ilike(pattern))
+                    )
                 ),
                 Question.tags.any(
                     QuestionTag.tag.has(Tag.name.ilike(pattern))
@@ -109,9 +123,11 @@ def _apply_filters(
             m = re.fullmatch(r"[Tt]\s*(\d+)", kw)
             if m:
                 clauses.append(
-                    Question.topics.any(
-                        QuestionTopic.topic.has(
-                            Topic.topic_number == int(m.group(1))
+                    Question.parts.any(
+                        QuestionPart.topics.any(
+                            QuestionTopic.topic.has(
+                                Topic.topic_number == int(m.group(1))
+                            )
                         )
                     )
                 )
@@ -149,11 +165,12 @@ def _first_page_url(question: Question) -> Optional[str]:
         return None
 
 
-def _topic_infos(question: Question) -> list[dict]:
-    if not question.topics:
+def _part_topic_infos(part: QuestionPart) -> list[dict]:
+    """Topic infos for a single part."""
+    if not part.topics:
         return []
     subtopics_by_topic: dict[int, list[str]] = {}
-    for qs in question.question_subtopics:
+    for qs in part.part_subtopics:
         subtopics_by_topic.setdefault(qs.topic_id, []).append(qs.subtopic.name)
     return [
         {
@@ -161,7 +178,46 @@ def _topic_infos(question: Question) -> list[dict]:
             "topic_number": qt.topic.topic_number,
             "subtopic_names": subtopics_by_topic.get(qt.topic_id, []),
         }
-        for qt in question.topics
+        for qt in part.topics
+    ]
+
+
+def _topic_infos(question: Question) -> list[dict]:
+    """The question's topics as a de-duplicated union across all its parts.
+
+    Two parts testing the same topic collapse to one entry whose subtopic names
+    are merged, so browse cards look the same as they did when topics were
+    recorded at question level.
+    """
+    merged: dict[int, dict] = {}
+    for part in question.parts:
+        subtopics_by_topic: dict[int, list[str]] = {}
+        for qs in part.part_subtopics:
+            subtopics_by_topic.setdefault(qs.topic_id, []).append(qs.subtopic.name)
+        for qt in part.topics:
+            entry = merged.setdefault(
+                qt.topic_id,
+                {
+                    "topic_name": qt.topic.name,
+                    "topic_number": qt.topic.topic_number,
+                    "subtopic_names": [],
+                },
+            )
+            for name in subtopics_by_topic.get(qt.topic_id, []):
+                if name not in entry["subtopic_names"]:
+                    entry["subtopic_names"].append(name)
+    return list(merged.values())
+
+
+def _part_infos(question: Question) -> list[dict]:
+    return [
+        {
+            "part_order": part.part_order,
+            "label": part.label,
+            "marks": part.marks,
+            "topics": _part_topic_infos(part),
+        }
+        for part in sorted(question.parts, key=lambda p: p.part_order)
     ]
 
 
@@ -183,7 +239,7 @@ def serialize_list_item(q: Question, can_view_premium: bool = True) -> dict:
     return {
         "id": q.id,
         "question_number": q.question_number,
-        "marks": q.marks,
+        "marks": q.total_marks,
         "paper_info": _paper_info(q.paper),
         "topics": _topic_infos(q),
         "tags": _tag_infos(q),
@@ -199,11 +255,11 @@ _PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.school),
     joinedload(Paper.exam_type),
 )
-_TOPIC_EAGER = selectinload(Question.topics).options(
-    joinedload(QuestionTopic.topic),
-)
-_SUBTOPICS_EAGER = selectinload(Question.question_subtopics).options(
-    joinedload(QuestionSubtopic.subtopic),
+# The list endpoint doesn't serialize parts, but it still has to load them —
+# the union of topics is only reachable through them.
+_PARTS_EAGER = selectinload(Question.parts).options(
+    selectinload(QuestionPart.topics).joinedload(QuestionTopic.topic),
+    selectinload(QuestionPart.part_subtopics).joinedload(QuestionSubtopic.subtopic),
 )
 _TAG_EAGER = selectinload(Question.tags).options(
     joinedload(QuestionTag.tag),
@@ -248,7 +304,7 @@ def list_questions(
 
     questions = (
         _apply_filters(base, *filter_args)
-        .options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
+        .options(_PAPER_EAGER, selectinload(Question.pages), _PARTS_EAGER, _TAG_EAGER)
         .order_by(Question.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -269,7 +325,7 @@ def get_question(
     question = (
         db.query(Question)
         .filter(Question.id == question_id)
-        .options(joinedload(Question.paper), selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
+        .options(joinedload(Question.paper), selectinload(Question.pages), _PARTS_EAGER, _TAG_EAGER)
         .one_or_none()
     )
     if question is None:
@@ -291,10 +347,11 @@ def get_question(
     return {
         "id": question.id,
         "question_number": question.question_number,
-        "marks": question.marks,
+        "marks": question.total_marks,
         "question_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "question"],
         "answer_pages": [_page_dict(p) for p in sorted_pages if p.page_type == "answer"],
         "topics": _topic_infos(question),
+        "parts": _part_infos(question),
         "tags": _tag_infos(question),
         "locked": locked,
     }

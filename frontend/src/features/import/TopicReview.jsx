@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
-import TopicCombobox from './TopicCombobox'
-import { buildTopicLookup, selectionsToAssignments } from './topicUtils'
-import { formatTopic } from '../../utils/topicFormat'
+import PartsEditor from '../../components/PartsEditor'
+import { buildTopicLookup, emptyPart, partsFromApi, partsToPayload } from './topicUtils'
 
 const REQUEST_INTERVAL_MS = 1300
 
@@ -23,7 +22,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
   const [topics, setTopics] = useState(null)
   const [topicsError, setTopicsError] = useState(null)
   const [questionState, setQuestionState] = useState(() =>
-    Object.fromEntries(questions.map(q => [q.id, { status: 'loading', selected: [], marks: q.marks ?? null, error: null }]))
+    Object.fromEntries(questions.map(q => [q.id, { status: 'loading', parts: [emptyPart()], error: null }]))
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
@@ -39,7 +38,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
       const result = await enqueue(() => api.import.aiTopicsForQuestion(qid, abortRef.current?.signal))
       setQuestionState(prev => ({
         ...prev,
-        [qid]: { status: 'ready', selected: result.selections || [], marks: result.marks ?? null, error: null },
+        [qid]: { status: 'ready', parts: partsFromApi(result.parts), error: null },
       }))
     } catch (e) {
       if (e.name === 'AbortError') return
@@ -65,23 +64,8 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function addTopic(qid, sel) {
-    setQuestionState(prev => {
-      const cur = prev[qid]
-      if (cur.selected.some(s => s.topic_id === sel.topic_id && s.subtopic_id === sel.subtopic_id)) return prev
-      return { ...prev, [qid]: { ...cur, selected: [...cur.selected, sel] } }
-    })
-  }
-
-  function removeTopic(qid, idx) {
-    setQuestionState(prev => {
-      const cur = prev[qid]
-      return { ...prev, [qid]: { ...cur, selected: cur.selected.filter((_, i) => i !== idx) } }
-    })
-  }
-
-  function setMarks(qid, val) {
-    setQuestionState(prev => ({ ...prev, [qid]: { ...prev[qid], marks: val } }))
+  function setParts(qid, parts) {
+    setQuestionState(prev => ({ ...prev, [qid]: { ...prev[qid], parts } }))
   }
 
   const anyLoading = Object.values(questionState).some(s => s.status === 'loading')
@@ -90,12 +74,11 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
     setSaving(true)
     setSaveError(null)
     try {
-      const question_topics = questions.map(q => ({
+      const payloadQuestions = questions.map(q => ({
         question_id: q.id,
-        marks: questionState[q.id]?.marks ?? null,
-        topic_assignments: selectionsToAssignments(questionState[q.id]?.selected ?? []),
+        parts: partsToPayload(questionState[q.id]?.parts ?? [emptyPart()]),
       }))
-      await api.import.saveTopics(paperId, question_topics)
+      await api.import.saveTopics(paperId, payloadQuestions)
       onDone()
     } catch (e) {
       setSaveError(e.message || 'Failed to save topics')
@@ -132,24 +115,13 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
 
       <div className="space-y-6">
         {questions.map(q => {
-          const state = questionState[q.id] || { status: 'loading', selected: [], error: null }
+          const state = questionState[q.id] || { status: 'loading', parts: [emptyPart()], error: null }
           const questionPages = (q.pages || []).filter(p => p.page_type === 'question')
           return (
             <div key={q.id} className="border border-gray-200 rounded-lg p-4 bg-white">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <span className="font-semibold text-gray-900">Q{q.question_number}</span>
-                  <label className="flex items-center gap-1 text-xs text-gray-500">
-                    Marks
-                    <input
-                      type="number"
-                      min="0"
-                      value={state.marks ?? ''}
-                      onChange={(e) => setMarks(q.id, e.target.value !== '' ? Number(e.target.value) : null)}
-                      placeholder="—"
-                      className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </label>
                 </div>
                 <div className="flex items-center gap-2">
                   {state.status === 'loading' && (
@@ -190,45 +162,12 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
                   ))}
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Topics</p>
-                    {state.selected.length === 0 && state.status !== 'loading' && (
-                      <p className="text-sm text-gray-400 italic">No topics selected</p>
-                    )}
-                    {state.selected.map((sel, i) => {
-                      let label
-                      if (sel.subtopic_id != null) {
-                        const s = lookup.subtopicById.get(sel.subtopic_id)
-                        label = s ? <><strong>{formatTopic(s.topic_number, s.topic_name)}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
-                      } else {
-                        const t = lookup.topicById.get(sel.topic_id)
-                        label = t ? <strong>{formatTopic(t.topic_number, t.name)}</strong> : `Unknown topic ${sel.topic_id}`
-                      }
-                      return (
-                        <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
-                          <p className="text-sm text-gray-700 flex-grow">{label}</p>
-                          <button
-                            type="button"
-                            onClick={() => removeTopic(q.id, i)}
-                            className="text-gray-400 hover:text-red-600 text-lg flex-shrink-0 mt-0.5"
-                            aria-label="Remove"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Add topic</p>
-                    <TopicCombobox
-                      topics={topics}
-                      selected={state.selected}
-                      onAdd={(sel) => addTopic(q.id, sel)}
-                    />
-                  </div>
-                </div>
+                <PartsEditor
+                  parts={state.parts}
+                  topics={topics}
+                  lookup={lookup}
+                  onChange={(parts) => setParts(q.id, parts)}
+                />
               </div>
             </div>
           )

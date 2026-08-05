@@ -52,7 +52,7 @@ function computeQuestions(pages, dividerIdx) {
         width_px: p.dimensions.width, height_px: p.dimensions.height,
       })),
     ]
-    return { question_number: qNum, marks: null, pages: pageDatas }
+    return { question_number: qNum, pages: pageDatas }
   })
 }
 

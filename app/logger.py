@@ -36,11 +36,20 @@ class Timer:
         return f"{self.elapsed:.3f}s"
 
 
-_SONNET_46_PRICES = {
-    "input": 3.00,
-    "cache_write": 3.75,
-    "cache_hit": 0.30,
-    "output": 15.00,
+# USD per million tokens. Cache writes bill at 1.25x input, cache reads at 0.1x.
+_PRICES = {
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "cache_write": 3.75,
+        "cache_hit": 0.30,
+        "output": 15.00,
+    },
+    "claude-haiku-4-5-20251001": {
+        "input": 1.00,
+        "cache_write": 1.25,
+        "cache_hit": 0.10,
+        "output": 5.00,
+    },
 }
 
 
@@ -56,12 +65,13 @@ def log_tokens(func: str, model: str, usage) -> None:
     if ch:
         token_str += f" cache_hit={ch}"
 
-    if model == "claude-sonnet-4-6":
+    prices = _PRICES.get(model)
+    if prices:
         cost = (
-            inp * _SONNET_46_PRICES["input"]
-            + cw * _SONNET_46_PRICES["cache_write"]
-            + ch * _SONNET_46_PRICES["cache_hit"]
-            + out * _SONNET_46_PRICES["output"]
+            inp * prices["input"]
+            + cw * prices["cache_write"]
+            + ch * prices["cache_hit"]
+            + out * prices["output"]
         ) / 1_000_000
         token_str += f" cost=${cost:.6f}"
 

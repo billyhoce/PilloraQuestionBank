@@ -7,7 +7,7 @@ from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
 from app.logger import Timer, log
-from app.models.orm import Paper, Question, QuestionPage
+from app.models.orm import Paper, Question, QuestionPage, QuestionPart
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
@@ -84,9 +84,11 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         for q_data in payload["questions"]:
             question = Question(
                 question_number=q_data["question_number"],
-                marks=q_data.get("marks"),
                 created_at=datetime.now(UTC),
             )
+            # Topics and marks arrive later, at the topic-review step; until then
+            # the question holds the single blank part every question must have.
+            question.parts.append(QuestionPart(part_order=0, label="", marks=None))
             paper.questions.append(question)
 
             for p_data in q_data["pages"]:

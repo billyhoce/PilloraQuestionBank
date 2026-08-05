@@ -106,9 +106,12 @@ export default function PaperEditor() {
       for (const q of fresh.questions) {
         try {
           const res = await enqueue(() => api.import.aiTopicsForQuestion(q.id))
-          seed[q.id] = res.selections || []
+          seed[q.id] = res.parts || []
         } catch {
-          seed[q.id] = []
+          // No seed rather than an empty one: a failed re-label must leave the
+          // question's own parts (and their marks, which survive a subject or
+          // stream change) on screen instead of blanking the editor.
+          seed[q.id] = null
         }
       }
       setAiSeed(seed)
@@ -135,7 +138,7 @@ export default function PaperEditor() {
     const maxNum = questions.reduce((m, q) => Math.max(m, q.question_number), 0)
     setNewDrafts((prev) => [
       ...prev,
-      { tempId: `d-${Date.now()}-${prev.length}`, question_number: maxNum + 1 + prev.length, marks: null, pages: [], topics: [], tags: [] },
+      { tempId: `d-${Date.now()}-${prev.length}`, question_number: maxNum + 1 + prev.length, parts: [], pages: [], tags: [] },
     ])
   }
 
@@ -248,7 +251,7 @@ export default function PaperEditor() {
         <div className="flex-1 min-w-0">
           <div className="space-y-6">
             {sortedQuestions.map((q) => {
-              const seedQuestion = aiSeed[q.id] ? { ...q, selections: aiSeed[q.id] } : q
+              const seedQuestion = aiSeed[q.id] ? { ...q, parts: aiSeed[q.id] } : q
               return (
                 <div key={`${q.id}-${relabelVersion}`} id={`q-${q.id}`} className="scroll-mt-4">
                   <QuestionEditor

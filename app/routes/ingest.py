@@ -2,16 +2,17 @@ from typing import Optional
 
 import anthropic
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.ai.topic_labeler import label_question
+from app.ai.topic_labeler import TruncatedResponseError, label_question
 from app.db import get_db
 from app.logger import Timer, log
-from app.models.orm import Paper, Question, QuestionSubtopic, QuestionTopic, Subtopic, Topic
+from app.models.orm import Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
 from app.storage.s3_client import delete_object, get_image_bytes, get_presigned_url
 
 
@@ -29,7 +30,6 @@ class PageIn(BaseModel):
 
 class QuestionIn(BaseModel):
     question_number: int
-    marks: Optional[int] = None
     pages: list[PageIn]
 
 
@@ -60,9 +60,15 @@ class AiTopicSelection(BaseModel):
     subtopic_id: Optional[int] = None
 
 
-class AiTopicsResponse(BaseModel):
-    selections: list[AiTopicSelection] = []
+class AiPartSuggestion(BaseModel):
+    # The part designation as printed, e.g. "(a)(i)"; "" for an unparted question.
+    label: str = ""
     marks: Optional[int] = None
+    selections: list[AiTopicSelection] = []
+
+
+class AiTopicsResponse(BaseModel):
+    parts: list[AiPartSuggestion] = []
 
 
 class TopicAssignment(BaseModel):
@@ -70,15 +76,22 @@ class TopicAssignment(BaseModel):
     subtopics: list[SubtopicSuggestion] = []
 
 
-class QuestionTopicsIn(BaseModel):
-    question_id: int
+class PartIn(BaseModel):
+    # Bounded to the width of question_part.label so an over-long label is
+    # rejected with a 422 rather than silently truncated on the way in.
+    label: str = Field("", max_length=32)
     marks: Optional[int] = None
-    topic_assignments: list[TopicAssignment]
+    topic_assignments: list[TopicAssignment] = []
+
+
+class QuestionPartsIn(BaseModel):
+    question_id: int
+    parts: list[PartIn] = []
 
 
 class SaveTopicsPayload(BaseModel):
     paper_id: int
-    question_topics: list[QuestionTopicsIn]
+    questions: list[QuestionPartsIn]
 
 
 @router.post("/upload-pdf")
@@ -101,7 +114,6 @@ def _serialize_paper_questions(paper: Paper) -> list[dict]:
         {
             "id": q.id,
             "question_number": q.question_number,
-            "marks": q.marks,
             "pages": [
                 {
                     "page_order": p.page_order,
@@ -203,6 +215,12 @@ def ai_topics(
             with Timer() as t_label:
                 result = label_question(question, topics, image_bytes_list)
             log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+        except TruncatedResponseError as e:
+            log.error(f"{'ai_topics':<22}| truncated | question_id={payload.question_id} {e}")
+            raise HTTPException(
+                status_code=502,
+                detail="The AI response was cut off — please retry this question.",
+            )
         except anthropic.RateLimitError as e:
             log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
             raise HTTPException(
@@ -217,7 +235,7 @@ def ai_topics(
             )
 
     log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
-    return {"selections": result["selections"], "marks": result["marks"]}
+    return {"parts": result["parts"]}
 
 
 @router.post("/save-topics", status_code=201)
@@ -236,56 +254,22 @@ def save_topics(
         raise HTTPException(status_code=404, detail="Paper not found")
 
     paper_question_ids = {q.id for q in paper.questions}
-    requested_ids = {qt.question_id for qt in payload.question_topics}
+    requested_ids = {qp.question_id for qp in payload.questions}
     if not requested_ids.issubset(paper_question_ids):
         raise HTTPException(status_code=422, detail="One or more questions do not belong to this paper")
 
-    valid_topic_ids = {
-        tid for (tid,) in db.query(Topic.id)
-        .filter(Topic.subject_id == paper.subject_id, Topic.stream_id == paper.stream_id)
-        .all()
-    }
+    valid_topic_ids = scoped_topic_ids(db, paper.subject_id, paper.stream_id)
 
-    # Phase 1: validate all assignments before any writes so a 422 leaves
-    # the DB unchanged (no half-written state).
-    for qt in payload.question_topics:
-        for assignment in qt.topic_assignments:
-            if assignment.topic_id not in valid_topic_ids:
-                raise HTTPException(status_code=422, detail=f"Invalid topic_id {assignment.topic_id}")
-            for s in assignment.subtopics:
-                subtopic = db.get(Subtopic, s.subtopic_id)
-                if subtopic is None or subtopic.topic_id != assignment.topic_id:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {assignment.topic_id}",
-                    )
+    # Validate every question's parts before writing any of them, so a 422 on
+    # the last question doesn't leave the earlier ones half-rewritten.
+    for qp in payload.questions:
+        validate_parts(db, qp.parts, valid_topic_ids)
 
-    # Phase 2: delete existing assignments for all questions in this paper.
-    db.query(QuestionSubtopic).filter(QuestionSubtopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
-    db.query(QuestionTopic).filter(QuestionTopic.question_id.in_(paper_question_ids)).delete(synchronize_session=False)
-
-    # Phase 3: update marks and insert new assignments.
-    questions_by_id = {q.id: q for q in paper.questions}
-    for qt in payload.question_topics:
-        questions_by_id[qt.question_id].marks = qt.marks
-
-        inserted_topic_ids: set[int] = set()
-        for assignment in qt.topic_assignments:
-            if assignment.topic_id not in inserted_topic_ids:
-                db.add(QuestionTopic(question_id=qt.question_id, topic_id=assignment.topic_id))
-                db.flush()  # composite FK on question_subtopic requires this row to exist first
-                inserted_topic_ids.add(assignment.topic_id)
-
-            seen_subtopic_ids: set[int] = set()
-            for s in assignment.subtopics:
-                if s.subtopic_id in seen_subtopic_ids:
-                    continue
-                seen_subtopic_ids.add(s.subtopic_id)
-                db.add(QuestionSubtopic(
-                    question_id=qt.question_id,
-                    subtopic_id=s.subtopic_id,
-                    topic_id=assignment.topic_id,
-                ))
+    # set_question_parts re-validates each question — deliberately, so it is safe
+    # to call on its own from the single-question admin routes. The repeat costs
+    # nothing here: the Subtopic rows it checks are already in the identity map.
+    for qp in payload.questions:
+        set_question_parts(db, qp.question_id, qp.parts, valid_topic_ids)
 
     db.flush()
     return {"message": "Topics saved"}

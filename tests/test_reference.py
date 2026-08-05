@@ -244,10 +244,11 @@ def test_topics_sync_delete_strips_question_labels(admin_client, reference_data,
 
     rd = reference_data
     question = db_session.query(Question).filter_by(paper_id=sample_paper.id).first()
-    db_session.add(QuestionTopic(question_id=question.id, topic_id=rd["topic"].id))
+    part = question.parts[0]
+    db_session.add(QuestionTopic(part_id=part.id, topic_id=rd["topic"].id))
     db_session.flush()  # parent row must exist before the composite-FK subtopic link
     db_session.add(QuestionSubtopic(
-        question_id=question.id, subtopic_id=rd["subtopic"].id, topic_id=rd["topic"].id
+        part_id=part.id, subtopic_id=rd["subtopic"].id, topic_id=rd["topic"].id
     ))
     db_session.flush()
     assert db_session.query(QuestionTopic).filter_by(topic_id=rd["topic"].id).count() == 1

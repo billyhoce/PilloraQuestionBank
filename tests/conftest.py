@@ -30,6 +30,7 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionPart,
     QuestionTopic,
     School,
     SchoolLevel,
@@ -275,9 +276,12 @@ def reference_data(db_session):
 def sample_paper(db_session, reference_data, admin_user):
     """Paper with 3 questions and associated pages, flushed into db_session.
 
-    Q1: marks=5, 1 question page (2480×800)
-    Q2: marks=3, 1 question page (2480×600) + 1 answer page (2480×400)
-    Q3: marks=2, 1 question page (2480×200)
+    Marks live on the questions' parts; the totals below are what
+    ``Question.total_marks`` sums to.
+
+    Q1: 2 parts — "(a)" 2 marks, "(b)" 3 marks (total 5), 1 question page (2480×800)
+    Q2: 1 unlabelled part, 3 marks, 1 question page (2480×600) + 1 answer page (2480×400)
+    Q3: 1 unlabelled part, 2 marks, 1 question page (2480×200)
     """
     rd = reference_data
     paper = Paper(
@@ -294,10 +298,18 @@ def sample_paper(db_session, reference_data, admin_user):
     db_session.add(paper)
     db_session.flush()
 
-    q1 = Question(paper_id=paper.id, question_number=1, marks=5, created_at=datetime.now(UTC))
-    q2 = Question(paper_id=paper.id, question_number=2, marks=3, created_at=datetime.now(UTC))
-    q3 = Question(paper_id=paper.id, question_number=3, marks=2, created_at=datetime.now(UTC))
+    q1 = Question(paper_id=paper.id, question_number=1, created_at=datetime.now(UTC))
+    q2 = Question(paper_id=paper.id, question_number=2, created_at=datetime.now(UTC))
+    q3 = Question(paper_id=paper.id, question_number=3, created_at=datetime.now(UTC))
     db_session.add_all([q1, q2, q3])
+    db_session.flush()
+
+    db_session.add_all([
+        QuestionPart(question_id=q1.id, part_order=0, label="(a)", marks=2),
+        QuestionPart(question_id=q1.id, part_order=1, label="(b)", marks=3),
+        QuestionPart(question_id=q2.id, part_order=0, label="", marks=3),
+        QuestionPart(question_id=q3.id, part_order=0, label="", marks=2),
+    ])
     db_session.flush()
 
     pages = [

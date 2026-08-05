@@ -38,7 +38,7 @@ def knapsack_select(questions: list, target_marks: int) -> list:
     if target_marks <= 0:
         return []
 
-    pool = [q for q in questions if q.marks is not None and q.marks > 0]
+    pool = [q for q in questions if q.total_marks is not None and q.total_marks > 0]
     if not pool:
         return []
 
@@ -72,7 +72,7 @@ def knapsack_select(questions: list, target_marks: int) -> list:
                 # consider it, as it may be the closest under-total.
                 consider(subset, total)
             subset.append(q)
-            total += q.marks
+            total += q.total_marks
         consider(subset, total)
         if best_distance == 0:
             break
@@ -96,15 +96,15 @@ def in_order_select(questions: list, target_marks: int) -> list:
     if target_marks <= 0:
         return []
 
-    pool = [q for q in questions if q.marks is not None and q.marks > 0]
+    pool = [q for q in questions if q.total_marks is not None and q.total_marks > 0]
 
     selected: list = []
     total = 0
     for q in pool:
-        if total + q.marks > target_marks:
+        if total + q.total_marks > target_marks:
             break
         selected.append(q)
-        total += q.marks
+        total += q.total_marks
 
     return selected
 
