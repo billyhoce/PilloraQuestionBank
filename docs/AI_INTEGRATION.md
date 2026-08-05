@@ -60,12 +60,19 @@ free-text JSON, so the shape is guaranteed:
 
 `max_tokens` is 1500 — a multi-part question emits one object per part.
 
+**A truncated response is an error, not a result.** If `stop_reason` comes back
+`max_tokens` the tool input is partial — some parts missing, or none parsed at
+all — and a question cut off after two of its four parts would otherwise be
+saved as a two-part question with nothing to indicate the loss. `label_question`
+raises `TruncatedResponseError`, which the route turns into a **502** telling the
+admin to retry that question (the review screen already has a per-question retry).
+
 The backend maps the codes back to ids and returns
 `{"parts": [{"label", "marks", "selections": [{"topic_id", "subtopic_id"}]}]}`.
 Selections are de-duplicated **within** a part, not across parts: two parts of
-one question may legitimately test the same subtopic. An empty `parts` array
-falls back to a single blank part, preserving the every-question-has-a-part
-invariant.
+one question may legitimately test the same subtopic. An empty `parts` array on
+an *untruncated* response falls back to a single blank part, preserving the
+every-question-has-a-part invariant.
 
 **Nothing is persisted here.** The response is transient; the admin reviews and
 corrects it in the UI, and `POST /api/import/save-topics` does the writing.

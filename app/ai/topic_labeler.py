@@ -6,6 +6,17 @@ from app.logger import Timer, log, log_tokens
 
 MODEL = "claude-haiku-4-5-20251001"
 
+
+class TruncatedResponseError(RuntimeError):
+    """The model hit ``max_tokens`` before finishing its tool call.
+
+    The tool input is then partial — some parts missing, or none parsed at all —
+    which is indistinguishable from "this question genuinely has one blank part"
+    once it reaches the reviewer. Raised so the caller can surface a retry
+    instead of silently saving fewer parts than the question has.
+    """
+
+
 LABEL_PARTS_TOOL = {
     "name": "label_parts",
     "description": (
@@ -139,6 +150,13 @@ def label_question(
         )
     log.info(f"{'label_question':<22}| haiku     | {t_call.s}")
     log_tokens("label_question", MODEL, resp.usage)
+
+    # Check before touching content: a truncated tool call may not even carry a
+    # usable input dict, and a partial parts list must never pass for a complete one.
+    if resp.stop_reason == "max_tokens":
+        raise TruncatedResponseError(
+            f"label_parts response hit max_tokens ({resp.usage.output_tokens} output tokens)"
+        )
 
     tool_input = resp.content[0].input
     parts: list[dict] = []

@@ -146,11 +146,13 @@ def test_dedupes_a_repeated_topic_within_one_part(db_session, sample_paper, refe
     assert db_session.query(QuestionSubtopic).filter(QuestionSubtopic.part_id == part.id).count() == 1
 
 
-def test_label_longer_than_the_column_is_truncated(db_session, sample_paper, valid_topic_ids):
+def test_stores_a_label_at_the_column_width_verbatim(db_session, sample_paper, valid_topic_ids):
+    """Over-long labels are rejected by PartIn, so the service stores what it is
+    given without truncating it — see test_ingest for the 422."""
     q = sample_paper.questions[0]
-    set_question_parts(db_session, q.id, [_Part(label="x" * 100)], valid_topic_ids)
+    set_question_parts(db_session, q.id, [_Part(label="x" * 32)], valid_topic_ids)
 
-    assert len(_parts_of(db_session, q.id)[0].label) == 32
+    assert _parts_of(db_session, q.id)[0].label == "x" * 32
 
 
 def test_rejects_a_topic_outside_the_papers_subject_and_stream(db_session, sample_paper, valid_topic_ids):

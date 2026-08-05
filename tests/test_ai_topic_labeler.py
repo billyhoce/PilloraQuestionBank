@@ -2,8 +2,11 @@
 from datetime import datetime, UTC
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.ai.topic_labeler import (
     LABEL_PARTS_TOOL,
+    TruncatedResponseError,
     _build_options,
     build_system_prompt,
     label_question,
@@ -122,8 +125,9 @@ def _part(label="", selected_codes=(), marks=None):
     return {"label": label, "selected_codes": list(selected_codes), "marks": marks}
 
 
-def _make_mock_response(parts):
+def _make_mock_response(parts, stop_reason="tool_use"):
     mock_resp = MagicMock()
+    mock_resp.stop_reason = stop_reason
     mock_resp.content = [MagicMock()]
     mock_resp.content[0].input = {"parts": parts}
     mock_resp.usage.input_tokens = 100
@@ -335,6 +339,25 @@ def test_label_question_keeps_the_same_subtopic_on_two_parts(mock_anthropic_cls,
     expected = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
     assert result["parts"][0]["selections"] == expected
     assert result["parts"][1]["selections"] == expected
+
+
+@patch("app.ai.topic_labeler.anthropic.Anthropic")
+def test_label_question_raises_when_the_response_is_truncated(mock_anthropic_cls, db_session, reference_data, admin_user):
+    """A partial tool call must not pass for a complete split — a question cut
+    off after two of its four parts would otherwise be saved as a two-part one."""
+    mock_client = MagicMock()
+    mock_anthropic_cls.return_value = mock_client
+
+    rd = reference_data
+    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
+
+    topics = _make_topics(rd["topic"].id, rd["subtopic"].id)
+    mock_client.messages.create.return_value = _make_mock_response(
+        [_part(label="(a)", selected_codes=["1.1"], marks=2)], stop_reason="max_tokens"
+    )
+
+    with pytest.raises(TruncatedResponseError):
+        label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")

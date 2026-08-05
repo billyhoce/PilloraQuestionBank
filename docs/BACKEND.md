@@ -276,11 +276,13 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
    - Takes a single `question_id` (not a whole paper — the frontend calls this once per question).
    - Fetches the question's topic/subtopic list scoped to the paper's `subject_id` + `stream_id`, downscales the question's page images for the AI call (`downscale_for_ai`, capped at 768 px long side), and calls Claude (see [AI_INTEGRATION.md → Part Splitting & Topic Auto-labeling](./AI_INTEGRATION.md)).
    - Returns `{"parts": [{label, marks, selections: [{topic_id, subtopic_id}]}]}` — the suggested split *and* labelling — for review. It does **not** persist anything itself.
+   - Upstream failures map to distinct statuses so the UI can say something useful: **429** rate limited, **503** API unavailable, **502** the response was truncated mid-tool-call (see [AI_INTEGRATION.md](./AI_INTEGRATION.md)). All three are retryable per question.
 
 4. **`POST /api/import/save-topics`** (Implemented)
    - Accepts `{paper_id, questions: [{question_id, parts: [{label, marks, topic_assignments}]}]}` — the parts the admin confirmed, in printed order.
    - Validates all question ids belong to the paper, and (across *every* question, before writing any of them) that each topic is in scope for the paper's subject/stream and each subtopic sits under its topic. A 422 therefore leaves the whole paper's existing labelling intact.
    - Replaces each question's `QuestionPart` rows wholesale via `set_question_parts`; deleting the old parts cascades to their `QuestionTopic`/`QuestionSubtopic` rows. `part_order` is assigned from list order. A question sent with no parts gets one blank part.
+   - `label` is capped at 32 characters by `PartIn`, matching `question_part.label` — an over-long label is a 422, never a silently truncated row.
 
 5. **`DELETE /api/import/papers/{paper_id}`** (Implemented)
    - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionPart` and, through the part, `QuestionTopic`/`QuestionSubtopic`), then deletes the associated S3 objects after the DB transaction succeeds.

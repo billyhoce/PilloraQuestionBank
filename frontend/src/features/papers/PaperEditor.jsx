@@ -108,7 +108,10 @@ export default function PaperEditor() {
           const res = await enqueue(() => api.import.aiTopicsForQuestion(q.id))
           seed[q.id] = res.parts || []
         } catch {
-          seed[q.id] = []
+          // No seed rather than an empty one: a failed re-label must leave the
+          // question's own parts (and their marks, which survive a subject or
+          // stream change) on screen instead of blanking the editor.
+          seed[q.id] = null
         }
       }
       setAiSeed(seed)

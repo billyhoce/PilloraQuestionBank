@@ -2,10 +2,10 @@ from typing import Optional
 
 import anthropic
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.ai.topic_labeler import label_question
+from app.ai.topic_labeler import TruncatedResponseError, label_question
 from app.db import get_db
 from app.logger import Timer, log
 from app.models.orm import Paper, Question, Topic
@@ -77,7 +77,9 @@ class TopicAssignment(BaseModel):
 
 
 class PartIn(BaseModel):
-    label: str = ""
+    # Bounded to the width of question_part.label so an over-long label is
+    # rejected with a 422 rather than silently truncated on the way in.
+    label: str = Field("", max_length=32)
     marks: Optional[int] = None
     topic_assignments: list[TopicAssignment] = []
 
@@ -213,6 +215,12 @@ def ai_topics(
             with Timer() as t_label:
                 result = label_question(question, topics, image_bytes_list)
             log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+        except TruncatedResponseError as e:
+            log.error(f"{'ai_topics':<22}| truncated | question_id={payload.question_id} {e}")
+            raise HTTPException(
+                status_code=502,
+                detail="The AI response was cut off — please retry this question.",
+            )
         except anthropic.RateLimitError as e:
             log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
             raise HTTPException(
@@ -257,6 +265,9 @@ def save_topics(
     for qp in payload.questions:
         validate_parts(db, qp.parts, valid_topic_ids)
 
+    # set_question_parts re-validates each question — deliberately, so it is safe
+    # to call on its own from the single-question admin routes. The repeat costs
+    # nothing here: the Subtopic rows it checks are already in the identity map.
     for qp in payload.questions:
         set_question_parts(db, qp.question_id, qp.parts, valid_topic_ids)
 

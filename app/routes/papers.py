@@ -13,7 +13,6 @@ from app.db import get_db
 from app.models.orm import (
     Paper,
     Question,
-    QuestionPage,
     QuestionPart,
     QuestionSubtopic,
     QuestionTag,
@@ -21,8 +20,8 @@ from app.models.orm import (
     Tag,
 )
 from app.routes.auth import require_admin
-from app.routes.ingest import PartIn, SubtopicSuggestion, TopicAssignment
-from app.routes.questions import _paper_info, _tag_infos, _topic_infos
+from app.routes.ingest import PartIn
+from app.routes.questions import _paper_info, _tag_infos
 from app.services.ingest import delete_paper
 from app.services.question_parts import scoped_topic_ids, set_question_parts
 from app.services.paper_admin import (

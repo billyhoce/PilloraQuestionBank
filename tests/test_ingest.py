@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from app.ai.topic_labeler import TruncatedResponseError
 from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
 from app.pdf.image_processing import standardize, to_webp_bytes
 from app.services.ingest import confirm_import, pdf_to_images
@@ -532,6 +533,25 @@ def test_ai_topics_rate_limit_returns_429(admin_client, mock_s3, sample_paper, d
     assert mock_log.error.called
 
 
+def test_ai_topics_truncated_response_returns_502(admin_client, mock_s3, sample_paper, db_session, reference_data):
+    """A cut-off tool call is surfaced for retry, never passed off as a blank part."""
+    q = sample_paper.questions[0]
+    with (
+        patch(
+            "app.routes.ingest.label_question",
+            side_effect=TruncatedResponseError("hit max_tokens"),
+        ),
+        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
+        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
+        patch("app.routes.ingest.log") as mock_log,
+    ):
+        resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
+
+    assert resp.status_code == 502
+    assert "cut off" in resp.json()["detail"]
+    assert mock_log.error.called
+
+
 def test_ai_topics_api_error_returns_503(admin_client, mock_s3, sample_paper, db_session, reference_data):
     q = sample_paper.questions[0]
     with (
@@ -631,6 +651,20 @@ def test_save_topics_with_no_parts_leaves_one_blank_part(admin_client, sample_pa
     parts = _parts_of(db_session, q.id)
     assert len(parts) == 1
     assert (parts[0].label, parts[0].marks) == ("", None)
+
+
+def test_save_topics_rejects_a_label_wider_than_the_column(admin_client, sample_paper, db_session, reference_data):
+    """An over-long label is a 422, not a silently truncated row."""
+    rd = reference_data
+    q = sample_paper.questions[0]
+    resp = admin_client.post("/api/import/save-topics", json={
+        "paper_id": sample_paper.id,
+        "questions": [{"question_id": q.id, "parts": [_one_part(rd, label="x" * 33)]}],
+    })
+    assert resp.status_code == 422
+
+    db_session.expire_all()
+    assert db_session.query(QuestionTopic).count() == 0
 
 
 def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, db_session, reference_data):

@@ -10,7 +10,7 @@ import { formatTopic } from '../utils/topicFormat'
  * `parts` is the editor shape from topicUtils (`{label, marks, selected}`);
  * `onChange` receives the whole replacement array.
  */
-export default function PartsEditor({ parts, topics, lookup, onChange, disabled = false }) {
+export default function PartsEditor({ parts, topics, lookup, onChange }) {
   const { subtopicById, topicById } = lookup || {}
   const total = partsTotalMarks(parts)
 
@@ -66,11 +66,10 @@ export default function PartsEditor({ parts, topics, lookup, onChange, disabled 
               <input
                 type="text"
                 value={part.label}
-                disabled={disabled}
                 onChange={(e) => updatePart(idx, { label: e.target.value })}
                 placeholder="(a)"
                 aria-label={`Part ${idx + 1} label`}
-                className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </label>
             <label className="flex items-center gap-1 text-xs text-gray-600">
@@ -79,19 +78,17 @@ export default function PartsEditor({ parts, topics, lookup, onChange, disabled 
                 type="number"
                 min="0"
                 value={part.marks ?? ''}
-                disabled={disabled}
                 onChange={(e) => updatePart(idx, { marks: e.target.value !== '' ? Number(e.target.value) : null })}
                 placeholder="—"
                 aria-label={`Part ${idx + 1} marks`}
-                className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </label>
             <button
               type="button"
               onClick={() => removePart(idx)}
-              disabled={disabled}
               aria-label={`Remove part ${idx + 1}`}
-              className="ml-auto text-gray-400 hover:text-red-600 text-lg disabled:opacity-50"
+              className="ml-auto text-gray-400 hover:text-red-600 text-lg"
             >
               &times;
             </button>
@@ -106,8 +103,7 @@ export default function PartsEditor({ parts, topics, lookup, onChange, disabled 
               <button
                 type="button"
                 onClick={() => removeTopic(idx, selIdx)}
-                disabled={disabled}
-                className="text-gray-400 hover:text-red-600 text-lg flex-shrink-0 mt-0.5 disabled:opacity-50"
+                className="text-gray-400 hover:text-red-600 text-lg flex-shrink-0 mt-0.5"
                 aria-label="Remove topic"
               >
                 &times;
@@ -127,8 +123,7 @@ export default function PartsEditor({ parts, topics, lookup, onChange, disabled 
         <button
           type="button"
           onClick={addPart}
-          disabled={disabled}
-          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:border-blue-400 disabled:opacity-50"
+          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:border-blue-400"
         >
           + Add part
         </button>

@@ -80,7 +80,8 @@ def set_question_parts(
         row = QuestionPart(
             question_id=question_id,
             part_order=order,
-            label=(part.label or "")[:32],
+            # Length is bounded by PartIn (max_length=32), matching the column.
+            label=part.label or "",
             marks=part.marks,
         )
         db.add(row)
