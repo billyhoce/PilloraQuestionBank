@@ -12,8 +12,9 @@ import uuid
 from typing import Any, Optional
 
 from PIL import Image
+from sqlalchemy import select
 
-from app.models.orm import Paper, Question, QuestionPage, QuestionTopic
+from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
@@ -119,8 +120,15 @@ def update_paper(paper_id: int, data: dict, db: Any) -> Optional[Paper]:
     if subject_or_stream_changed:
         question_ids = [q.id for q in paper.questions]
         if question_ids:
+            # Topics hang off parts now, so reach them through question_part.
+            # The parts themselves (and their marks) survive — only the topic
+            # labels are out of scope under the new subject/stream. Removing a
+            # question_topic cascades to its question_subtopic rows.
+            part_ids = select(QuestionPart.id).where(
+                QuestionPart.question_id.in_(question_ids)
+            )
             db.query(QuestionTopic).filter(
-                QuestionTopic.question_id.in_(question_ids)
+                QuestionTopic.part_id.in_(part_ids)
             ).delete(synchronize_session=False)
 
     db.flush()
@@ -139,9 +147,12 @@ def create_question(
     question = Question(
         paper_id=paper.id,
         question_number=data["question_number"],
-        marks=data.get("marks"),
     )
     db.add(question)
+    db.flush()
+    # Every question has at least one part; the caller replaces this with the
+    # real parts via set_question_parts.
+    db.add(QuestionPart(question_id=question.id, part_order=0, label="", marks=None))
     db.flush()
 
     new_pairs: list[tuple[str, str]] = []

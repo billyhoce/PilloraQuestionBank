@@ -102,8 +102,8 @@ Delete endpoints guard against deleting a row that still has dependent data (ret
 ```
 POST   /api/import/upload-pdf       -- upload a single PDF; returns page images + AI-suggested metadata
 POST   /api/import/confirm          -- submit labeled paper + questions
-POST   /api/import/ai-topics        -- trigger AI subtopic suggestions for one question
-POST   /api/import/save-topics      -- persist user-reviewed subtopic selections for a paper's questions
+POST   /api/import/ai-topics        -- AI part split + topic/marks suggestions for one question
+POST   /api/import/save-topics      -- persist user-reviewed parts for a paper's questions
 DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
 ```
 
@@ -124,10 +124,24 @@ GET    /api/questions             -- filter params: subject_id, stream_id, level
                                      page, page_size
                                   -- returns paginated question list with paper info, topic chips
                                      ({ topic_name, topic_number, subtopic_names[] }),
-                                     and a presigned first-page image URL
+                                     marks (summed across the question's parts), and a
+                                     presigned first-page image URL
 GET    /api/questions/:id         -- full question detail: question pages + answer pages
-                                     (each with a presigned S3 URL), topics
+                                     (each with a presigned S3 URL), topics, and parts
+                                     ({ part_order, label, marks, topics[] })
 ```
+
+**Topics are per part; the list endpoint returns their union.** `topics` on a list
+item is the de-duplicated union of every part's topics, with subtopic names merged
+— so a browse card renders exactly as it did before questions had parts. The
+per-part breakdown is only on the detail endpoint, keeping the list payload small
+(the list query still has to load parts to build the union, it just doesn't
+serialize them).
+
+`topic_ids` matches when **any** part carries a selected topic. `exclusive` means
+**no** part carries a topic outside the selection — i.e. the union of the
+question's topics is a subset of the selection, the same meaning it had when
+topics were recorded at question level.
 
 There is no `/api/questions/:id/image/:page` proxy endpoint — images are served exclusively via presigned S3 URLs embedded directly in the `/api/questions` and `/api/questions/:id` responses (see [Auth & Security](#auth--security)).
 
@@ -253,23 +267,46 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 2. **`POST /api/import/confirm`** (Implemented)
    - Accepts paper metadata + an ordered list of questions, each with its pages (`temp_key`, `page_type`, `page_order`, `width_px`, `height_px`).
    - Accepts an optional `is_premium` flag (**defaults to `true`** — imported papers are premium unless the admin unticks the box at the final import step).
-   - Creates `Paper`, `Question`, and `QuestionPage` rows transactionally.
+   - Creates `Paper`, `Question`, and `QuestionPage` rows transactionally. Each question also gets a single blank `QuestionPart` — topics and marks arrive later, at the topic-review step, but the every-question-has-a-part invariant holds from creation.
    - Moves images from the temp key into the canonical object-store key pattern: `papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp` (S3 server-side copy + delete of the temp object).
    - Persists `width_px` and `height_px` per page.
    - Returns the created paper id plus serialized questions/pages (each page including a fresh presigned URL).
 
 3. **`POST /api/import/ai-topics`** (Implemented)
    - Takes a single `question_id` (not a whole paper — the frontend calls this once per question).
-   - Fetches the question's topic/subtopic list scoped to the paper's `subject_id` + `stream_id`, downscales the question's page images for the AI call (`downscale_for_ai`, capped at 768 px long side), and calls Claude (see [AI_INTEGRATION.md → Topic Auto-labeling](./AI_INTEGRATION.md)).
-   - Returns suggested `subtopic_id`s to the frontend for review — it does **not** persist anything itself.
+   - Fetches the question's topic/subtopic list scoped to the paper's `subject_id` + `stream_id`, downscales the question's page images for the AI call (`downscale_for_ai`, capped at 768 px long side), and calls Claude (see [AI_INTEGRATION.md → Part Splitting & Topic Auto-labeling](./AI_INTEGRATION.md)).
+   - Returns `{"parts": [{label, marks, selections: [{topic_id, subtopic_id}]}]}` — the suggested split *and* labelling — for review. It does **not** persist anything itself.
 
 4. **`POST /api/import/save-topics`** (Implemented)
-   - Accepts a `paper_id` plus, for each question in that paper, the final list of `subtopic_id`s the admin confirmed.
-   - Validates all question ids belong to the paper and all subtopic ids are valid for the paper's subject/stream.
-   - Replaces (delete + re-insert) `QuestionTopic` rows for the paper's questions.
+   - Accepts `{paper_id, questions: [{question_id, parts: [{label, marks, topic_assignments}]}]}` — the parts the admin confirmed, in printed order.
+   - Validates all question ids belong to the paper, and (across *every* question, before writing any of them) that each topic is in scope for the paper's subject/stream and each subtopic sits under its topic. A 422 therefore leaves the whole paper's existing labelling intact.
+   - Replaces each question's `QuestionPart` rows wholesale via `set_question_parts`; deleting the old parts cascades to their `QuestionTopic`/`QuestionSubtopic` rows. `part_order` is assigned from list order. A question sent with no parts gets one blank part.
 
 5. **`DELETE /api/import/papers/{paper_id}`** (Implemented)
-   - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionTopic` in the DB), then deletes the associated S3 objects after the DB transaction succeeds.
+   - Deletes the `Paper` row (cascades to `Question`/`QuestionPage`/`QuestionPart` and, through the part, `QuestionTopic`/`QuestionSubtopic`), then deletes the associated S3 objects after the DB transaction succeeds.
+
+### The shared parts write path
+
+`app/services/question_parts.py` is the **single** implementation of "replace a
+question's parts, topics, subtopics and marks". `POST /api/import/save-topics`,
+`POST /api/papers/{id}/questions` and `PUT /api/questions/{id}` all go through
+it, so validation ordering and dedupe semantics can't drift between them:
+
+- `scoped_topic_ids(db, subject_id, stream_id)` — the topics a question on that paper may use.
+- `validate_parts(db, parts, valid_topic_ids)` — pure validation, writes nothing, so a caller can check several questions before touching the DB.
+- `set_question_parts(db, question_id, parts, valid_topic_ids)` — validates, then deletes and re-inserts. Topic ids are de-duplicated **within** a part, not across parts: two parts of one question may legitimately test the same subtopic.
+
+The admin question-CRUD endpoints (`POST /api/papers/{id}/questions`,
+`PUT /api/questions/{id}`) take `{question_number, parts: [{label, marks,
+topic_assignments}], tag_ids, pages}` — no question-level `marks`, since it is
+derived. They return the question with `marks` (the sum) plus
+`parts: [{part_order, label, marks, selections: [{topic_id, subtopic_id}]}]`,
+where `selections` is the flat cross-product shape the editor UI consumes.
+
+Changing a paper's subject or stream still clears its questions' topic labels
+(they are scoped to subject+stream), reaching them through `question_part`. The
+**parts themselves and their marks survive** — only the now-out-of-scope topic
+assignments go.
 
 ## Question Selection (Implemented)
 
@@ -277,8 +314,14 @@ The frontend drives the UX flow (see [FRONTEND.md](./FRONTEND.md)). Server-side 
 **question count** (`target_type="count"`), each with a `"random"` or `"in-order"` `algorithm`, all
 exposed via `POST /api/generate/select`.
 
-**Marks target.** Both marks selectors ignore questions with `null` or non-positive `marks` and
-return `[]` for a non-positive target or when nothing is selectable.
+**Marks target.** Selection reads `Question.total_marks` — the derived
+`SUM(QuestionPart.marks)`, not a stored column (see
+[DATA_MODEL.md](./DATA_MODEL.md#questions-have-parts)). Both marks selectors ignore
+questions whose total is `null` or non-positive, and return `[]` for a
+non-positive target or when nothing is selectable. A question none of whose
+parts carry marks is therefore never picked by a marks target — which is why the
+AI labeller puts an unattributable question-level total on the first part rather
+than leaving every part null.
 
 `knapsack_select(questions, target_marks)` (`algorithm="random"`):
 
@@ -448,7 +491,7 @@ Platypus `Paragraph` objects, which handle the word-wrap and emit **clickable li
 in the PDF (links render blue + underlined). Plain text with no tags is accepted as the legacy
 newline-separated format, so older API clients keep working.
 
-The route (`generate_paper`) computes `total_marks = sum(q.marks or 0 …)`, resolves the
+The route (`generate_paper`) computes `total_marks = sum(q.total_marks or 0 …)`, resolves the
 effective cover values by role (`_resolve_generation_options` — admins use the request's
 `cover_*` fields verbatim; non-admins get the generation-config presets and a validated title),
 builds a `CoverSpec` per section (question section `is_questions=True`, answer section `False`),

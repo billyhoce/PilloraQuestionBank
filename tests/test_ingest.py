@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.orm import Session
 
-from app.models.orm import Paper, Question, QuestionPage, QuestionTopic
+from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
 from app.pdf.image_processing import standardize, to_webp_bytes
 from app.services.ingest import confirm_import, pdf_to_images
 
@@ -102,7 +102,6 @@ def test_confirm_creates_paper_row(db_session, mock_s3, reference_data, admin_us
         questions=[
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [
                     {
                         "temp_key": "tmp/upload-abc/page_0.webp",
@@ -131,7 +130,6 @@ def _single_question_payload(reference_data, admin_user, mock_s3, temp_key):
         questions=[
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [
                     {"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}
                 ],
@@ -167,7 +165,7 @@ def test_confirm_route_defaults_to_premium(admin_client, mock_s3, reference_data
         "year": 2024,
         "paper_number": "3",
         "questions": [
-            {"question_number": 1, "marks": 5, "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}]},
+            {"question_number": 1, "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}]},
         ],
     }
     resp = admin_client.post("/api/import/confirm", json=payload)
@@ -187,7 +185,6 @@ def test_confirm_creates_correct_question_count(db_session, mock_s3, reference_d
     questions = [
         {
             "question_number": i,
-            "marks": i * 2,
             "pages": [
                 {
                     "temp_key": f"tmp/upload-abc/page_{i}.webp",
@@ -213,7 +210,6 @@ def test_confirm_creates_question_pages(db_session, mock_s3, reference_data, adm
     questions = [
         {
             "question_number": 1,
-            "marks": 5,
             "pages": [
                 {"temp_key": "tmp/x/question_0.webp", "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800},
                 {"temp_key": "tmp/x/answer_0.webp", "page_type": "answer", "page_order": 0, "width_px": 2480, "height_px": 400},
@@ -241,7 +237,6 @@ def test_confirm_moves_images_to_canonical_s3_key(db_session, mock_s3, reference
         questions=[
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}],
             }
         ],
@@ -267,7 +262,6 @@ def test_confirm_stores_width_and_height_on_question_page(db_session, mock_s3, r
         questions=[
             {
                 "question_number": 1,
-                "marks": 3,
                 "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 720}],
             }
         ],
@@ -289,7 +283,6 @@ def test_confirm_rollback_on_s3_failure(db_session, mock_s3, reference_data, adm
         questions=[
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}],
             }
         ],
@@ -318,7 +311,6 @@ def test_confirm_cleans_up_canonical_copies_on_partial_failure(db_session, mock_
         questions=[
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [
                     {"temp_key": temp0, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800},
                     {"temp_key": temp1, "page_type": "answer", "page_order": 0, "width_px": 2480, "height_px": 400},
@@ -422,7 +414,6 @@ def test_confirm_route_creates_paper_returns_paper_id_and_questions(admin_client
         "questions": [
             {
                 "question_number": 1,
-                "marks": 5,
                 "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}],
             }
         ],
@@ -435,7 +426,6 @@ def test_confirm_route_creates_paper_returns_paper_id_and_questions(admin_client
     assert len(body["questions"]) == 1
     q = body["questions"][0]
     assert q["question_number"] == 1
-    assert q["marks"] == 5
     assert "id" in q
     assert len(q["pages"]) == 1
     assert "url" in q["pages"][0]
@@ -447,21 +437,23 @@ def test_ai_topics_admin_only(public_client, sample_paper):
     assert resp.status_code == 403
 
 
-def test_ai_topics_returns_suggestions_for_single_question(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_returns_suggested_parts(admin_client, mock_s3, sample_paper, db_session, reference_data):
     q = sample_paper.questions[0]
     rd = reference_data
-    suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    selections = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    parts = [
+        {"label": "(a)", "marks": 2, "selections": selections},
+        {"label": "(b)", "marks": 3, "selections": []},
+    ]
     with (
-        patch("app.routes.ingest.label_question", return_value={"selections": suggestion, "marks": 2}) as mock_label,
+        patch("app.routes.ingest.label_question", return_value={"parts": parts}) as mock_label,
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
         resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["selections"] == suggestion
-    assert body["marks"] == 2
+    assert resp.json()["parts"] == parts
     mock_label.assert_called_once()
 
 
@@ -473,9 +465,13 @@ def test_ai_topics_missing_question_returns_404(admin_client, mock_s3):
 def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_session, reference_data):
     q = sample_paper.questions[0]
     rd = reference_data
-    suggestion = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
+    parts = [{
+        "label": "(a)",
+        "marks": None,
+        "selections": [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}],
+    }]
     with (
-        patch("app.routes.ingest.label_question", return_value={"selections": suggestion, "marks": None}),
+        patch("app.routes.ingest.label_question", return_value={"parts": parts}),
         patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
     ):
@@ -497,7 +493,7 @@ def test_ai_topics_includes_topics_without_subtopics(admin_client, mock_s3, samp
 
     def fake_label(question, topics, image_bytes_list):
         captured["topics"] = topics
-        return {"selections": [], "marks": None}
+        return {"parts": [{"label": "", "marks": None, "selections": []}]}
 
     with (
         patch("app.routes.ingest.label_question", side_effect=fake_label),
@@ -555,10 +551,30 @@ def test_ai_topics_api_error_returns_503(admin_client, mock_s3, sample_paper, db
 # ---------------------------------------------------------------------------
 
 
+def _one_part(rd, label="", marks=None, with_subtopic=True):
+    return {
+        "label": label,
+        "marks": marks,
+        "topic_assignments": [{
+            "topic_id": rd["topic"].id,
+            "subtopics": [{"subtopic_id": rd["subtopic"].id}] if with_subtopic else [],
+        }],
+    }
+
+
+def _parts_of(db_session, question_id):
+    return (
+        db_session.query(QuestionPart)
+        .filter(QuestionPart.question_id == question_id)
+        .order_by(QuestionPart.part_order)
+        .all()
+    )
+
+
 def test_save_topics_admin_only(public_client, sample_paper):
     resp = public_client.post(
         "/api/import/save-topics",
-        json={"paper_id": sample_paper.id, "question_topics": []},
+        json={"paper_id": sample_paper.id, "questions": []},
     )
     assert resp.status_code == 403
 
@@ -567,13 +583,8 @@ def test_save_topics_persists_question_topics(admin_client, sample_paper, db_ses
     rd = reference_data
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": q.id,
-                "topic_assignments": [
-                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
-                ],
-            }
+        "questions": [
+            {"question_id": q.id, "parts": [_one_part(rd)]}
             for q in sample_paper.questions
         ],
     }
@@ -582,38 +593,51 @@ def test_save_topics_persists_question_topics(admin_client, sample_paper, db_ses
     assert db_session.query(QuestionTopic).count() == 3
 
 
-def test_save_topics_updates_marks(admin_client, sample_paper, db_session, reference_data):
+def test_save_topics_persists_per_part_labels_and_marks(admin_client, sample_paper, db_session, reference_data):
     rd = reference_data
     q = sample_paper.questions[0]
-    original_marks = q.marks  # fixture default is 5
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": q.id,
-                "marks": original_marks + 1,
-                "topic_assignments": [
-                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
-                ],
-            }
-        ],
+        "questions": [{
+            "question_id": q.id,
+            "parts": [
+                _one_part(rd, label="(a)(i)", marks=2),
+                _one_part(rd, label="(a)(ii)", marks=3, with_subtopic=False),
+                _one_part(rd, label="(b)", marks=5, with_subtopic=False),
+            ],
+        }],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
+
     db_session.expire_all()
-    assert db_session.get(Question, q.id).marks == original_marks + 1
+    parts = _parts_of(db_session, q.id)
+    assert [(p.part_order, p.label, p.marks) for p in parts] == [
+        (0, "(a)(i)", 2), (1, "(a)(ii)", 3), (2, "(b)", 5),
+    ]
+    # The question's marks total is derived from the parts, never stored.
+    assert db_session.get(Question, q.id).total_marks == 10
+
+
+def test_save_topics_with_no_parts_leaves_one_blank_part(admin_client, sample_paper, db_session, reference_data):
+    q = sample_paper.questions[0]
+    resp = admin_client.post("/api/import/save-topics", json={
+        "paper_id": sample_paper.id,
+        "questions": [{"question_id": q.id, "parts": []}],
+    })
+    assert resp.status_code == 201
+
+    db_session.expire_all()
+    parts = _parts_of(db_session, q.id)
+    assert len(parts) == 1
+    assert (parts[0].label, parts[0].marks) == ("", None)
 
 
 def test_save_topics_rejects_question_not_in_paper(admin_client, sample_paper, db_session, reference_data):
     rd = reference_data
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": 99999,
-                "topic_assignments": [{"topic_id": rd["topic"].id, "subtopics": []}],
-            }
-        ],
+        "questions": [{"question_id": 99999, "parts": [_one_part(rd, with_subtopic=False)]}],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 422
@@ -624,47 +648,90 @@ def test_save_topics_rejects_invalid_subtopic_id(admin_client, sample_paper, db_
     rd = reference_data
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": sample_paper.questions[0].id,
+        "questions": [{
+            "question_id": sample_paper.questions[0].id,
+            "parts": [{
+                "label": "",
+                "marks": None,
                 "topic_assignments": [
                     {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": 99999}]}
                 ],
-            }
-        ],
+            }],
+        }],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 422
     assert db_session.query(QuestionTopic).count() == 0
 
 
-def test_save_topics_replaces_existing_rows(admin_client, sample_paper, db_session, reference_data):
+def test_save_topics_rejects_before_writing_any_question(admin_client, sample_paper, db_session, reference_data):
+    """A bad second question must not leave the first one rewritten."""
     rd = reference_data
-    q = sample_paper.questions[0]
-    db_session.add(QuestionTopic(question_id=q.id, topic_id=rd["topic"].id))
-    db_session.flush()
-    assert db_session.query(QuestionTopic).count() == 1
-
+    q_ok, q_bad = sample_paper.questions[0], sample_paper.questions[1]
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": q.id,
-                "topic_assignments": [
-                    {"topic_id": rd["topic"].id, "subtopics": [{"subtopic_id": rd["subtopic"].id}]}
-                ],
-            }
+        "questions": [
+            {"question_id": q_ok.id, "parts": [_one_part(rd, label="(a)", marks=9)]},
+            {"question_id": q_bad.id, "parts": [{
+                "label": "",
+                "marks": None,
+                "topic_assignments": [{"topic_id": 99999, "subtopics": []}],
+            }]},
         ],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 422
+
+    db_session.expire_all()
+    # The fixture's original two parts for Q1 survive untouched.
+    assert [(p.label, p.marks) for p in _parts_of(db_session, q_ok.id)] == [("(a)", 2), ("(b)", 3)]
+
+
+def test_save_topics_replaces_existing_parts(admin_client, sample_paper, db_session, reference_data):
+    rd = reference_data
+    q = sample_paper.questions[0]
+    assert len(_parts_of(db_session, q.id)) == 2  # fixture gives Q1 two parts
+
+    payload = {
+        "paper_id": sample_paper.id,
+        "questions": [{"question_id": q.id, "parts": [_one_part(rd, label="(a)", marks=4)]}],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
-    rows = db_session.query(QuestionTopic).all()
+
+    db_session.expire_all()
+    parts = _parts_of(db_session, q.id)
+    assert len(parts) == 1
+    rows = db_session.query(QuestionTopic).filter(QuestionTopic.part_id == parts[0].id).all()
     assert len(rows) == 1
     assert rows[0].topic_id == rd["topic"].id
 
 
+def test_save_topics_allows_the_same_subtopic_on_two_parts(admin_client, sample_paper, db_session, reference_data):
+    """Two parts of one question can legitimately test the same subtopic."""
+    from app.models.orm import QuestionSubtopic
+    rd = reference_data
+    q = sample_paper.questions[0]
+    payload = {
+        "paper_id": sample_paper.id,
+        "questions": [{
+            "question_id": q.id,
+            "parts": [_one_part(rd, label="(a)", marks=2), _one_part(rd, label="(b)", marks=3)],
+        }],
+    }
+    resp = admin_client.post("/api/import/save-topics", json=payload)
+    assert resp.status_code == 201
+
+    db_session.expire_all()
+    part_ids = [p.id for p in _parts_of(db_session, q.id)]
+    assert len(part_ids) == 2
+    for pid in part_ids:
+        rows = db_session.query(QuestionSubtopic).filter(QuestionSubtopic.part_id == pid).all()
+        assert [r.subtopic_id for r in rows] == [rd["subtopic"].id]
+
+
 def test_save_topics_allows_multiple_subtopics_under_same_topic(admin_client, sample_paper, db_session, reference_data):
-    """A single question can have multiple subtopics belonging to the same parent topic."""
+    """A single part can have multiple subtopics belonging to the same parent topic."""
     from app.models.orm import QuestionSubtopic, Subtopic
     rd = reference_data
     sub2 = Subtopic(topic_id=rd["topic"].id, name="Quadratic Equations")
@@ -675,25 +742,28 @@ def test_save_topics_allows_multiple_subtopics_under_same_topic(admin_client, sa
     q = sample_paper.questions[0]
     payload = {
         "paper_id": sample_paper.id,
-        "question_topics": [
-            {
-                "question_id": q.id,
-                "topic_assignments": [
-                    {
-                        "topic_id": rd["topic"].id,
-                        "subtopics": [
-                            {"subtopic_id": rd["subtopic"].id},
-                            {"subtopic_id": sub2_id},
-                        ],
-                    }
-                ],
-            }
-        ],
+        "questions": [{
+            "question_id": q.id,
+            "parts": [{
+                "label": "",
+                "marks": None,
+                "topic_assignments": [{
+                    "topic_id": rd["topic"].id,
+                    "subtopics": [
+                        {"subtopic_id": rd["subtopic"].id},
+                        {"subtopic_id": sub2_id},
+                    ],
+                }],
+            }],
+        }],
     }
     resp = admin_client.post("/api/import/save-topics", json=payload)
     assert resp.status_code == 201
-    assert db_session.query(QuestionTopic).filter(QuestionTopic.question_id == q.id).count() == 1
-    qs_rows = db_session.query(QuestionSubtopic).filter(QuestionSubtopic.question_id == q.id).all()
+
+    db_session.expire_all()
+    part = _parts_of(db_session, q.id)[0]
+    assert db_session.query(QuestionTopic).filter(QuestionTopic.part_id == part.id).count() == 1
+    qs_rows = db_session.query(QuestionSubtopic).filter(QuestionSubtopic.part_id == part.id).all()
     assert {r.subtopic_id for r in qs_rows} == {rd["subtopic"].id, sub2_id}
 
 

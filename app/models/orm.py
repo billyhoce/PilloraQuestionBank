@@ -12,8 +12,9 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    select,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.db import Base
 
@@ -178,20 +179,31 @@ class Paper(Base):
 
 
 class Question(Base):
+    """One exam question, imported as a single set of page images.
+
+    Topics, subtopics and marks belong to the question's *parts* — (a), (b),
+    (a)(i) … — not to the question itself. A question always has at least one
+    part; a question with no printed parts is modelled as a single part whose
+    ``label`` is ``""``. The question's marks total is derived (``total_marks``)
+    rather than stored, so it can never disagree with its parts.
+    """
+
     __tablename__ = "question"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("paper.id", ondelete="CASCADE"), nullable=False)
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    marks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     paper: Mapped[Paper] = relationship(back_populates="questions")
     pages: Mapped[list["QuestionPage"]] = relationship(back_populates="question", cascade="all, delete-orphan")
-    topics: Mapped[list["QuestionTopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
-    question_subtopics: Mapped[list["QuestionSubtopic"]] = relationship(back_populates="question", cascade="all, delete-orphan")
+    parts: Mapped[list["QuestionPart"]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+        order_by="QuestionPart.part_order",
+    )
     tags: Mapped[list["QuestionTag"]] = relationship(back_populates="question", cascade="all, delete-orphan")
 
 
@@ -214,17 +226,51 @@ class QuestionPage(Base):
     question: Mapped[Question] = relationship(back_populates="pages")
 
 
+class QuestionPart(Base):
+    """One part of a question — "(a)", "(a)(i)", "(b)" — carrying its own
+    topics/subtopics and its own marks.
+
+    ``label`` is the part's designation exactly as printed on the paper, so an
+    admin reviewing the question image can match a part to what they see. Note
+    that "(a)(i)" and "(a)(ii)" are two independent parts, which is why the
+    label cannot be derived from ``part_order``. A question with no printed
+    parts has a single part whose label is ``""``.
+    """
+
+    __tablename__ = "question_part"
+    __table_args__ = (
+        UniqueConstraint("question_id", "part_order", name="uq_qpart_question_order"),
+        CheckConstraint("part_order >= 0", name="ck_qpart_order_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("question.id", ondelete="CASCADE"), nullable=False
+    )
+    part_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(32), nullable=False, server_default="")
+    marks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    question: Mapped["Question"] = relationship(back_populates="parts")
+    topics: Mapped[list["QuestionTopic"]] = relationship(
+        back_populates="part", cascade="all, delete-orphan"
+    )
+    part_subtopics: Mapped[list["QuestionSubtopic"]] = relationship(
+        back_populates="part", cascade="all, delete-orphan"
+    )
+
+
 class QuestionTopic(Base):
     __tablename__ = "question_topic"
 
-    question_id: Mapped[int] = mapped_column(
-        ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
+    part_id: Mapped[int] = mapped_column(
+        ForeignKey("question_part.id", ondelete="CASCADE"), primary_key=True
     )
     topic_id: Mapped[int] = mapped_column(
         ForeignKey("topic.id", ondelete="RESTRICT"), primary_key=True
     )
 
-    question: Mapped["Question"] = relationship(back_populates="topics")
+    part: Mapped["QuestionPart"] = relationship(back_populates="topics")
     topic: Mapped["Topic"] = relationship()
 
 
@@ -232,25 +278,25 @@ class QuestionSubtopic(Base):
     __tablename__ = "question_subtopic"
     __table_args__ = (
         # Composite FK enforces that a subtopic can only be assigned when the
-        # matching topic is already recorded in question_topic for this question.
+        # matching topic is already recorded in question_topic for this part.
         # ON DELETE CASCADE propagates when the topic assignment is removed.
         ForeignKeyConstraint(
-            ["question_id", "topic_id"],
-            ["question_topic.question_id", "question_topic.topic_id"],
+            ["part_id", "topic_id"],
+            ["question_topic.part_id", "question_topic.topic_id"],
             name="fk_qsubtopic_question_topic",
             ondelete="CASCADE",
         ),
     )
 
-    question_id: Mapped[int] = mapped_column(
-        ForeignKey("question.id", ondelete="CASCADE"), primary_key=True
+    part_id: Mapped[int] = mapped_column(
+        ForeignKey("question_part.id", ondelete="CASCADE"), primary_key=True
     )
     subtopic_id: Mapped[int] = mapped_column(
         ForeignKey("subtopic.id", ondelete="CASCADE"), primary_key=True
     )
     topic_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    question: Mapped["Question"] = relationship(back_populates="question_subtopics")
+    part: Mapped["QuestionPart"] = relationship(back_populates="part_subtopics")
     subtopic: Mapped["Subtopic"] = relationship()
 
 
@@ -266,3 +312,15 @@ class QuestionTag(Base):
 
     question: Mapped["Question"] = relationship(back_populates="tags")
     tag: Mapped["Tag"] = relationship()
+
+
+# A question's marks total is the sum of its parts' marks, never a stored
+# column, so the two can't drift. Declared here rather than inline on Question
+# because it references QuestionPart. NULL when no part carries marks, which is
+# what the generation selectors already treat as "unmarked".
+Question.total_marks = column_property(
+    select(func.sum(QuestionPart.marks))
+    .where(QuestionPart.question_id == Question.id)
+    .correlate_except(QuestionPart)
+    .scalar_subquery()
+)

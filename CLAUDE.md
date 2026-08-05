@@ -2,6 +2,12 @@
 
 A web application that serves as a database of secondary school exam questions (Singapore curriculum). Admins import exam papers (PDFs), split them into individual questions as page images, label metadata and topics, and store them. Public users browse, filter, and generate custom exam papers as downloadable PDFs.
 
+A question is stored as **one set of page images** but labelled as a list of
+**parts** — (a), (b), (a)(i) … — each with its own topics/subtopics and its own
+marks. The images are never split per part; the split is produced by the AI
+labeller and corrected by the admin. A question's marks total is derived by
+summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-parts).
+
 ## Scale
 
 - 1–10 concurrent users
@@ -63,7 +69,7 @@ FastAPI                                              │
 | [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Database schema (reference + core tables), image storage conventions, image dimension standards |
 | [docs/BACKEND.md](./docs/BACKEND.md) | FastAPI app, API endpoints, import pipeline (server side), PDF generation engine, auth & security |
 | [docs/FRONTEND.md](./docs/FRONTEND.md) | React app, import flow UI, browse/filter UI, paper generation UI, admin CRUD UI |
-| [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) | Claude API usage: topic auto-labeling and filename metadata extraction |
+| [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) | Claude API usage: per-part splitting + topic/marks auto-labeling, and filename metadata extraction |
 | [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
 
@@ -87,7 +93,6 @@ Every new feature or behavior change must, **in the same change**:
 
 ## Out of Scope (v1)
 
-- AI-assisted marks extraction from question images
 - OCR for full-text search within questions
 - Difficulty rating / analytics per topic
 - Student-facing mode (practice tests, tracking)

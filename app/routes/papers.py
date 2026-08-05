@@ -14,17 +14,17 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionPart,
     QuestionSubtopic,
     QuestionTag,
     QuestionTopic,
-    Subtopic,
     Tag,
-    Topic,
 )
 from app.routes.auth import require_admin
-from app.routes.ingest import SubtopicSuggestion, TopicAssignment
+from app.routes.ingest import PartIn, SubtopicSuggestion, TopicAssignment
 from app.routes.questions import _paper_info, _tag_infos, _topic_infos
 from app.services.ingest import delete_paper
+from app.services.question_parts import scoped_topic_ids, set_question_parts
 from app.services.paper_admin import (
     apply_page_changes,
     commit_with_page_moves,
@@ -66,8 +66,7 @@ class PageIn(BaseModel):
 
 class QuestionIn(BaseModel):
     question_number: int
-    marks: Optional[int] = None
-    topic_assignments: List[TopicAssignment] = []
+    parts: List[PartIn] = []
     tag_ids: List[int] = []
     pages: List[PageIn]
 
@@ -94,19 +93,21 @@ _PAPER_REFS = (
 
 _QUESTION_EAGER = (
     selectinload(Question.pages),
-    selectinload(Question.topics).joinedload(QuestionTopic.topic),
-    selectinload(Question.question_subtopics).joinedload(QuestionSubtopic.subtopic),
+    selectinload(Question.parts).options(
+        selectinload(QuestionPart.topics).joinedload(QuestionTopic.topic),
+        selectinload(QuestionPart.part_subtopics).joinedload(QuestionSubtopic.subtopic),
+    ),
     selectinload(Question.tags).joinedload(QuestionTag.tag),
 )
 
 
-def _topic_selections(q: Question) -> list[dict]:
+def _part_selections(part: QuestionPart) -> list[dict]:
     """Return flat [{topic_id, subtopic_id}] selections for the editor UI."""
     subtopics_by_topic: dict[int, list[int]] = {}
-    for qs in q.question_subtopics:
+    for qs in part.part_subtopics:
         subtopics_by_topic.setdefault(qs.topic_id, []).append(qs.subtopic_id)
     result = []
-    for qt in q.topics:
+    for qt in part.topics:
         subtopic_ids = subtopics_by_topic.get(qt.topic_id, [])
         if subtopic_ids:
             for sid in subtopic_ids:
@@ -121,7 +122,7 @@ def _serialize_question(q: Question) -> dict:
     return {
         "id": q.id,
         "question_number": q.question_number,
-        "marks": q.marks,
+        "marks": q.total_marks,
         "pages": [
             {
                 "id": p.id,
@@ -133,7 +134,15 @@ def _serialize_question(q: Question) -> dict:
             }
             for p in pages
         ],
-        "selections": _topic_selections(q),
+        "parts": [
+            {
+                "part_order": part.part_order,
+                "label": part.label,
+                "marks": part.marks,
+                "selections": _part_selections(part),
+            }
+            for part in sorted(q.parts, key=lambda p: p.part_order)
+        ],
         "tags": _tag_infos(q),
     }
 
@@ -180,56 +189,16 @@ def _ensure_unique_question_number(
         )
 
 
-def _set_topics(
+def _set_parts(
     db: Session,
     question_id: int,
-    topic_assignments: List[TopicAssignment],
+    parts: List[PartIn],
     subject_id: int,
     stream_id: int,
 ) -> None:
-    valid_topic_ids = {
-        tid for (tid,) in db.query(Topic.id)
-        .filter(Topic.subject_id == subject_id, Topic.stream_id == stream_id)
-        .all()
-    }
-
-    db.query(QuestionSubtopic).filter(
-        QuestionSubtopic.question_id == question_id
-    ).delete(synchronize_session=False)
-    db.query(QuestionTopic).filter(
-        QuestionTopic.question_id == question_id
-    ).delete(synchronize_session=False)
-
-    # Phase 1: validate before any writes
-    for assignment in topic_assignments:
-        if assignment.topic_id not in valid_topic_ids:
-            raise HTTPException(status_code=422, detail=f"Invalid topic_id {assignment.topic_id}")
-        for s in assignment.subtopics:
-            subtopic = db.get(Subtopic, s.subtopic_id)
-            if subtopic is None or subtopic.topic_id != assignment.topic_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"subtopic_id {s.subtopic_id} does not belong to topic_id {assignment.topic_id}",
-                )
-
-    # Phase 2: insert
-    inserted_topic_ids: set[int] = set()
-    for assignment in topic_assignments:
-        if assignment.topic_id not in inserted_topic_ids:
-            db.add(QuestionTopic(question_id=question_id, topic_id=assignment.topic_id))
-            db.flush()
-            inserted_topic_ids.add(assignment.topic_id)
-
-        seen_subtopic_ids: set[int] = set()
-        for s in assignment.subtopics:
-            if s.subtopic_id in seen_subtopic_ids:
-                continue
-            seen_subtopic_ids.add(s.subtopic_id)
-            db.add(QuestionSubtopic(
-                question_id=question_id,
-                subtopic_id=s.subtopic_id,
-                topic_id=assignment.topic_id,
-            ))
+    set_question_parts(
+        db, question_id, parts, scoped_topic_ids(db, subject_id, stream_id)
+    )
 
 
 def _set_tags(db: Session, question_id: int, tag_ids: List[int]) -> None:
@@ -430,12 +399,11 @@ def add_question_route(
         paper,
         {
             "question_number": payload.question_number,
-            "marks": payload.marks,
             "pages": [p.model_dump() for p in payload.pages],
         },
         db,
     )
-    _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
+    _set_parts(db, question.id, payload.parts, paper.subject_id, paper.stream_id)
     _set_tags(db, question.id, payload.tag_ids)
     db.flush()
     commit_with_page_moves(db, new_pairs)
@@ -465,12 +433,11 @@ def update_question_route(
 
     paper = question.paper
     question.question_number = payload.question_number
-    question.marks = payload.marks
 
     removed_keys, new_pairs = apply_page_changes(
         paper.id, question, [p.model_dump() for p in payload.pages], db
     )
-    _set_topics(db, question.id, payload.topic_assignments, paper.subject_id, paper.stream_id)
+    _set_parts(db, question.id, payload.parts, paper.subject_id, paper.stream_id)
     _set_tags(db, question.id, payload.tag_ids)
     db.flush()
     commit_with_page_moves(db, new_pairs, removed_keys)

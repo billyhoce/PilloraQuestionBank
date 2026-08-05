@@ -41,8 +41,18 @@ Question: {
   id,
   paper_id (FK),
   question_number (int),
-  marks (int, nullable),
   created_at
+  -- no marks column: the total is SUM(QuestionPart.marks), see below
+}
+
+QuestionPart: {
+  id,
+  question_id (FK → Question, ON DELETE CASCADE),
+  part_order (int),            -- 0-based; ordering within this question
+  label (string(32)),          -- "(a)", "(a)(i)", "" for an unparted question
+  marks (int, nullable),
+  UNIQUE (question_id, part_order),
+  CHECK (part_order >= 0)
 }
 
 QuestionPage: {
@@ -56,17 +66,28 @@ QuestionPage: {
 }
 
 QuestionTopic: {
-  question_id (PK, FK → Question),
-  topic_id    (PK, FK → Topic),
-  PRIMARY KEY (question_id, topic_id)    -- composite PK; referenced by QuestionSubtopic FK
+  part_id  (PK, FK → QuestionPart),
+  topic_id (PK, FK → Topic),
+  PRIMARY KEY (part_id, topic_id)        -- composite PK; referenced by QuestionSubtopic FK
 }
 
 QuestionSubtopic: {
-  question_id (FK → Question),
+  part_id (FK → QuestionPart),
   subtopic_id (FK → Subtopic),
   topic_id (NOT NULL),
-  PRIMARY KEY (question_id, subtopic_id),
-  FK (question_id, topic_id) → QuestionTopic  -- enforces subtopic is under the question's topic
+  PRIMARY KEY (part_id, subtopic_id),
+  FK (part_id, topic_id) → QuestionTopic  -- enforces subtopic is under the part's topic
+}
+
+Tag: {
+  id,
+  name (unique)
+}
+
+QuestionTag: {
+  question_id (PK, FK → Question),
+  tag_id      (PK, FK → Tag),
+  PRIMARY KEY (question_id, tag_id)      -- tags are question-level, not per part
 }
 
 User: {
@@ -90,6 +111,32 @@ GenerationConfig: {
   footer_text                  -- footer preset, printed flush-left on every page
 }
 ```
+
+### Questions have parts
+
+A real exam question is made of parts — (a), (b), and often (a)(i)/(a)(ii) — and
+each part tests a different topic and is worth its own marks. **Topics,
+subtopics and marks therefore hang off `QuestionPart`, never off `Question`.**
+
+- **Every question has at least one part.** A question with no printed parts is
+  modelled as a single part whose `label` is `''`. The invariant is enforced in
+  code (`app/services/question_parts.py`), not by a DB constraint.
+- **`label` is the paper's own text**, e.g. `"(a)(i)"`. It cannot be derived
+  from `part_order`, because `(a)(i)`, `(a)(ii)` and `(b)` are three independent
+  parts — so positional lettering would render the third as "(c)" and mislead an
+  admin checking it against the question image.
+- **A question's marks total is derived, never stored**: `SUM(QuestionPart.marks)`,
+  exposed on the ORM as `Question.total_marks` (a `column_property`) and
+  serialized as `marks` in the API. It is `NULL` when no part carries marks,
+  which the generation selectors already treat as "unmarked". Because it is
+  computed, the total can never disagree with the parts.
+- **Images are not split per part.** A question is imported as one set of page
+  images covering all its parts; splitting is purely a labelling concern, done
+  by the AI labeller and corrected by the admin. See
+  [AI_INTEGRATION.md](./AI_INTEGRATION.md).
+
+Deleting a part cascades to its `QuestionTopic` and `QuestionSubtopic` rows, so
+replacing a question's labelling is a single delete-then-insert of its parts.
 
 **Generation config.** `GenerationConfig` is a **single row** (`ck_generation_config_singleton`
 enforces `id = 1`) of admin-set presets applied to every non-admin paper generation; `CoverTitle`

@@ -151,7 +151,8 @@ def test_update_paper_stream_change_clears_topics(
 ):
     # Assign a topic to question 1, then change the paper's stream.
     q1 = next(q for q in sample_paper.questions if q.question_number == 1)
-    db_session.add(QuestionTopic(question_id=q1.id, topic_id=reference_data["topic"].id))
+    part = q1.parts[0]
+    db_session.add(QuestionTopic(part_id=part.id, topic_id=reference_data["topic"].id))
     db_session.flush()
 
     # A different stream (valid FK) to switch to.
@@ -171,8 +172,11 @@ def test_update_paper_stream_change_clears_topics(
     resp = admin_client.put(f"/api/papers/{sample_paper.id}", json=payload)
     assert resp.status_code == 200, resp.text
 
-    remaining = db_session.query(QuestionTopic).filter(QuestionTopic.question_id == q1.id).count()
+    remaining = db_session.query(QuestionTopic).filter(QuestionTopic.part_id == part.id).count()
     assert remaining == 0
+    # The parts themselves survive — only the out-of-scope topic labels go.
+    db_session.expire_all()
+    assert len(q1.parts) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -203,11 +207,16 @@ def test_add_question(admin_client, sample_paper, reference_data, mock_s3):
     up = _upload_image(admin_client)
     payload = {
         "question_number": 4,
-        "marks": 7,
-        "topic_assignments": [
+        "parts": [
             {
-                "topic_id": reference_data["topic"].id,
-                "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
+                "label": "(a)",
+                "marks": 7,
+                "topic_assignments": [
+                    {
+                        "topic_id": reference_data["topic"].id,
+                        "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
+                    }
+                ],
             }
         ],
         "pages": [{
@@ -222,11 +231,14 @@ def test_add_question(admin_client, sample_paper, reference_data, mock_s3):
     assert resp.status_code == 201, resp.text
     q = resp.json()
     assert q["question_number"] == 4
-    assert q["marks"] == 7
+    assert q["marks"] == 7  # summed from the parts
     assert len(q["pages"]) == 1
-    assert len(q["selections"]) == 1
-    assert q["selections"][0]["topic_id"] == reference_data["topic"].id
-    assert q["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
+    assert len(q["parts"]) == 1
+    part = q["parts"][0]
+    assert (part["part_order"], part["label"], part["marks"]) == (0, "(a)", 7)
+    assert len(part["selections"]) == 1
+    assert part["selections"][0]["topic_id"] == reference_data["topic"].id
+    assert part["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
 
     detail = _get_detail(admin_client, sample_paper.id)
     assert len(detail["questions"]) == 4
@@ -241,12 +253,18 @@ def test_update_question_marks_and_topics(
 
     payload = {
         "question_number": 1,
-        "marks": 9,
-        "topic_assignments": [
+        "parts": [
             {
-                "topic_id": reference_data["topic"].id,
-                "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
-            }
+                "label": "(a)",
+                "marks": 4,
+                "topic_assignments": [
+                    {
+                        "topic_id": reference_data["topic"].id,
+                        "subtopics": [{"subtopic_id": reference_data["subtopic"].id}],
+                    }
+                ],
+            },
+            {"label": "(b)", "marks": 5, "topic_assignments": []},
         ],
         "pages": [{
             "id": existing_page["id"],
@@ -257,10 +275,12 @@ def test_update_question_marks_and_topics(
     resp = admin_client.put(f"/api/questions/{q1['id']}", json=payload)
     assert resp.status_code == 200, resp.text
     updated = resp.json()
-    assert updated["marks"] == 9
-    assert len(updated["selections"]) == 1
-    assert updated["selections"][0]["topic_id"] == reference_data["topic"].id
-    assert updated["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
+    assert updated["marks"] == 9  # 4 + 5
+    assert [(p["label"], p["marks"]) for p in updated["parts"]] == [("(a)", 4), ("(b)", 5)]
+    assert len(updated["parts"][0]["selections"]) == 1
+    assert updated["parts"][0]["selections"][0]["topic_id"] == reference_data["topic"].id
+    assert updated["parts"][0]["selections"][0]["subtopic_id"] == reference_data["subtopic"].id
+    assert updated["parts"][1]["selections"] == []
     assert len(updated["pages"]) == 1
 
 
@@ -274,8 +294,7 @@ def test_update_question_reorder_add_delete(admin_client, sample_paper, mock_s3)
     up = _upload_image(admin_client)
     payload = {
         "question_number": 2,
-        "marks": 3,
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": 3, "topic_assignments": []}],
         "pages": [
             {  # new page first
                 "temp_key": up["temp_key"],
@@ -314,8 +333,7 @@ def test_update_question_duplicate_number_rejected(admin_client, sample_paper, m
     # Renumber Q1 -> 2, which already exists.
     payload = {
         "question_number": 2,
-        "marks": q1["marks"],
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": q1["marks"], "topic_assignments": []}],
         "pages": [{
             "id": existing_page["id"],
             "page_type": existing_page["page_type"],
@@ -335,8 +353,7 @@ def test_update_question_same_number_allowed(admin_client, sample_paper, mock_s3
     existing_page = q1["pages"][0]
     payload = {
         "question_number": 1,
-        "marks": 8,
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": 8, "topic_assignments": []}],
         "pages": [{
             "id": existing_page["id"],
             "page_type": existing_page["page_type"],
@@ -351,8 +368,7 @@ def test_update_question_same_number_allowed(admin_client, sample_paper, mock_s3
 def test_add_question_duplicate_number_rejected(admin_client, sample_paper, mock_s3):
     payload = {
         "question_number": 1,  # already exists
-        "marks": 1,
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": 1, "topic_assignments": []}],
         "pages": [],
     }
     resp = admin_client.post(f"/api/papers/{sample_paper.id}/questions", json=payload)
@@ -394,8 +410,7 @@ def test_add_question_with_tags(admin_client, sample_paper, reference_data, mock
     up = _upload_image(admin_client)
     payload = {
         "question_number": 4,
-        "marks": 7,
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": 7, "topic_assignments": []}],
         "tag_ids": [reference_data["tag"].id],
         "pages": [{
             "temp_key": up["temp_key"],
@@ -425,8 +440,7 @@ def test_update_question_replaces_tags(admin_client, sample_paper, reference_dat
     def _payload(tag_ids):
         return {
             "question_number": 1,
-            "marks": 5,
-            "topic_assignments": [],
+            "parts": [{"label": "", "marks": 5, "topic_assignments": []}],
             "tag_ids": tag_ids,
             "pages": [{
                 "id": existing_page["id"],
@@ -448,8 +462,7 @@ def test_update_question_replaces_tags(admin_client, sample_paper, reference_dat
 def test_add_question_invalid_tag_id_returns_422(admin_client, sample_paper, mock_s3):
     payload = {
         "question_number": 4,
-        "marks": 1,
-        "topic_assignments": [],
+        "parts": [{"label": "", "marks": 1, "topic_assignments": []}],
         "tag_ids": [99999],
         "pages": [],
     }

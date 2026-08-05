@@ -23,7 +23,8 @@ from app.services.generation_config import DEFAULT_HEADER_TEXT
 def _make_question(id: int, marks: Optional[int], question_number: int = 1) -> MagicMock:
     q = MagicMock(spec=Question)
     q.id = id
-    q.marks = marks
+    # Selection reads the derived total, not a stored column.
+    q.total_marks = marks
     q.question_number = question_number
     return q
 
@@ -50,14 +51,14 @@ def _make_block(
 def test_knapsack_exact_match():
     questions = [_make_question(1, 5), _make_question(2, 3), _make_question(3, 2)]
     result = knapsack_select(questions, target_marks=8)
-    total = sum(q.marks for q in result)
+    total = sum(q.total_marks for q in result)
     assert total == 8
 
 
 def test_knapsack_exact_match_preferred_over_overshoot():
     questions = [_make_question(1, 4), _make_question(2, 3), _make_question(3, 2), _make_question(4, 1)]
     result = knapsack_select(questions, target_marks=5)
-    total = sum(q.marks for q in result)
+    total = sum(q.total_marks for q in result)
     assert total == 5
 
 
@@ -65,7 +66,7 @@ def test_knapsack_no_exact_match_returns_closest():
     # No subset of [5, 7, 3] sums to 6; closest either way is 5 or 7 (distance 1).
     questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
     result = knapsack_select(questions, target_marks=6)
-    total = sum(q.marks for q in result)
+    total = sum(q.total_marks for q in result)
     assert abs(total - 6) <= 1
 
 
@@ -87,7 +88,7 @@ def test_knapsack_null_marks_questions_excluded():
         _make_question(3, 3),
     ]
     result = knapsack_select(questions, target_marks=3)
-    assert all(q.marks is not None for q in result)
+    assert all(q.total_marks is not None for q in result)
     result_ids = [q.id for q in result]
     assert 2 not in result_ids
 
@@ -111,7 +112,7 @@ def test_knapsack_randomized_produces_variety():
     seen = set()
     for _ in range(20):
         result = knapsack_select(questions, target_marks=8)
-        assert sum(q.marks for q in result) == 8
+        assert sum(q.total_marks for q in result) == 8
         seen.add(frozenset(q.id for q in result))
     assert len(seen) > 1
 
@@ -126,7 +127,7 @@ def test_in_order_exact_match():
     result = in_order_select(questions, target_marks=8)
     # 5 + 3 lands exactly on 8; the 2-mark question would keep it at 10 (over), so stop.
     assert [q.id for q in result] == [1, 2]
-    assert sum(q.marks for q in result) == 8
+    assert sum(q.total_marks for q in result) == 8
 
 
 def test_in_order_picks_from_the_top():
@@ -142,7 +143,7 @@ def test_in_order_stops_at_first_overflow_never_exceeds():
     questions = [_make_question(1, 5), _make_question(2, 7), _make_question(3, 3)]
     result = in_order_select(questions, target_marks=6)
     assert [q.id for q in result] == [1]
-    assert sum(q.marks for q in result) <= 6
+    assert sum(q.total_marks for q in result) <= 6
 
 
 def test_in_order_is_deterministic():
@@ -656,7 +657,7 @@ def test_generate_select_returns_selection(public_client, sample_paper, referenc
 
 def test_generate_select_excludes_ids(public_client, sample_paper, db_session, reference_data):
     qs = db_session.query(Question).filter_by(paper_id=sample_paper.id).all()
-    excluded = [q.id for q in qs if q.marks == 5]  # the 5-mark question
+    excluded = [q.id for q in qs if q.total_marks == 5]  # the 5-mark question
     resp = public_client.post("/api/generate/select", json={
         "filters": {"subject_id": reference_data["subject"].id},
         "target_type": "marks",

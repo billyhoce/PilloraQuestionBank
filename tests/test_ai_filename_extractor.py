@@ -34,6 +34,12 @@ def _make_mock_response(input_dict: dict):
     block.input = input_dict
     resp = MagicMock()
     resp.content = [block]
+    # Real usage fields are ints; log_tokens multiplies them out to a dollar
+    # cost, so a bare MagicMock here would raise inside the logging call.
+    resp.usage.input_tokens = 100
+    resp.usage.output_tokens = 20
+    resp.usage.cache_creation_input_tokens = 0
+    resp.usage.cache_read_input_tokens = 0
     return resp
 
 

@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext'
 import Spinner from '../Spinner'
 import ErrorBanner from '../ErrorBanner'
 import TagCombobox from '../TagCombobox'
+import { formatTopic } from '../../utils/topicFormat'
 
 export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
   const { user } = useAuth()
@@ -73,6 +74,10 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
   const subtopicNames = detail
     ? [...new Set(detail.topics.flatMap(t => t.subtopic_names || []))]
     : []
+  // A single unlabelled part carries nothing the topic chips above don't
+  // already say, so only break the question down when it really has parts.
+  const parts = detail?.parts || []
+  const showParts = parts.length > 1 || parts.some(p => p.label)
 
   return (
     <div
@@ -141,6 +146,31 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
                 ) : null}
                 {tagError ? <p className="text-xs text-red-600 mt-1">{tagError}</p> : null}
               </section>
+
+              {showParts ? (
+                <section>
+                  <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Breakdown</h3>
+                  <ul className="space-y-1.5">
+                    {detail.parts.map(part => (
+                      <li key={part.part_order} className="flex items-start gap-2 text-sm">
+                        <span className="font-medium text-gray-900 w-16 flex-shrink-0">
+                          {part.label || '—'}
+                        </span>
+                        <span className="text-gray-600 w-16 flex-shrink-0">
+                          {part.marks != null ? `${part.marks} ${part.marks === 1 ? 'mark' : 'marks'}` : '—'}
+                        </span>
+                        <span className="text-gray-500 flex-grow">
+                          {part.topics.length > 0
+                            ? part.topics
+                                .map(t => [formatTopic(t.topic_number, t.topic_name), ...(t.subtopic_names || [])].join(' » '))
+                                .join(', ')
+                            : 'No topics'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               {detail.locked ? (
                 <section className="flex flex-col items-center justify-center gap-4 rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 to-gray-100 py-10 px-6 text-center">

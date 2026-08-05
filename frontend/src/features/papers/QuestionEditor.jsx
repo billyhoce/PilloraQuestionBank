@@ -2,11 +2,10 @@ import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import Spinner from '../../components/Spinner'
 import ConfirmDialog from '../../components/ConfirmDialog'
-import TopicCombobox from '../import/TopicCombobox'
 import TagCombobox from '../../components/TagCombobox'
+import PartsEditor from '../../components/PartsEditor'
 import PageImageEditor, { existingPageDraft } from './PageImageEditor'
-import { selectionsToAssignments } from '../import/topicUtils'
-import { formatTopic } from '../../utils/topicFormat'
+import { partsFromApi, partsToPayload } from '../import/topicUtils'
 
 function seedPages(question, type) {
   return (question.pages || [])
@@ -19,10 +18,9 @@ function QuestionEditor({
   paperId, question, isNew = false, topics, tags = [], lookup, usedNumbers = [], onSaved, onCancelNew, onDeleted, onExpand,
 }, ref) {
   const [questionNumber, setQuestionNumber] = useState(String(question.question_number ?? ''))
-  const [marks, setMarks] = useState(question.marks != null ? String(question.marks) : '')
   const [qPages, setQPages] = useState(() => (isNew ? [] : seedPages(question, 'question')))
   const [aPages, setAPages] = useState(() => (isNew ? [] : seedPages(question, 'answer')))
-  const [selected, setSelected] = useState(() => question.selections || [])
+  const [parts, setParts] = useState(() => partsFromApi(question.parts))
   const [selectedTags, setSelectedTags] = useState(() => question.tags || [])
 
   const [saving, setSaving] = useState(false)
@@ -31,17 +29,6 @@ function QuestionEditor({
   const [aiError, setAiError] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
-
-  const { subtopicById, topicById } = lookup || {}
-
-  function addTopic(sel) {
-    setSelected((prev) =>
-      prev.some((s) => s.topic_id === sel.topic_id && s.subtopic_id === sel.subtopic_id) ? prev : [...prev, sel]
-    )
-  }
-  function removeTopic(idx) {
-    setSelected((prev) => prev.filter((_, i) => i !== idx))
-  }
 
   function addTag(tag) {
     setSelectedTags((prev) => (prev.some((t) => t.id === tag.id) ? prev : [...prev, tag]))
@@ -61,8 +48,7 @@ function QuestionEditor({
     }))
     return {
       question_number: Number(questionNumber),
-      marks: marks === '' ? null : Number(marks),
-      topic_assignments: selectionsToAssignments(selected),
+      parts: partsToPayload(parts),
       tag_ids: selectedTags.map((t) => t.id),
       pages: ordered,
     }
@@ -117,8 +103,7 @@ function QuestionEditor({
     setAiError(null)
     try {
       const res = await api.import.aiTopicsForQuestion(question.id)
-      setSelected(res.selections || [])
-      setMarks(res.marks != null ? String(res.marks) : '')
+      setParts(partsFromApi(res.parts))
     } catch (e) {
       setAiError(e.message)
     } finally {
@@ -136,16 +121,6 @@ function QuestionEditor({
               type="number"
               value={questionNumber}
               onChange={(e) => setQuestionNumber(e.target.value)}
-              className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </label>
-          <label className="flex items-center gap-1 text-sm text-gray-700">
-            Marks
-            <input
-              type="number"
-              value={marks}
-              onChange={(e) => setMarks(e.target.value)}
-              placeholder="—"
               className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </label>
@@ -194,38 +169,8 @@ function QuestionEditor({
         </div>
 
         <div className="flex flex-col gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Topics</p>
-            {selected.length === 0 && (
-              <p className="text-sm text-gray-400 italic">No topics selected</p>
-            )}
-            {selected.map((sel, i) => {
-              let label
-              if (sel.subtopic_id != null) {
-                const s = subtopicById?.get(sel.subtopic_id)
-                label = s ? <><strong>{formatTopic(s.topic_number, s.topic_name)}</strong> » {s.name}</> : `Unknown subtopic ${sel.subtopic_id}`
-              } else {
-                const t = topicById?.get(sel.topic_id)
-                label = t ? <strong>{formatTopic(t.topic_number, t.name)}</strong> : `Unknown topic ${sel.topic_id}`
-              }
-              return (
-                <div key={i} className="flex items-start gap-2 mb-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
-                  <p className="text-sm text-gray-700 flex-grow">{label}</p>
-                  <button
-                    type="button"
-                    onClick={() => removeTopic(i)}
-                    className="text-gray-400 hover:text-red-600 text-lg flex-shrink-0 mt-0.5"
-                    aria-label="Remove"
-                  >×</button>
-                </div>
-              )
-            })}
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Add topic</p>
-            <TopicCombobox topics={topics || []} selected={selected} onAdd={addTopic} />
-            {aiError && <p className="text-xs text-red-600 mt-1">{aiError}</p>}
-          </div>
+          <PartsEditor parts={parts} topics={topics || []} lookup={lookup} onChange={setParts} />
+          {aiError && <p className="text-xs text-red-600">{aiError}</p>}
 
           <div>
             <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Tags</p>

@@ -7,9 +7,8 @@ from app.pdf.layout_engine import Block, CoverSpec, LayoutEngine, render_combine
 from app.routes.auth import can_view_premium, get_current_user
 from app.routes.questions import (
     _PAPER_EAGER,
-    _SUBTOPICS_EAGER,
+    _PARTS_EAGER,
     _TAG_EAGER,
-    _TOPIC_EAGER,
     _apply_filters,
     serialize_list_item,
 )
@@ -167,7 +166,7 @@ def select_questions(
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))
 
     candidates = (
-        query.options(_PAPER_EAGER, selectinload(Question.pages), _TOPIC_EAGER, _SUBTOPICS_EAGER, _TAG_EAGER)
+        query.options(_PAPER_EAGER, selectinload(Question.pages), _PARTS_EAGER, _TAG_EAGER)
         .order_by(Question.id)
         .all()
     )
@@ -181,7 +180,7 @@ def select_questions(
     else:
         selected = knapsack_select(candidates, payload.target_value)
 
-    total_marks = sum(q.marks or 0 for q in selected)
+    total_marks = sum(q.total_marks or 0 for q in selected)
     count = len(selected)
     exact = (count == payload.target_value) if payload.target_type == "count" \
         else (total_marks == payload.target_value)
@@ -250,7 +249,7 @@ def generate_paper(
 
     # Question paper: scale images centered within 30 mm side margins.
     # Answer paper: keep native size, flush to the left margin.
-    total_marks = sum(q.marks or 0 for q in ordered)
+    total_marks = sum(q.total_marks or 0 for q in ordered)
     include_cover, title, body, header_text, additional_instructions, footer_text = (
         _resolve_generation_options(payload, current_user, db)
     )

@@ -4,31 +4,54 @@ import anthropic
 
 from app.logger import Timer, log, log_tokens
 
-LABEL_TOPICS_TOOL = {
-    "name": "label_topics",
+MODEL = "claude-haiku-4-5-20251001"
+
+LABEL_PARTS_TOOL = {
+    "name": "label_parts",
     "description": (
-        "Select all items from the numbered list that this question tests, "
-        "and report how many marks the question is worth."
+        "Split the question into the parts printed on the paper, and for each part "
+        "select the items from the numbered list that it tests and read the marks "
+        "it is worth."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "selected_codes": {
+            "parts": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": 'Codes from the numbered list, e.g. ["1.1", "2"]. Pick one or more.',
-            },
-            "marks": {
-                "type": ["integer", "null"],
-                "description": (
-                    'Total marks the question is worth, read from the image — e.g. '
-                    '"(2 marks)" or a bracketed "[2]" next to the answer line. '
-                    "If the question has sub-parts, sum their marks. "
-                    "Use null if no marks are shown."
-                ),
+                "description": "One entry per printed part, in the order they appear.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "description": (
+                                'The part designation exactly as printed, e.g. "(a)", '
+                                '"(a)(i)", "(b)(ii)". Use an empty string if the '
+                                "question has no lettered parts."
+                            ),
+                        },
+                        "selected_codes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                'Codes from the numbered list, e.g. ["1.1", "2"], for '
+                                "what THIS part tests. Pick one or more."
+                            ),
+                        },
+                        "marks": {
+                            "type": ["integer", "null"],
+                            "description": (
+                                "Marks printed for THIS part — e.g. \"(2 marks)\" or a "
+                                'bracketed "[2]" next to its answer line. Use null if '
+                                "this part has no marks of its own."
+                            ),
+                        },
+                    },
+                    "required": ["label", "selected_codes", "marks"],
+                },
             },
         },
-        "required": ["selected_codes", "marks"],
+        "required": ["parts"],
     },
 }
 
@@ -62,13 +85,20 @@ def build_system_prompt(subject: str, stream: str, options_str: str) -> str:
     return (
         f"You are an expert in categorizing {stream} {subject} exam questions.\n"
         f"Selectable items:\n{options_str}\n\n"
-        f"Rules:\n"
-        f"- Pick one or more codes that best describe what the question is testing.\n"
+        f"Split the question into parts:\n"
+        f"- Split the question into the parts exactly as the paper labels them, in printed order.\n"
+        f"- Treat (a)(i) and (a)(ii) as two separate parts. Never group them under a single (a). "
+        f"A question with (a)(i), (a)(ii) and (b) has exactly three parts.\n"
+        f"- A question with no lettered parts has exactly one part, with an empty label.\n"
+        f"- Never invent a part that is not printed on the paper.\n\n"
+        f"For each part:\n"
+        f"- Pick one or more codes that best describe what that part is testing.\n"
         f"- For topics that have subtopics, only the subtopic lines are selectable — pick the specific subtopics that apply.\n"
         f"- For topics without subtopics, pick the bare topic code if it applies.\n"
         f"- Only return codes that appear in the list above.\n"
-        f"- Also report the total marks the question is worth (an integer), read "
-        f"from the paper; use null if no marks are shown."
+        f"- Report the marks printed for that part. Do NOT sum marks across parts. "
+        f"If a single total is printed for the whole question and cannot be split between "
+        f"the parts, put that total on the first part and use null for the rest."
     )
 
 
@@ -93,30 +123,46 @@ def label_question(
         }
         for b in image_bytes_list
     ]
-    user_content = image_blocks + [{"type": "text", "text": "Identify the topics and subtopics covered in this question, and read how many marks it is worth."}]
+    user_content = image_blocks + [{"type": "text", "text": "Split this question into its parts, and for each part identify the topics and subtopics it covers and how many marks it is worth."}]
 
     client = anthropic.Anthropic()
     with Timer() as t_call:
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=256,
+            model=MODEL,
+            # A multi-part question emits one object per part, so this needs far
+            # more room than the old single-selection tool did.
+            max_tokens=1500,
             system=[{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_content}],
-            tools=[LABEL_TOPICS_TOOL],
-            tool_choice={"type": "tool", "name": "label_topics"},
+            tools=[LABEL_PARTS_TOOL],
+            tool_choice={"type": "tool", "name": "label_parts"},
         )
     log.info(f"{'label_question':<22}| haiku     | {t_call.s}")
-    log_tokens("label_question", "claude-haiku-4-5-20251001", resp.usage)
+    log_tokens("label_question", MODEL, resp.usage)
 
     tool_input = resp.content[0].input
-    raw_codes: list[str] = tool_input.get("selected_codes", [])
-    seen: set[tuple[int, int | None]] = set()
-    out: list[dict] = []
-    for code in raw_codes:
-        pair = code_map.get(code)
-        if pair is None or pair in seen:
-            continue
-        seen.add(pair)
-        topic_id, subtopic_id = pair
-        out.append({"topic_id": topic_id, "subtopic_id": subtopic_id})
-    return {"selections": out, "marks": tool_input.get("marks")}
+    parts: list[dict] = []
+    for raw_part in tool_input.get("parts") or []:
+        # Dedupe within a part only — the same subtopic can legitimately be
+        # tested by two different parts of one question.
+        seen: set[tuple[int, int | None]] = set()
+        selections: list[dict] = []
+        for code in raw_part.get("selected_codes") or []:
+            pair = code_map.get(code)
+            if pair is None or pair in seen:
+                continue
+            seen.add(pair)
+            topic_id, subtopic_id = pair
+            selections.append({"topic_id": topic_id, "subtopic_id": subtopic_id})
+        parts.append({
+            "label": raw_part.get("label") or "",
+            "marks": raw_part.get("marks"),
+            "selections": selections,
+        })
+
+    if not parts:
+        # Every question has at least one part; fall back to a single blank one
+        # so the reviewer gets an editable row rather than nothing.
+        parts = [{"label": "", "marks": None, "selections": []}]
+
+    return {"parts": parts}

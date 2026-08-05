@@ -8,6 +8,7 @@ from app.models.orm import (
     Paper,
     Question,
     QuestionPage,
+    QuestionPart,
     QuestionSubtopic,
     QuestionTag,
     QuestionTopic,
@@ -40,13 +41,37 @@ def _add_question(db_session, paper, number=1, marks=5) -> Question:
     q = Question(
         paper_id=paper.id,
         question_number=number,
-        marks=marks,
         created_at=datetime.now(UTC),
     )
     db_session.add(q)
     db_session.flush()
+    # Marks and topics live on parts; a question with no printed parts is a
+    # single unlabelled one.
+    db_session.add(QuestionPart(question_id=q.id, part_order=0, label="", marks=marks))
+    db_session.flush()
     _add_page(db_session, q, "question")
     return q
+
+
+def _label(db_session, question, topic_id, subtopic_id=None, part_order=0):
+    """Attach a topic (and optionally a subtopic) to one of a question's parts,
+    creating the part if it doesn't exist yet."""
+    part = next((p for p in question.parts if p.part_order == part_order), None)
+    if part is None:
+        # Append rather than db_session.add so the already-loaded collection
+        # stays accurate — these tests share one session with the API client,
+        # which won't re-read a collection it has already loaded.
+        part = QuestionPart(part_order=part_order, label="", marks=None)
+        question.parts.append(part)
+        db_session.flush()
+    db_session.add(QuestionTopic(part_id=part.id, topic_id=topic_id))
+    db_session.flush()
+    if subtopic_id is not None:
+        db_session.add(QuestionSubtopic(
+            part_id=part.id, subtopic_id=subtopic_id, topic_id=topic_id
+        ))
+        db_session.flush()
+    return part
 
 
 def _add_page(db_session, question, page_type="question") -> QuestionPage:
@@ -145,9 +170,7 @@ def test_list_questions_filter_by_topic_ids(public_client, db_session, reference
     q_with_topic = _add_question(db_session, paper, number=1)
     q_no_topic = _add_question(db_session, paper, number=2)
 
-    qt = QuestionTopic(question_id=q_with_topic.id, topic_id=reference_data["topic"].id)
-    db_session.add(qt)
-    db_session.flush()
+    _label(db_session, q_with_topic, reference_data["topic"].id)
 
     resp = public_client.get(f"/api/questions?topic_ids={reference_data['topic'].id}")
     assert resp.status_code == 200
@@ -172,11 +195,8 @@ def test_list_questions_filter_by_topic_ids_inclusive_union(public_client, db_se
     q_a = _add_question(db_session, paper, number=1)
     q_b = _add_question(db_session, paper, number=2)
     q_none = _add_question(db_session, paper, number=3)
-    db_session.add_all([
-        QuestionTopic(question_id=q_a.id, topic_id=rd["topic"].id),
-        QuestionTopic(question_id=q_b.id, topic_id=topic_b.id),
-    ])
-    db_session.flush()
+    _label(db_session, q_a, rd["topic"].id)
+    _label(db_session, q_b, topic_b.id)
 
     resp = public_client.get(
         f"/api/questions?topic_ids={rd['topic'].id}&topic_ids={topic_b.id}"
@@ -279,12 +299,11 @@ def test_list_questions_exclusive_topic_filter(public_client, db_session, refere
 
     q_only_a = _add_question(db_session, paper, number=1)
     q_a_and_b = _add_question(db_session, paper, number=2)
-    db_session.add_all([
-        QuestionTopic(question_id=q_only_a.id, topic_id=rd["topic"].id),
-        QuestionTopic(question_id=q_a_and_b.id, topic_id=rd["topic"].id),
-        QuestionTopic(question_id=q_a_and_b.id, topic_id=topic_b.id),
-    ])
-    db_session.flush()
+    _label(db_session, q_only_a, rd["topic"].id)
+    # Topic A on part 0 and topic B on part 1: `exclusive` is defined over the
+    # union of the question's parts, so this question is still excluded.
+    _label(db_session, q_a_and_b, rd["topic"].id)
+    _label(db_session, q_a_and_b, topic_b.id, part_order=1)
 
     # Inclusive (default): both questions match topic A
     resp = public_client.get(f"/api/questions?topic_ids={rd['topic'].id}")
@@ -309,21 +328,8 @@ def test_search_by_subtopic_name(public_client, db_session, reference_data, admi
     db_session.add(other_sub)
     db_session.flush()
 
-    db_session.add(QuestionTopic(question_id=q_match.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
-    db_session.add(QuestionSubtopic(
-        question_id=q_match.id,
-        subtopic_id=reference_data["subtopic"].id,
-        topic_id=reference_data["topic"].id,
-    ))
-    db_session.add(QuestionTopic(question_id=q_other.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
-    db_session.add(QuestionSubtopic(
-        question_id=q_other.id,
-        subtopic_id=other_sub.id,
-        topic_id=reference_data["topic"].id,
-    ))
-    db_session.flush()
+    _label(db_session, q_match, reference_data["topic"].id, reference_data["subtopic"].id)
+    _label(db_session, q_other, reference_data["topic"].id, other_sub.id)
 
     resp = public_client.get("/api/questions?search=linear")
     assert resp.status_code == 200
@@ -338,8 +344,7 @@ def test_search_by_topic_name(public_client, db_session, reference_data, admin_u
     q_algebra = _add_question(db_session, paper, number=1)
     q_no_topic = _add_question(db_session, paper, number=2)
 
-    db_session.add(QuestionTopic(question_id=q_algebra.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
+    _label(db_session, q_algebra, reference_data["topic"].id)
 
     resp = public_client.get("/api/questions?search=algebra")
     assert resp.status_code == 200
@@ -413,8 +418,7 @@ def test_search_by_topic_number_token(public_client, db_session, reference_data,
     q_no_topic = _add_question(db_session, paper, number=2)
 
     # reference_data topic 'Algebra' has topic_number=1
-    db_session.add(QuestionTopic(question_id=q_topic1.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
+    _label(db_session, q_topic1, reference_data["topic"].id)
 
     resp = public_client.get("/api/questions?search=T1")
     assert resp.status_code == 200
@@ -611,14 +615,7 @@ def test_get_question_includes_topic_chips(public_client, db_session, reference_
 
     paper = _add_paper(db_session, reference_data, admin_user)
     q = _add_question(db_session, paper)
-    db_session.add(QuestionTopic(question_id=q.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
-    db_session.add(QuestionSubtopic(
-        question_id=q.id,
-        subtopic_id=reference_data["subtopic"].id,
-        topic_id=reference_data["topic"].id,
-    ))
-    db_session.flush()
+    _label(db_session, q, reference_data["topic"].id, reference_data["subtopic"].id)
 
     with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
         resp = public_client.get(f"/api/questions/{q.id}")
@@ -635,11 +632,80 @@ def test_list_questions_topics_include_topic_number(public_client, db_session, r
     """The list payload carries topic_number so the UI can render 'T1 Algebra'."""
     paper = _add_paper(db_session, reference_data, admin_user)
     q = _add_question(db_session, paper)
-    db_session.add(QuestionTopic(question_id=q.id, topic_id=reference_data["topic"].id))
-    db_session.flush()
+    _label(db_session, q, reference_data["topic"].id)
 
     resp = public_client.get("/api/questions")
     assert resp.status_code == 200
     item = next(it for it in resp.json()["items"] if it["id"] == q.id)
     assert item["topics"][0]["topic_name"] == "Algebra"
     assert item["topics"][0]["topic_number"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-part detail
+# ---------------------------------------------------------------------------
+
+
+def test_get_question_returns_the_per_part_breakdown(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper, marks=None)
+    q.parts[0].label = "(a)"
+    q.parts[0].marks = 2
+    db_session.flush()
+    _label(db_session, q, reference_data["topic"].id, reference_data["subtopic"].id)
+
+    q.parts.append(QuestionPart(part_order=1, label="(b)", marks=5))
+    db_session.flush()
+
+    with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
+        resp = public_client.get(f"/api/questions/{q.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["marks"] == 7  # summed across the parts
+    assert [(p["part_order"], p["label"], p["marks"]) for p in body["parts"]] == [
+        (0, "(a)", 2), (1, "(b)", 5),
+    ]
+    assert body["parts"][0]["topics"][0]["topic_name"] == "Algebra"
+    assert body["parts"][1]["topics"] == []
+
+
+def test_list_topics_are_the_union_across_parts(public_client, db_session, reference_data, admin_user):
+    """Two parts sharing a topic collapse to one chip with merged subtopics."""
+    from app.models.orm import Subtopic
+
+    rd = reference_data
+    sub2 = Subtopic(topic_id=rd["topic"].id, name="Quadratic Equations")
+    db_session.add(sub2)
+    db_session.flush()
+
+    paper = _add_paper(db_session, rd, admin_user)
+    q = _add_question(db_session, paper)
+    _label(db_session, q, rd["topic"].id, rd["subtopic"].id, part_order=0)
+    _label(db_session, q, rd["topic"].id, sub2.id, part_order=1)
+
+    resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    item = next(it for it in resp.json()["items"] if it["id"] == q.id)
+    assert len(item["topics"]) == 1
+    assert set(item["topics"][0]["subtopic_names"]) == {"Linear Equations", "Quadratic Equations"}
+
+
+def test_list_marks_are_summed_across_parts(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper, marks=2)
+    q.parts.append(QuestionPart(part_order=1, label="(b)", marks=6))
+    db_session.flush()
+
+    resp = public_client.get("/api/questions")
+    item = next(it for it in resp.json()["items"] if it["id"] == q.id)
+    assert item["marks"] == 8
+
+
+def test_list_marks_null_when_no_part_is_marked(public_client, db_session, reference_data, admin_user):
+    paper = _add_paper(db_session, reference_data, admin_user)
+    q = _add_question(db_session, paper, marks=None)
+
+    resp = public_client.get("/api/questions")
+    item = next(it for it in resp.json()["items"] if it["id"] == q.id)
+    assert item["marks"] is None
