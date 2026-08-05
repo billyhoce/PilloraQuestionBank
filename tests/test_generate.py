@@ -980,8 +980,8 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     q_engine, q_plan = sections[0]
     assert q_engine.fit_width is True
     assert q_engine.show_credit is True
-    # Instructions land on the question paper only; the branding header (from the
-    # config default) rides every section's pages.
+    # Instructions land on the question paper only; the branding header rides
+    # every section's pages — omitted here, so it falls back to the config default.
     assert q_plan.additional_instructions == "Test paper"
     assert q_plan.header_text == DEFAULT_HEADER_TEXT
     assert q_plan.footer_label == "My footer"
@@ -998,6 +998,59 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
     # Only Q2 has answer pages; it keeps its question number.
     assert [b.label for b in a_plan.blocks] == ["2"]
     assert all(p.page_type == "answer" for p in a_plan.blocks[0].pages)
+
+
+def test_generate_paper_admin_header_text_overrides_config(
+    admin_client, sample_paper, db_session, reference_data
+):
+    """Admins may stamp their own branding header, on every section's pages."""
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render_combined(sections, fetch_bytes):
+        captured["sections"] = sections
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch("app.routes.generate.render_combined", spy_render_combined),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "combined",
+            "header_text": "Ang Mo Kio Sec\nwww.example.com",
+        })
+
+    assert resp.status_code == 200
+    q_plan, a_plan = captured["sections"][0][1], captured["sections"][1][1]
+    assert q_plan.header_text == "Ang Mo Kio Sec\nwww.example.com"
+    assert a_plan.header_text == "Ang Mo Kio Sec\nwww.example.com"
+
+
+def test_generate_paper_admin_empty_header_text_prints_no_header(
+    admin_client, sample_paper, db_session, reference_data
+):
+    """An explicit empty header is an opt-out, not a request for the preset —
+    unlike an omitted header, which falls back to the config."""
+    ids = _question_ids(db_session, sample_paper)
+    captured = {}
+
+    def spy_render(self, plan, fetch_bytes):
+        captured["plan"] = plan
+        return b"%PDF fake"
+
+    with (
+        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
+        patch.object(LayoutEngine, "render", spy_render),
+    ):
+        resp = admin_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+            "header_text": "",
+        })
+
+    assert resp.status_code == 200
+    assert captured["plan"].header_text == ""
 
 
 def test_generate_paper_combined_omits_empty_answer_section(
@@ -1171,6 +1224,7 @@ def test_generate_paper_public_forces_config_presets(
             "include_cover": False,
             "cover_body": "<p>Client body</p>",
             "additional_instructions": "Client instructions",
+            "header_text": "Client header",
             "footer_text": "Client footer",
             "cover_subtitle1": "Sec 3 Math",
         })
@@ -1181,7 +1235,7 @@ def test_generate_paper_public_forces_config_presets(
     assert plan.cover.body == "<p>Config body</p>"
     assert plan.cover.title == ""  # no titles configured → untitled cover
     assert plan.cover.subtitle1 == "Sec 3 Math"  # subtitles stay free text
-    assert plan.header_text == "Config header"
+    assert plan.header_text == "Config header"  # "Client header" ignored
     assert plan.additional_instructions == "Config instructions"
     assert plan.footer_label == "Config footer"
 

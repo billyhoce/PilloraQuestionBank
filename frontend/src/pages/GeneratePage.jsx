@@ -117,9 +117,11 @@ export default function GeneratePage() {
   // Cover/header/footer state, driven by the admin-set generation config
   // (GET /api/generation-config). Fields start as null = "config not loaded
   // yet": they're pre-filled once from the config, and anything still null at
-  // generate time is omitted so the server-side presets apply. Non-admins only
-  // control the title (dropdown of configured titles) and the two subtitles —
-  // the server forces the config body/header/footer and always adds a cover.
+  // generate time is omitted so the server-side presets apply (for the header
+  // that fallback holds for admins too — see _resolve_generation_options).
+  // Non-admins only control the title (dropdown of configured titles) and the
+  // two subtitles — the server forces the config body/header/footer and always
+  // adds a cover.
   // Admins control everything; coverBody holds rich-text HTML (paragraphs plus
   // bold/italic/underline/link), edited via CoverBodyEditor.
   const [genConfig, setGenConfig] = useState(null)
@@ -130,6 +132,7 @@ export default function GeneratePage() {
   const [coverSubtitle1, setCoverSubtitle1] = useState('')
   const [coverSubtitle2, setCoverSubtitle2] = useState('')
   const [coverBody, setCoverBody] = useState(null)
+  const [headerText, setHeaderText] = useState(null)
   const [instructionsText, setInstructionsText] = useState(null)
   const [footerText, setFooterText] = useState(null)
   const [generating, setGenerating] = useState(false)
@@ -153,6 +156,7 @@ export default function GeneratePage() {
         if (isAdmin) {
           if (cfg.titles.length === 0) setTitleMode('custom')
           setCoverBody(prev => prev ?? cfg.cover_body)
+          setHeaderText(prev => prev ?? cfg.header_text)
           setInstructionsText(prev => prev ?? cfg.additional_instructions)
           setFooterText(prev => prev ?? cfg.footer_text)
         }
@@ -374,9 +378,10 @@ export default function GeneratePage() {
     const ids = cart.map(it => it.id)
     // Cover fields shared by every variant (the answer PDF's cover reads "Answers").
     // A title still null (config never loaded) is omitted so the server falls
-    // back to the first configured title. Non-admins send only title/subtitles;
+    // back to the first configured title; a null header is likewise omitted so
+    // the server stamps the config preset. Non-admins send only title/subtitles;
     // the server forces the config presets for everything else, so admin-only
-    // fields (include_cover, body, footer) stay out of their request.
+    // fields (include_cover, body, header, footer) stay out of their request.
     const cover = {
       cover_subtitle1: coverSubtitle1,
       cover_subtitle2: coverSubtitle2,
@@ -385,6 +390,7 @@ export default function GeneratePage() {
     if (isAdmin) {
       cover.include_cover = includeCover
       if (coverBody !== null) cover.cover_body = coverBody
+      if (headerText !== null) cover.header_text = headerText
       if (footerText !== null) cover.footer_text = footerText
     }
     // Additional instructions only appear on question pages; the answer request
@@ -746,6 +752,20 @@ export default function GeneratePage() {
                       value={instructionsText ?? ''}
                       onChange={e => setInstructionsText(e.target.value)}
                       placeholder="e.g. Answer all questions. Time: 2 hours."
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                    />
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-xs text-gray-600" htmlFor="header-text">
+                      Header (optional)
+                    </label>
+                    <textarea
+                      id="header-text"
+                      rows={2}
+                      value={headerText ?? ''}
+                      onChange={e => setHeaderText(e.target.value)}
+                      placeholder="e.g. Visit www.pillora.com.sg for more learning resources."
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
                     />
                   </div>
