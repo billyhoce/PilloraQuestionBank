@@ -156,10 +156,10 @@ POST   /api/generate/select      -- auto-select a set of questions for a target.
 POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     Body: { question_ids[] (min 1), variant:
                                     "question"|"answer"|"combined",
-                                    additional_instructions, footer_text,
+                                    additional_instructions, header_text, footer_text,
                                     include_cover, cover_title, cover_subtitle1,
-                                    cover_subtitle2, cover_body }. The page-header
-                                    branding is config-only (no per-request field).
+                                    cover_subtitle2, cover_body }. header_text is
+                                    nullable: omit it to get the config preset.
                                     "combined" returns one PDF with the answer
                                     paper appended after the question paper.
                                     Each page carries branded header/footer chrome;
@@ -175,9 +175,11 @@ non-admin users (`public` and `premium`) the admin-set [generation config](#gene
 wins (`_resolve_generation_options` in `app/routes/generate.py`):
 
 - `include_cover` is forced to `true` — users always get a cover page.
-- `cover_body`, `additional_instructions`, and `footer_text` are replaced with the config presets.
-- The page-header branding (`header_text`) always comes from the config — it is page furniture,
-  so even admins can't override it per generation.
+- `cover_body`, `additional_instructions`, `header_text`, and `footer_text` are replaced with the
+  config presets.
+- The page-header branding (`header_text`) is the one nullable field: **admins** may override it
+  per generation, but omitting it (`null`) falls back to the config preset, so a client that never
+  loaded the config still gets the branding. An explicit `""` is an admin opting out of the header.
 - `cover_title` must be one of the configured cover titles: an unknown title -> `400`
   (a hand-crafted POST can't bypass the dropdown); an empty/omitted title falls back to
   the **first** configured title; with no titles configured the cover is untitled.
@@ -411,11 +413,13 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
   `_draw_chrome` offsets the padded box by it, keeping the mark on the line for any future
   padded asset. The asset is **optional**: if absent/unreadable the page renders without it (no
   error).
-- **Header** (`LayoutPlan.header_text`, the admin-configured branding) drawn **right-aligned on the
+- **Header** (`LayoutPlan.header_text`, the branding) drawn **right-aligned on the
   header rule** by `_draw_page_header`. Lines stack **upward** so the *last* line sits on the rule;
   any web-address token (`_URL_TOKEN`) is auto-linked via `canvas.linkURL` to its normalized
-  `https://…` target. An empty header draws nothing. The default preset is the two-line
-  Pillora/Telegram tagline (`DEFAULT_HEADER_TEXT`).
+  `https://…` target. An empty header draws nothing. Like the footer, the route sets it to the
+  resolved `header_text` — admins' request field (when they sent one), otherwise the
+  generation-config preset, which is also what every non-admin gets. The seeded preset is the
+  two-line Pillora/Telegram tagline (`DEFAULT_HEADER_TEXT`).
 - **Footer label** (`LayoutPlan.footer_label`) **flush-left** under the footer rule, plus **`Page {n}`**
   bottom-right. The route sets the footer label to the resolved `footer_text` **verbatim** —
   admins' request field, or the generation-config preset for non-admins. The same text appears on

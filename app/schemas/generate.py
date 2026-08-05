@@ -54,20 +54,24 @@ class GeneratePaperRequest(BaseModel):
     appends " – Questions" / " – Answers" per variant. ``cover_body`` is
     rich-text HTML (or legacy plain text), sanitized to the supported subset by
     ``app/pdf/cover_body.py`` before rendering. ``footer_text`` is drawn
-    verbatim under the footer rule of every page.
+    verbatim under the footer rule of every page, and ``header_text`` is the
+    branding drawn right-aligned on the top rule of every page (multi-line: each
+    line stacks upward so the last line sits on the rule).
 
     Only admins control all of these: for non-admin users the server forces
     ``include_cover=True`` and replaces
-    ``cover_body``/``additional_instructions``/``footer_text`` with the admin-set
-    generation config, and ``cover_title`` must be one of the configured cover
-    titles (see app/routes/generate.py). The page-header branding always comes
-    from the generation config; there is no per-generation override for it.
+    ``cover_body``/``additional_instructions``/``footer_text``/``header_text``
+    with the admin-set generation config, and ``cover_title`` must be one of the
+    configured cover titles (see app/routes/generate.py). ``header_text`` is
+    optional even for admins: ``None`` (omitted) means "use the config preset",
+    while ``""`` is an explicit choice to print no header.
     """
 
     question_ids: list[int] = Field(min_length=1)  # empty -> 422
     variant: Literal["question", "answer", "combined"] = "question"
     additional_instructions: str = ""
     footer_text: str = ""
+    header_text: str | None = None  # None -> fall back to the config preset
     include_cover: bool = True
     cover_title: str = ""
     cover_subtitle1: str = ""

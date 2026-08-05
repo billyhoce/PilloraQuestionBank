@@ -46,12 +46,13 @@ def _resolve_generation_options(
     """Resolve the effective (include_cover, title, body, header, instructions,
     footer).
 
-    The page-header branding always comes from the admin generation config — it
-    is page furniture, not a per-paper choice, so even admins can't override it
-    per generation. Admins control the remaining fields verbatim. For non-admin
-    users the admin-set generation config wins: a cover page is always included,
-    the body/instructions/footer come from the config, and the title must be one
-    of the configured cover titles — an empty title falls back to the first
+    Admins control every field verbatim, including the page-header branding —
+    except that an omitted ``header_text`` (``None``) falls back to the config
+    preset, so a client that never loaded the config still gets the branding. An
+    explicit ``""`` prints no header. For non-admin users the admin-set
+    generation config wins: a cover page is always included, the
+    body/header/instructions/footer come from the config, and the title must be
+    one of the configured cover titles — an empty title falls back to the first
     configured one (so generation still works if the client never loaded the
     config), and an unknown title is rejected so the dropdown can't be bypassed
     with a hand-crafted request. With no titles configured the cover is untitled.
@@ -62,7 +63,7 @@ def _resolve_generation_options(
             payload.include_cover,
             payload.cover_title,
             payload.cover_body,
-            cfg.header_text,
+            cfg.header_text if payload.header_text is None else payload.header_text,
             payload.additional_instructions,
             payload.footer_text,
         )

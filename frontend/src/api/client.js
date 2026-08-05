@@ -199,10 +199,10 @@ export const api = {
     // body: { filters, target_type, target_value, algorithm, exclude_question_ids }
     select: (body, signal) => request('POST', '/api/generate/select', body, signal),
     // Render a PDF. body: { question_ids, variant: "question"|"answer"|"combined",
-    // additional_instructions, footer_text, include_cover, cover_title,
-    // cover_subtitle1, cover_subtitle2, cover_body }. The page-header branding is
-    // config-only (no per-request field). Non-admins may only send the title
-    // (from the configured list) and subtitles — the server forces the config
+    // additional_instructions, header_text, footer_text, include_cover, cover_title,
+    // cover_subtitle1, cover_subtitle2, cover_body }. An omitted header_text falls
+    // back to the config preset. Non-admins may only send the title (from the
+    // configured list) and subtitles — the server forces the config
     // presets for everything else. Returns a Blob (binary) — bypasses `request`, which
     // is JSON-only.
     paper: async (body) => {

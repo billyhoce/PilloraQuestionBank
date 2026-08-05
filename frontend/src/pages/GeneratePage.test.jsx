@@ -168,6 +168,7 @@ describe('GeneratePage cover controls (non-admin)', () => {
     expect(screen.queryByRole('checkbox', { name: /include cover page/i })).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/cover letter \/ message/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/header \/ instructions/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/^header/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/footer/i)).not.toBeInTheDocument()
   })
 
@@ -195,7 +196,7 @@ describe('GeneratePage cover controls (admin)', () => {
     globalThis.URL.revokeObjectURL = vi.fn()
   })
 
-  it('prefills body, instructions, and footer from the config', async () => {
+  it('prefills body, instructions, header, and footer from the config', async () => {
     render(
       <MemoryRouter>
         <GeneratePage />
@@ -203,11 +204,23 @@ describe('GeneratePage cover controls (admin)', () => {
     )
     expect(await screen.findByDisplayValue(CONFIG.cover_body)).toBeInTheDocument()
     expect(screen.getByLabelText(/additional instructions/i)).toHaveValue('Config instructions')
+    expect(screen.getByLabelText(/^header/i)).toHaveValue('Config header')
     expect(screen.getByLabelText(/footer/i)).toHaveValue('Config footer')
     expect(screen.getByRole('checkbox', { name: /include cover page/i })).toBeChecked()
   })
 
-  it('sends the full payload including footer_text and include_cover', async () => {
+  it('sends an edited header_text instead of the config preset', async () => {
+    const user = await renderWithCartItem()
+    await screen.findByDisplayValue(CONFIG.cover_body)
+    const header = screen.getByLabelText(/^header/i)
+    await user.clear(header)
+    await user.type(header, 'My school')
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+    await waitFor(() => expect(api.generate.paper).toHaveBeenCalledTimes(1))
+    expect(api.generate.paper.mock.calls[0][0]).toMatchObject({ header_text: 'My school' })
+  })
+
+  it('sends the full payload including header_text, footer_text and include_cover', async () => {
     const user = await renderWithCartItem()
     await screen.findByDisplayValue(CONFIG.cover_body)
     await user.click(screen.getByRole('button', { name: /generate pdf/i }))
@@ -216,6 +229,7 @@ describe('GeneratePage cover controls (admin)', () => {
       question_ids: [1],
       variant: 'combined',
       additional_instructions: 'Config instructions',
+      header_text: 'Config header',
       footer_text: 'Config footer',
       include_cover: true,
       cover_title: 'Topical Worksheets',
