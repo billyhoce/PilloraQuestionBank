@@ -7,9 +7,15 @@ import pytest
 from pypdf import PdfReader
 
 from app.models.orm import Question
-from app.pdf.layout_engine import Block, LayoutEngine, LayoutPlan, render_combined
+from app.pdf.layout_engine import Block, LayoutEngine, render_combined
 from app.services.generate import count_select, in_order_select, knapsack_select
 from app.services.generation_config import DEFAULT_HEADER_TEXT
+
+# The undecorated method, so a spy can observe a call and still delegate to the
+# real packing instead of reimplementing it. Capturing it here keeps the spies
+# signature-agnostic — they forward *args/**kwargs — so adding a parameter to
+# compute_layout doesn't break tests that never mention it.
+_real_compute = LayoutEngine.compute_layout
 
 # The knapsack function, /api/generate/select, and the PDF layout engine +
 # /api/generate/paper route are all implemented — every test here runs for real.
@@ -813,7 +819,6 @@ def _question_ids(db_session, paper) -> list[int]:
 def test_generate_paper_returns_pdf(public_client, sample_paper, db_session, reference_data):
     ids = _question_ids(db_session, sample_paper)
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake pdf bytes"),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -841,13 +846,12 @@ def test_generate_paper_renumbers_in_selection_order(public_client, sample_paper
     ids = list(reversed(_question_ids(db_session, sample_paper)))
     captured = {}
 
-    def spy_compute(self, blocks, additional_instructions=""):
+    def spy_compute(self, blocks, *args, **kwargs):
         captured["blocks"] = blocks
         captured["fit_width"] = self.fit_width
-        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
+        return _real_compute(self, blocks, *args, **kwargs)
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "compute_layout", spy_compute),
         patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
     ):
@@ -870,13 +874,12 @@ def test_generate_paper_question_variant_credits_source(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, additional_instructions=""):
+    def spy_compute(self, blocks, *args, **kwargs):
         captured["blocks"] = blocks
         captured["show_credit"] = self.show_credit
-        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
+        return _real_compute(self, blocks, *args, **kwargs)
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "compute_layout", spy_compute),
         patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
     ):
@@ -893,12 +896,11 @@ def test_generate_paper_answer_variant_no_credit(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, additional_instructions=""):
+    def spy_compute(self, blocks, *args, **kwargs):
         captured["show_credit"] = self.show_credit
-        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
+        return _real_compute(self, blocks, *args, **kwargs)
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "compute_layout", spy_compute),
         patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
     ):
@@ -916,13 +918,12 @@ def test_generate_paper_answer_variant_skips_questions_without_answers(
     ids = _question_ids(db_session, sample_paper)
     captured = {}
 
-    def spy_compute(self, blocks, additional_instructions=""):
+    def spy_compute(self, blocks, *args, **kwargs):
         captured["blocks"] = blocks
         captured["fit_width"] = self.fit_width
-        return LayoutPlan(page_count=1, blocks=blocks, additional_instructions=additional_instructions)
+        return _real_compute(self, blocks, *args, **kwargs)
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "compute_layout", spy_compute),
         patch.object(LayoutEngine, "render", return_value=b"%PDF fake"),
     ):
@@ -940,7 +941,6 @@ def test_generate_paper_answer_variant_skips_questions_without_answers(
 def test_generate_paper_combined_returns_pdf(public_client, sample_paper, db_session, reference_data):
     ids = _question_ids(db_session, sample_paper)
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", return_value=b"%PDF-1.4 fake pdf bytes"),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -964,7 +964,6 @@ def test_generate_paper_combined_builds_question_then_answer_sections(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1013,7 +1012,6 @@ def test_generate_paper_admin_header_text_overrides_config(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1041,7 +1039,6 @@ def test_generate_paper_admin_empty_header_text_prints_no_header(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1073,7 +1070,6 @@ def test_generate_paper_combined_omits_empty_answer_section(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
         resp = public_client.post("/api/generate/paper", json={"question_ids": ids, "variant": "combined"})
@@ -1096,7 +1092,6 @@ def test_generate_paper_attaches_cover_and_total_marks(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1129,7 +1124,6 @@ def test_generate_paper_include_cover_false_omits_cover(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1151,7 +1145,6 @@ def test_generate_paper_combined_covers_each_section(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1216,7 +1209,6 @@ def test_generate_paper_public_forces_config_presets(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -1254,7 +1246,6 @@ def test_generate_paper_premium_also_gets_config_presets(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = premium_client.post("/api/generate/paper", json={
@@ -1278,7 +1269,6 @@ def test_generate_paper_public_title_from_configured_list(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -1318,7 +1308,6 @@ def test_generate_paper_public_empty_title_falls_back_to_first(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -1341,7 +1330,6 @@ def test_generate_paper_admin_free_text_title_and_no_validation(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch.object(LayoutEngine, "render", spy_render),
     ):
         resp = admin_client.post("/api/generate/paper", json={
@@ -1364,7 +1352,6 @@ def test_generate_paper_public_combined_uses_config_footer_on_both_sections(
         return b"%PDF fake"
 
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.render_combined", spy_render_combined),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -1414,7 +1401,6 @@ def test_generate_paper_premium_blocked_for_public(public_client, sample_paper, 
     db_session.flush()
     ids = _question_ids(db_session, sample_paper)
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
     ):
         resp = public_client.post("/api/generate/paper", json={
@@ -1429,7 +1415,6 @@ def test_generate_paper_premium_allowed_for_premium(premium_client, sample_paper
     db_session.flush()
     ids = _question_ids(db_session, sample_paper)
     with (
-        patch("app.routes.generate.get_image_bytes", return_value=b"fake-img"),
         patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
     ):
         resp = premium_client.post("/api/generate/paper", json={

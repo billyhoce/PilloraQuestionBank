@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '../api/client'
+import { useQuestionSearch } from '../hooks/useQuestionSearch'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
-
-const PAGE_SIZE = 50
 
 const SINGLE_KEYS = ['level_id', 'stream_id', 'subject_id', 'school_id', 'exam_type_id', 'year', 'paper_number']
 
@@ -42,14 +40,9 @@ function paramsFromFilters(filters) {
 export default function BrowsePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const filters = useMemo(() => filtersFromParams(searchParams), [searchParams])
-  const filterKey = useMemo(() => JSON.stringify(filters), [filters])
 
-  const [items, setItems] = useState([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState(null)
+  const { items, setItems, total, loading, loadingMore, error, loadMore } =
+    useQuestionSearch(filters)
   const [selectedItem, setSelectedItem] = useState(null)
 
   const handleFilterChange = useCallback((patch) => {
@@ -63,86 +56,9 @@ export default function BrowsePage() {
     }, { replace: true })
   }, [setSearchParams])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    let cancelled = false
-
-    setItems([])
-    setPage(1)
-    setLoading(true)
-    setError(null)
-
-    api.questions.list(
-      {
-        subject_id: filters.subject_id || undefined,
-        stream_id: filters.stream_id || undefined,
-        level_id: filters.level_id || undefined,
-        school_id: filters.school_id || undefined,
-        exam_type_id: filters.exam_type_id || undefined,
-        year: filters.year || undefined,
-        paper_number: filters.paper_number || undefined,
-        topic_ids: filters.topic_ids,
-        exclusive: filters.exclusive,
-        tag_ids: filters.tag_ids,
-        search: filters.search || undefined,
-        page: 1,
-        page_size: PAGE_SIZE,
-      },
-      controller.signal,
-    )
-      .then(res => {
-        if (cancelled) return
-        setItems(res.items || [])
-        setTotal(res.total || 0)
-      })
-      .catch(e => {
-        if (cancelled || e?.name === 'AbortError') return
-        setError(e?.message || 'Failed to load questions')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-
-    return () => { cancelled = true; controller.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey])
-
-  async function loadMore() {
-    if (loadingMore) return
-    const nextPage = page + 1
-    setLoadingMore(true)
-    setError(null)
-    try {
-      const res = await api.questions.list({
-        subject_id: filters.subject_id || undefined,
-        stream_id: filters.stream_id || undefined,
-        level_id: filters.level_id || undefined,
-        school_id: filters.school_id || undefined,
-        exam_type_id: filters.exam_type_id || undefined,
-        year: filters.year || undefined,
-        paper_number: filters.paper_number || undefined,
-        topic_ids: filters.topic_ids,
-        exclusive: filters.exclusive,
-        tag_ids: filters.tag_ids,
-        search: filters.search || undefined,
-        page: nextPage,
-        page_size: PAGE_SIZE,
-      })
-      setItems(prev => {
-        const seen = new Set(prev.map(it => it.id))
-        const additions = (res.items || []).filter(it => !seen.has(it.id))
-        return [...prev, ...additions]
-      })
-      setTotal(res.total || 0)
-      setPage(nextPage)
-    } catch (e) {
-      setError(e?.message || 'Failed to load more questions')
-    } finally {
-      setLoadingMore(false)
-    }
-  }
-
   const handleTagsChanged = useCallback((questionId, nextTags) => {
     setItems(prev => prev.map(it => (it.id === questionId ? { ...it, tags: nextTags } : it)))
-  }, [])
+  }, [setItems])
 
   const hasMore = items.length < total
 

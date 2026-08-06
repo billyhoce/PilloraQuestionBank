@@ -28,8 +28,14 @@ GET    /api/questions/:id         -- full question detail: question pages + answ
                                      ({ part_order, label, marks, topics[] })
 ```
 
-`_apply_filters` in `app/routes/questions.py` builds the query; `POST /api/generate/select` reuses it
-plus the same eager-load options.
+`apply_filters` in `app/services/question_query.py` builds the query and `POST /api/generate/select`
+reuses it, along with the `PAPER_EAGER` / `PARTS_EAGER` / `TAG_EAGER` options in the same module —
+so the two endpoints can't drift on what a filter means. Response shaping lives next door in
+`app/services/question_serialization.py` (`serialize_list_item`, `paper_info`, `topic_infos`,
+`part_infos`, `tag_infos`), shared with the admin paper editor.
+
+Presigned URLs reach these functions as an argument, not an import: the routes take the URL-maker
+via `Depends(get_presigner)` (`app/deps.py`), which is also the seam tests override.
 
 ### Topics are per part; the list endpoint returns their union
 

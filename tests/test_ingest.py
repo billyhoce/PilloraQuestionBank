@@ -438,7 +438,10 @@ def test_ai_topics_admin_only(public_client, sample_paper):
     assert resp.status_code == 403
 
 
-def test_ai_topics_returns_suggested_parts(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_returns_suggested_parts(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     q = sample_paper.questions[0]
     rd = reference_data
     selections = [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}]
@@ -446,16 +449,14 @@ def test_ai_topics_returns_suggested_parts(admin_client, mock_s3, sample_paper, 
         {"label": "(a)", "marks": 2, "selections": selections},
         {"label": "(b)", "marks": 3, "selections": []},
     ]
-    with (
-        patch("app.routes.ingest.label_question", return_value={"parts": parts}) as mock_label,
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
-        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
-    ):
+    stub_labeller.result = {"parts": parts}
+
+    with patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b):
         resp = admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
     assert resp.status_code == 200
     assert resp.json()["parts"] == parts
-    mock_label.assert_called_once()
+    assert len(stub_labeller.calls) == 1
 
 
 def test_ai_topics_missing_question_returns_404(admin_client, mock_s3):
@@ -463,25 +464,28 @@ def test_ai_topics_missing_question_returns_404(admin_client, mock_s3):
     assert resp.status_code == 404
 
 
-def test_ai_topics_does_not_persist(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_does_not_persist(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     q = sample_paper.questions[0]
     rd = reference_data
-    parts = [{
+    stub_labeller.result = {"parts": [{
         "label": "(a)",
         "marks": None,
         "selections": [{"topic_id": rd["topic"].id, "subtopic_id": rd["subtopic"].id}],
-    }]
-    with (
-        patch("app.routes.ingest.label_question", return_value={"parts": parts}),
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
-        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
-    ):
+    }]}
+
+    with patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b):
         admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
     assert db_session.query(QuestionTopic).count() == 0
 
 
-def test_ai_topics_includes_topics_without_subtopics(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_includes_topics_without_subtopics(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     """Topics without subtopics appear as bare selectable options in the flat list."""
     from app.models.orm import Topic
     rd = reference_data
@@ -490,20 +494,13 @@ def test_ai_topics_includes_topics_without_subtopics(admin_client, mock_s3, samp
     db_session.flush()
 
     q = sample_paper.questions[0]
-    captured = {}
+    stub_labeller.result = {"parts": [{"label": "", "marks": None, "selections": []}]}
 
-    def fake_label(question, topics, image_bytes_list):
-        captured["topics"] = topics
-        return {"parts": [{"label": "", "marks": None, "selections": []}]}
-
-    with (
-        patch("app.routes.ingest.label_question", side_effect=fake_label),
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
-        patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
-    ):
+    with patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b):
         admin_client.post("/api/import/ai-topics", json={"question_id": q.id})
 
-    sent_ids = {t["id"] for t in captured["topics"]}
+    _question, topics, _images = stub_labeller.calls[0]
+    sent_ids = {t["id"] for t in topics}
     assert bare.id in sent_ids
     assert rd["topic"].id in sent_ids
 
@@ -519,11 +516,13 @@ def _api_connection_error():
     return anthropic.APIConnectionError(request=request)
 
 
-def test_ai_topics_rate_limit_returns_429(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_rate_limit_returns_429(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     q = sample_paper.questions[0]
+    stub_labeller.error = _rate_limit_error()
     with (
-        patch("app.routes.ingest.label_question", side_effect=_rate_limit_error()),
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
         patch("app.routes.ingest.log") as mock_log,
     ):
@@ -533,15 +532,14 @@ def test_ai_topics_rate_limit_returns_429(admin_client, mock_s3, sample_paper, d
     assert mock_log.error.called
 
 
-def test_ai_topics_truncated_response_returns_502(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_truncated_response_returns_502(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     """A cut-off tool call is surfaced for retry, never passed off as a blank part."""
     q = sample_paper.questions[0]
+    stub_labeller.error = TruncatedResponseError("hit max_tokens")
     with (
-        patch(
-            "app.routes.ingest.label_question",
-            side_effect=TruncatedResponseError("hit max_tokens"),
-        ),
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
         patch("app.routes.ingest.log") as mock_log,
     ):
@@ -552,11 +550,13 @@ def test_ai_topics_truncated_response_returns_502(admin_client, mock_s3, sample_
     assert mock_log.error.called
 
 
-def test_ai_topics_api_error_returns_503(admin_client, mock_s3, sample_paper, db_session, reference_data):
+def test_ai_topics_api_error_returns_503(
+    admin_client, sample_paper, db_session, reference_data,
+    fake_image_bytes, stub_labeller,
+):
     q = sample_paper.questions[0]
+    stub_labeller.error = _api_connection_error()
     with (
-        patch("app.routes.ingest.label_question", side_effect=_api_connection_error()),
-        patch("app.routes.ingest.get_image_bytes", return_value=b"fake"),
         patch("app.routes.ingest.downscale_for_ai", side_effect=lambda b: b),
         patch("app.routes.ingest.log") as mock_log,
     ):

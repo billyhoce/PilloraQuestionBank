@@ -21,7 +21,7 @@ from app.models.orm import (
 )
 from app.routes.auth import require_admin
 from app.routes.ingest import PartIn
-from app.routes.questions import _paper_info, _tag_infos
+from app.services.question_serialization import paper_info, tag_infos
 from app.services.ingest import delete_paper
 from app.services.question_parts import scoped_topic_ids, set_question_parts
 from app.services.paper_admin import (
@@ -142,7 +142,7 @@ def _serialize_question(q: Question) -> dict:
             }
             for part in sorted(q.parts, key=lambda p: p.part_order)
         ],
-        "tags": _tag_infos(q),
+        "tags": tag_infos(q),
     }
 
 
@@ -268,7 +268,7 @@ def list_papers(
     )
 
     items = [
-        {**_paper_info(p), "question_count": counts.get(p.id, 0)}
+        {**paper_info(p), "question_count": counts.get(p.id, 0)}
         for p in papers
     ]
     return {"total": total, "items": items}
@@ -315,7 +315,7 @@ def get_paper(
         "year": paper.year,
         "paper_number": paper.paper_number,
         "is_premium": paper.is_premium,
-        "paper_info": _paper_info(paper),
+        "paper_info": paper_info(paper),
         "questions": [_serialize_question(q) for q in questions],
     }
 
@@ -334,7 +334,7 @@ def update_paper_route(
         raise HTTPException(status_code=409, detail="Invalid metadata reference")
     if paper is None:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return {"id": paper.id, "paper_info": _paper_info(paper)}
+    return {"id": paper.id, "paper_info": paper_info(paper)}
 
 
 @router.patch("/papers/{paper_id}/premium")

@@ -53,10 +53,16 @@ Both variants draw the question number into the **360 px left margin**, right-al
 the image.
 
 Dataclasses: `Block(label, source_label, pages, page_index)`,
-`LayoutPlan(page_count, blocks, header_text, additional_instructions, footer_label, cover)`, and
-`CoverSpec(title, subtitle1, subtitle2, body, total_marks, is_questions)`.
+`LayoutPlan(page_count, blocks, header_text, additional_instructions, footer_label, cover)`,
+`CoverSpec(title, subtitle1, subtitle2, body, total_marks, is_questions)`, and
+`PageChrome(header_text, footer_label, cover)`.
 
-### Packing — `compute_layout(blocks, additional_instructions="") -> LayoutPlan`
+**`compute_layout` returns a complete plan.** The header, footer and cover go *in* as a `PageChrome`
+rather than being assigned onto the returned plan by each caller — a plan is never half-built, so
+there is no way to forget one and ship a PDF that renders fine but has no header. Omitting `chrome`
+gives bare pages, which is what the layout-only tests want.
+
+### Packing — `compute_layout(blocks, additional_instructions="", chrome=None) -> LayoutPlan`
 
 Greedy packing: keep a running cursor and place each block (one question's pages for this variant) on
 the current page. A block starts a new page only when its **first page-image** (plus its credit band)

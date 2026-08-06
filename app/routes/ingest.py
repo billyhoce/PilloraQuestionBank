@@ -5,15 +5,16 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.ai.topic_labeler import TruncatedResponseError, label_question
+from app.ai.topic_labeler import TruncatedResponseError
 from app.db import get_db
+from app.deps import ImageFetcher, get_image_fetcher, get_question_labeller
 from app.logger import Timer, log
 from app.models.orm import Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
-from app.storage.s3_client import delete_object, get_image_bytes, get_presigned_url
+from app.storage.s3_client import delete_object, get_presigned_url
 
 
 
@@ -153,6 +154,8 @@ def ai_topics(
     payload: AiTopicsRequest,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
+    fetch_bytes: ImageFetcher = Depends(get_image_fetcher),
+    label_question=Depends(get_question_labeller),
 ):
     with Timer() as t_total:
         with Timer() as t_db:
@@ -199,7 +202,7 @@ def ai_topics(
         raw_list = []
         for p in question_pages:
             with Timer() as _t:
-                raw_list.append(get_image_bytes(p.image_key))
+                raw_list.append(fetch_bytes(p.image_key))
             t_s3 += _t.elapsed
         log.info(f"{'ai_topics':<22}| s3_fetch  | {t_s3:.3f}s  ({n} pages)")
 

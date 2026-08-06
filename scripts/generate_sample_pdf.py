@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.pdf.layout_engine import CoverSpec, LayoutEngine, render_combined
+from app.pdf.layout_engine import CoverSpec, LayoutEngine, PageChrome, render_combined
 from app.pdf.sample_data import build_sample_blocks, sample_marks
 from pdf_to_images import pdf_to_pngs
 
@@ -114,22 +114,27 @@ def generate(args) -> bytes:
             is_questions=is_questions,
         )
 
+    def chrome_for(is_questions: bool) -> PageChrome:
+        return PageChrome(
+            header_text=args.page_header,
+            footer_label=args.footer,
+            cover=cover_for(is_questions),
+        )
+
     if args.variant == "combined":
         q_blocks, images = build_sample_blocks(args.questions, "question", args.image)
         q_engine = LayoutEngine(fit_width=True, show_credit=True)
-        q_plan = q_engine.compute_layout(q_blocks, additional_instructions=args.instructions)
-        q_plan.header_text = args.page_header
-        q_plan.footer_label = args.footer
-        q_plan.cover = cover_for(True)
+        q_plan = q_engine.compute_layout(
+            q_blocks,
+            additional_instructions=args.instructions,
+            chrome=chrome_for(True),
+        )
         sections = [(q_engine, q_plan)]
         a_blocks, a_images = build_sample_blocks(args.questions, "answer", args.image)
         if a_blocks:
             images.update(a_images)
             a_engine = LayoutEngine(fit_width=False)
-            a_plan = a_engine.compute_layout(a_blocks)
-            a_plan.header_text = args.page_header
-            a_plan.footer_label = args.footer
-            a_plan.cover = cover_for(False)
+            a_plan = a_engine.compute_layout(a_blocks, chrome=chrome_for(False))
             sections.append((a_engine, a_plan))
         return render_combined(sections, fetch_bytes=images.__getitem__)
 
@@ -137,11 +142,10 @@ def generate(args) -> bytes:
     blocks, images = build_sample_blocks(args.questions, args.variant, args.image)
     engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
     plan = engine.compute_layout(
-        blocks, additional_instructions=args.instructions if is_question else ""
+        blocks,
+        additional_instructions=args.instructions if is_question else "",
+        chrome=chrome_for(is_question),
     )
-    plan.header_text = args.page_header
-    plan.footer_label = args.footer
-    plan.cover = cover_for(is_question)
     return engine.render(plan, fetch_bytes=images.__getitem__)
 
 

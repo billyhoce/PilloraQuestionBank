@@ -151,6 +151,21 @@ class CoverSpec:
     is_questions: bool    # True → "Questions", False → "Answers"
 
 
+@dataclass(frozen=True)
+class PageChrome:
+    """The branded furniture drawn around a section's content.
+
+    Passed into ``compute_layout`` so the plan it returns is complete. These
+    fields used to be assigned onto the returned plan by each caller, which made
+    forgetting one a silent defect — the PDF renders fine, just with no header —
+    and only visible by eye in the output.
+    """
+
+    header_text: str = ""    # branding, right-aligned on the top rule of every page
+    footer_label: str = ""   # flush-left under the footer rule on every page
+    cover: "CoverSpec | None" = None  # rendered as the section's first page
+
+
 @dataclass
 class LayoutPlan:
     page_count: int
@@ -220,7 +235,12 @@ class LayoutEngine:
             return _TARGET_CONTENT_W_PX / pg.width_px
         return 1.0
 
-    def compute_layout(self, blocks: list[Block], additional_instructions: str = "") -> LayoutPlan:
+    def compute_layout(
+        self,
+        blocks: list[Block],
+        additional_instructions: str = "",
+        chrome: "PageChrome | None" = None,
+    ) -> LayoutPlan:
         """Assign each block the page it starts on, packing greedily by height.
 
         A block starts a new page only when its *first* page-image (plus the
@@ -228,6 +248,10 @@ class LayoutEngine:
         flows its later pages onto following pages, exactly as ``render_onto``
         renders it. This walk mirrors that flow, so ``page_count`` counts those
         overflow pages too.
+
+        ``chrome`` carries the header/footer/cover so the returned plan is ready
+        to render; omitting it yields an unchromed plan (bare pages), which is
+        what the layout-only tests want.
         """
         header_px = _instructions_height_px(additional_instructions)
         page = 0
@@ -251,10 +275,14 @@ class LayoutEngine:
                     igap = 0
                 cursor += igap + eff_h
         page_count = page + 1 if blocks else 1
+        chrome = chrome or PageChrome()
         return LayoutPlan(
             page_count=page_count,
             blocks=blocks,
             additional_instructions=additional_instructions,
+            header_text=chrome.header_text,
+            footer_label=chrome.footer_label,
+            cover=chrome.cover,
         )
 
     def render(self, plan: LayoutPlan, fetch_bytes) -> bytes:

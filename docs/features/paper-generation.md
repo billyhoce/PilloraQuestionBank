@@ -27,8 +27,8 @@ POST   /api/generate/paper       -- render a PDF from a manual selection.
 
 Both require authentication (`get_current_user`), not admin.
 
-`/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite (`_apply_filters` plus
-the eager-load options from `app/routes/questions.py`) to build the candidate pool, excludes any
+`/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite (`apply_filters` plus
+the eager-load options from `app/services/question_query.py`) to build the candidate pool, excludes any
 `exclude_question_ids`, then dispatches on `target_type` + `algorithm`. It **never returns 404** — an
 empty result with a `warning` string keeps the live builder UI responsive.
 
@@ -38,8 +38,10 @@ For the premium restrictions on both endpoints, see
 ### Role enforcement on `/generate/paper`
 
 Admins control every field verbatim. For non-admin users (`public` and `premium`) the admin-set
-[generation config](./generation-config.md) wins (`_resolve_generation_options` in
-`app/routes/generate.py`):
+[generation config](./generation-config.md) wins. `_resolve_generation_options` in
+`app/routes/generate.py` applies the rules and returns a `ResolvedGenerationOptions` — a frozen
+dataclass rather than a tuple, since four of its fields are strings that all get stamped somewhere
+on the PDF and a positional mix-up would swap the header with the footer silently:
 
 - `include_cover` is forced to `true` — users always get a cover page.
 - `cover_body`, `additional_instructions`, `header_text` and `footer_text` are replaced with the

@@ -37,17 +37,35 @@ app/
 ├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, google_oauth.py, ingest.py, generate.py
-│                   #   (question selection), question_parts.py, generation_config.py
+│                   #   (question selection), question_query.py (filter/eager-load),
+│                   #   question_serialization.py, question_parts.py, generation_config.py
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), cover_body.py, sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
+├── deps.py         # FastAPI providers for outbound I/O (presigner, image fetcher, AI labeller)
 ├── logger.py       # file logger + Timer + token/cost logging helper
 └── main.py
 ```
 
 Pydantic schemas and ORM models live in **separate** `schemas/` and `models/` packages.
+
+**Route modules hold routes only.** Anything a second module needs — query building, serialization,
+selection — lives in `services/` under a public name. A route module reaching into another route
+module's internals is the smell that puts something here.
+
+### Outbound I/O goes through `Depends`
+
+S3 and the Claude API reach the routes as injected callables from `app/deps.py` —
+`get_presigner`, `get_image_fetcher`, `get_question_labeller` — not as module-level imports the
+route calls directly. Production gets the real client; `tests/conftest.py` swaps in a fake via
+`app.dependency_overrides` (the `fake_presign`, `fake_image_bytes` and `stub_labeller` fixtures).
+
+The point is that callers and tests cross the **same** seam. Patching a name inside a route module
+couples a test to that module's import list, so relocating a helper breaks tests that never
+mentioned it. `app/pdf/layout_engine.py` already worked this way with its `fetch_bytes` parameter —
+which is why `scripts/generate_sample_pdf.py` can drive the real engine from an in-memory dict.
 
 ### Object store integration
 
@@ -88,10 +106,17 @@ frontend/src/
 │   └── generate/   #   autocreate panel, selection cart
 ├── context/        # AuthContext
 ├── features/       # import/, papers/, reference/, users/
+├── hooks/          # useQuestionSearch.js — the shared question-search state machine
 ├── pages/          # route-level pages, incl. admin/
 ├── utils/          # topicFormat.js, premium.js, userName.js, pdfFilename.js
 └── test/           # setup.js
 ```
+
+**`useQuestionSearch(filters)`** owns the filtered, paginated question list that Browse and Generate
+both render: fetch-on-change with abort, "Load more" paging, and de-duplication of appended pages by
+id. Only where the filters *live* differs between the two pages — Browse keeps them in the URL,
+Generate in local state — so the hook takes them as input and owns everything downstream. It also
+exports `filtersToListArgs`, which Generate's "Select All" reuses for its one-off fetch.
 
 ### Testing
 

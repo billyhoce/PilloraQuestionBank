@@ -23,6 +23,7 @@ from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
 from app.db import Base, get_db
+from app.deps import get_image_fetcher, get_presigner, get_question_labeller
 from app.main import app
 from app.models.orm import (
     ExamType,
@@ -112,6 +113,61 @@ def client(db_session):
     with TestClient(app, base_url="https://testserver", raise_server_exceptions=True) as c:
         yield c
     app.dependency_overrides.pop(get_db, None)
+
+
+# ---------------------------------------------------------------------------
+# Outbound-I/O overrides
+#
+# The routes take S3 and the Claude API through `Depends` (see app/deps.py), so
+# a test swaps in a fake by overriding the provider rather than by patching a
+# name inside a route module. That keeps tests pointed at the route's interface:
+# renaming or relocating a helper can't break a test that never mentions it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_presign():
+    """Route every presigned-URL call to a fixed fake URL."""
+    url = "https://fake.url"
+    app.dependency_overrides[get_presigner] = lambda: (lambda key: url)
+    yield url
+    app.dependency_overrides.pop(get_presigner, None)
+
+
+@pytest.fixture
+def fake_image_bytes():
+    """Serve the same placeholder bytes for any object key."""
+    data = b"fake-img"
+    app.dependency_overrides[get_image_fetcher] = lambda: (lambda key: data)
+    yield data
+    app.dependency_overrides.pop(get_image_fetcher, None)
+
+
+@pytest.fixture
+def stub_labeller():
+    """Install a stub AI labeller; the test sets `.result` or `.error`.
+
+    Usage:
+        stub_labeller.result = {"parts": [...]}
+        stub_labeller.error = anthropic.RateLimitError(...)
+    """
+
+    class _Stub:
+        result = {"parts": []}
+        error = None
+        calls: list = []
+
+        def __call__(self, question, topics, image_bytes_list):
+            self.calls.append((question, topics, image_bytes_list))
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+    stub = _Stub()
+    stub.calls = []
+    app.dependency_overrides[get_question_labeller] = lambda: stub
+    yield stub
+    app.dependency_overrides.pop(get_question_labeller, None)
 
 
 # ---------------------------------------------------------------------------
