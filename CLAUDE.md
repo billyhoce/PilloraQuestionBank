@@ -6,7 +6,8 @@ A question is stored as **one set of page images** but labelled as a list of
 **parts** — (a), (b), (a)(i) … — each with its own topics/subtopics and its own
 marks. The images are never split per part; the split is produced by the AI
 labeller and corrected by the admin. A question's marks total is derived by
-summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-parts).
+summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-parts) and
+[docs/features/ai-labelling.md](./docs/features/ai-labelling.md).
 
 ## Scale
 
@@ -42,7 +43,7 @@ role. Either way the session is a JWT in an httpOnly cookie.
 | Database | PostgreSQL on Supabase (managed, free tier) |
 | Object Store | AWS S3 |
 | Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 1 OCPU / 6 GB RAM |
-| AI | Anthropic Claude API (Sonnet for vision, Haiku for text) |
+| AI | Anthropic Claude API — Haiku 4.5 for both the vision and text calls |
 
 Full rationale and alternatives are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 
@@ -64,12 +65,23 @@ FastAPI                                              │
 
 ## Documentation Map
 
+Docs are organised **by feature**, not by layer: each file under `docs/features/` covers one
+capability end-to-end (its API, its UI, and any AI or PDF work it involves), so answering a question
+usually means opening one file. [docs/README.md](./docs/README.md) is the full index.
+
 | Doc | What's inside |
 |---|---|
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Stacks, backend/frontend code layout, object store, routes, navigation, cross-cutting conventions |
 | [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Database schema (reference + core tables), image storage conventions, image dimension standards |
-| [docs/BACKEND.md](./docs/BACKEND.md) | FastAPI app, API endpoints, import pipeline (server side), PDF generation engine, auth & security |
-| [docs/FRONTEND.md](./docs/FRONTEND.md) | React app, import flow UI, browse/filter UI, paper generation UI, admin CRUD UI |
-| [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) | Claude API usage: per-part splitting + topic/marks auto-labeling, and filename metadata extraction |
+| [docs/features/auth.md](./docs/features/auth.md) | Registration, password login, Google OAuth 2.0, JWT sessions, security posture, auth UI |
+| [docs/features/users-and-premium.md](./docs/features/users-and-premium.md) | The three tiers, user management, `is_premium`, how the paywall is enforced |
+| [docs/features/reference-data.md](./docs/features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
+| [docs/features/ingestion.md](./docs/features/ingestion.md) | Import wizard UI, PDF→image pipeline, confirm/delete, Manage Papers editor |
+| [docs/features/ai-labelling.md](./docs/features/ai-labelling.md) | Claude part-split + topic/marks labelling, filename extraction, parts write path, review UI, costs |
+| [docs/features/browse.md](./docs/features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
+| [docs/features/paper-generation.md](./docs/features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
+| [docs/features/generation-config.md](./docs/features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
+| [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
 | [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
 
@@ -78,11 +90,14 @@ FastAPI                                              │
 Every new feature or behavior change must, **in the same change**:
 
 - **Update the docs.** Revise the relevant doc(s) under `docs/` (and `CLAUDE.md` itself when the
-  scope, stack, or architecture changes) so they never drift from the code. The Documentation Map
-  above says which doc owns which area (DATA_MODEL / BACKEND / FRONTEND / AI_INTEGRATION /
-  DEPLOYMENT). Fix any statement the change makes stale, not just add new prose.
+  scope, stack, or architecture changes) so they never drift from the code. Put the change in the
+  **feature** doc that owns the capability — the Documentation Map above and
+  [docs/README.md](./docs/README.md) say which. Only genuinely cross-cutting facts belong in
+  `ARCHITECTURE.md` / `DATA_MODEL.md`. Fix any statement the change makes stale, not just add new
+  prose.
 - **Visually verify PDF layout changes.** After changing `app/pdf/layout_engine.py`,
-  `app/pdf/cover_body.py`, or anything else that affects generated-PDF appearance, run
+  `app/pdf/cover_body.py`, or anything else that affects generated-PDF appearance (see
+  [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md)), run
   `python scripts/generate_sample_pdf.py --png --out <scratch>/sample.pdf` (no DB/S3 needed) and
   inspect the emitted page PNGs before concluding. See
   [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md).

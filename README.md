@@ -2,7 +2,12 @@
 
 A repository of questions from schools and national exams (Singapore secondary curriculum). Admins import exam paper PDFs and split them into per-question images; public users browse, filter, and generate custom papers as PDFs.
 
-For project context and architecture, see [CLAUDE.md](./CLAUDE.md). Detailed component docs live in [`docs/`](./docs) — deployment specifics are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
+For project context, see [CLAUDE.md](./CLAUDE.md). Detailed docs live in [`docs/`](./docs), organised
+**by feature** — one file per capability under [`docs/features/`](./docs/features), with
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) and
+[docs/DATA_MODEL.md](./docs/DATA_MODEL.md) holding what's shared between them.
+[docs/README.md](./docs/README.md) is the index; deployment specifics are in
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 
 ---
 
@@ -28,7 +33,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 ├── frontend/           # React + Vite SPA
 │   └── src/
 ├── deploy/             # prod compose, nginx config, backup script, systemd timer, prod env template
-├── docs/
+├── docs/               # ARCHITECTURE, DATA_MODEL, DEPLOYMENT + one file per feature in features/
 ├── .github/workflows/  # ci.yml (PRs), deploy.yml (push to main)
 ├── Dockerfile          # backend production image
 ├── docker-compose.yml  # local MinIO (S3-compatible dev only)
@@ -97,11 +102,12 @@ Migrations are auto-applied on deploy (see [CD](#cd-on-push-to-main)), after a s
 |---|---|---|
 | Backend unit + API | `pytest` (SQLite in-memory + `moto` for S3 — fully offline) | `pytest tests/ --ignore=tests/integration` |
 | Backend integration | `pytest` hitting live Anthropic + S3 | `pytest tests/integration` (needs real creds; **excluded from CI**) |
+| Frontend unit | Vitest + React Testing Library | `cd frontend && npm test` |
 | Frontend lint | ESLint | `cd frontend && npm run lint` |
 | Frontend build | Vite | `cd frontend && npm run build` |
 
 Notes:
-- The paper-generation engine (`app/services/generate.py`, `app/pdf/layout_engine.py`) is still a stub. Its tests in `tests/test_generate.py` are marked `xfail` until it's implemented — they'll turn green (XPASS) automatically once it lands.
+- PDF layout changes need a visual check as well as tests — see [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md).
 - Frontend lint currently reports pre-existing warnings under the newer ESLint/react-hooks rules; it's informational and does not block CI.
 
 ### Git Workflow
@@ -186,6 +192,6 @@ Never commit secrets. Rotate the Anthropic key and `JWT_SECRET_KEY` if a leak is
 5. Browse / filter UI. ✅
 6. AI integrations (filename extraction, topic labeling). ✅
 7. Deployment + CI/CD wiring. ✅
-8. Paper generation engine (backend) + UI. ⏳ _in progress — `generate.py` / `layout_engine.py` are stubs._
+8. Paper generation engine (backend) + UI. ✅
 
 Each step ends with the app usable and deployable, even if features are missing.
