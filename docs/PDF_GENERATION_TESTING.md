@@ -1,7 +1,7 @@
 # PDF Generation Testing
 
 Local sample generation and visual self-verification for the paper-generation engine
-(see [BACKEND.md](./BACKEND.md) § Paper Generation Engine for the engine itself).
+(see [features/pdf-rendering.md](./features/pdf-rendering.md) for the engine itself).
 
 Two scripts drive the real layout engine with **no database, S3, or network** — for eyeballing
 layout changes (by a developer or by Claude) without standing up infrastructure:

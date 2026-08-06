@@ -1,17 +1,27 @@
+from dataclasses import dataclass
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.models.orm import CoverTitle, Paper, Question, User
-from app.pdf.layout_engine import Block, CoverSpec, LayoutEngine, render_combined
-from app.routes.auth import can_view_premium, get_current_user
-from app.routes.questions import (
-    _PAPER_EAGER,
-    _PARTS_EAGER,
-    _TAG_EAGER,
-    _apply_filters,
-    serialize_list_item,
+from app.pdf.layout_engine import (
+    Block,
+    CoverSpec,
+    LayoutEngine,
+    LayoutPlan,
+    PageChrome,
+    render_combined,
 )
+from app.routes.auth import can_view_premium, get_current_user
+from app.deps import ImageFetcher, Presigner, get_image_fetcher, get_presigner
+from app.services.question_query import (
+    PAPER_EAGER,
+    PARTS_EAGER,
+    TAG_EAGER,
+    apply_filters,
+)
+from app.services.question_serialization import serialize_list_item
 from app.schemas.generate import (
     GeneratePaperRequest,
     SelectRequest,
@@ -19,7 +29,6 @@ from app.schemas.generate import (
 )
 from app.services.generate import count_select, in_order_select, knapsack_select
 from app.services.generation_config import get_or_create_config
-from app.storage.s3_client import get_image_bytes
 
 router = APIRouter(prefix="/api", tags=["generation"])
 
@@ -39,11 +48,28 @@ def _source_label(q: Question) -> str:
     )
 
 
+@dataclass(frozen=True)
+class ResolvedGenerationOptions:
+    """The generation settings actually used for a render, after role rules.
+
+    A named record rather than a tuple: the four text fields below are all
+    ``str`` and all get stamped somewhere on the PDF, so a positional unpack
+    could transpose the header with the footer without any type error — and the
+    mistake would only show up by eye, in generated output.
+    """
+
+    include_cover: bool
+    title: str
+    body: str
+    header_text: str
+    additional_instructions: str
+    footer_text: str
+
+
 def _resolve_generation_options(
     payload: GeneratePaperRequest, current_user: User, db: Session
-) -> tuple[bool, str, str, str, str, str]:
-    """Resolve the effective (include_cover, title, body, header, instructions,
-    footer).
+) -> ResolvedGenerationOptions:
+    """Resolve the effective generation options for this user.
 
     Admins control every field verbatim, including the page-header branding —
     except that an omitted ``header_text`` (``None``) falls back to the config
@@ -58,13 +84,15 @@ def _resolve_generation_options(
     """
     cfg = get_or_create_config(db)
     if current_user.role == "admin":
-        return (
-            payload.include_cover,
-            payload.cover_title,
-            payload.cover_body,
-            cfg.header_text if payload.header_text is None else payload.header_text,
-            payload.additional_instructions,
-            payload.footer_text,
+        return ResolvedGenerationOptions(
+            include_cover=payload.include_cover,
+            title=payload.cover_title,
+            body=payload.cover_body,
+            header_text=(
+                cfg.header_text if payload.header_text is None else payload.header_text
+            ),
+            additional_instructions=payload.additional_instructions,
+            footer_text=payload.footer_text,
         )
 
     titles = [t.name for t in db.query(CoverTitle).order_by(CoverTitle.id).all()]
@@ -79,13 +107,13 @@ def _resolve_generation_options(
             status_code=400,
             detail="Cover title must be one of the configured titles",
         )
-    return (
-        True,
-        title,
-        cfg.cover_body,
-        cfg.header_text,
-        cfg.additional_instructions,
-        cfg.footer_text,
+    return ResolvedGenerationOptions(
+        include_cover=True,
+        title=title,
+        body=cfg.cover_body,
+        header_text=cfg.header_text,
+        additional_instructions=cfg.additional_instructions,
+        footer_text=cfg.footer_text,
     )
 
 
@@ -131,6 +159,7 @@ def select_questions(
     payload: SelectRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    presign: Presigner = Depends(get_presigner),
 ):
     """Auto-select a set of questions for the given target and algorithm.
 
@@ -144,7 +173,7 @@ def select_questions(
     viewer_premium = can_view_premium(current_user)
     f = payload.filters
     base = db.query(Question).join(Question.paper)
-    query = _apply_filters(
+    query = apply_filters(
         base,
         f.subject_id,
         f.stream_id,
@@ -166,7 +195,7 @@ def select_questions(
         query = query.filter(Question.id.notin_(payload.exclude_question_ids))
 
     candidates = (
-        query.options(_PAPER_EAGER, selectinload(Question.pages), _PARTS_EAGER, _TAG_EAGER)
+        query.options(PAPER_EAGER, selectinload(Question.pages), PARTS_EAGER, TAG_EAGER)
         .order_by(Question.id)
         .all()
     )
@@ -207,7 +236,7 @@ def select_questions(
             )
 
     return {
-        "items": [serialize_list_item(q, viewer_premium) for q in selected],
+        "items": [serialize_list_item(q, presign, viewer_premium) for q in selected],
         "total_marks": total_marks,
         "count": count,
         "exact": exact,
@@ -220,6 +249,7 @@ def generate_paper(
     payload: GeneratePaperRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    fetch_bytes: ImageFetcher = Depends(get_image_fetcher),
 ):
     """Render a PDF (question paper, answer paper, or both combined) from a
     manual selection.
@@ -233,7 +263,7 @@ def generate_paper(
     rows = (
         db.query(Question)
         .filter(Question.id.in_(payload.question_ids))
-        .options(_PAPER_EAGER, selectinload(Question.pages))
+        .options(PAPER_EAGER, selectinload(Question.pages))
         .all()
     )
     by_id = {q.id: q for q in rows}
@@ -247,39 +277,42 @@ def generate_paper(
             detail="Premium content requires a premium subscription",
         )
 
-    # Question paper: scale images centered within 30 mm side margins.
-    # Answer paper: keep native size, flush to the left margin.
     total_marks = sum(q.total_marks or 0 for q in ordered)
-    include_cover, title, body, header_text, additional_instructions, footer_text = (
-        _resolve_generation_options(payload, current_user, db)
-    )
+    opts = _resolve_generation_options(payload, current_user, db)
+
+    def section(is_question: bool) -> tuple[LayoutEngine, "LayoutPlan"]:
+        """Build one section's (engine, plan).
+
+        Question paper: images scaled and centered within 30 mm side margins,
+        credited, and carrying the instructions. Answer paper: native size,
+        flush to the left margin, no credit line, no instructions.
+        """
+        engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
+        plan = engine.compute_layout(
+            _blocks_for(ordered, "question" if is_question else "answer"),
+            additional_instructions=opts.additional_instructions if is_question else "",
+            chrome=PageChrome(
+                header_text=opts.header_text,
+                footer_label=opts.footer_text,
+                cover=_cover_for(
+                    payload,
+                    opts.include_cover,
+                    opts.title,
+                    opts.body,
+                    total_marks,
+                    is_questions=is_question,
+                ),
+            ),
+        )
+        return engine, plan
 
     if payload.variant == "combined":
-        q_engine = LayoutEngine(fit_width=True, show_credit=True)
-        q_plan = q_engine.compute_layout(
-            _blocks_for(ordered, "question"), additional_instructions=additional_instructions
-        )
-        q_plan.header_text = header_text
-        q_plan.footer_label = footer_text
-        q_plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=True)
-        sections = [(q_engine, q_plan)]
-        a_blocks = _blocks_for(ordered, "answer")
-        if a_blocks:  # no trailing blank page when nothing has answers
-            a_engine = LayoutEngine(fit_width=False)
-            a_plan = a_engine.compute_layout(a_blocks)
-            a_plan.header_text = header_text
-            a_plan.footer_label = footer_text
-            a_plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=False)
+        sections = [section(is_question=True)]
+        a_engine, a_plan = section(is_question=False)
+        if a_plan.blocks:  # no trailing blank page when nothing has answers
             sections.append((a_engine, a_plan))
-        pdf = render_combined(sections, fetch_bytes=get_image_bytes)
+        pdf = render_combined(sections, fetch_bytes=fetch_bytes)
     else:
-        is_question = payload.variant == "question"
-        blocks = _blocks_for(ordered, payload.variant)
-        engine = LayoutEngine(fit_width=is_question, show_credit=is_question)
-        instructions = additional_instructions if is_question else ""
-        plan = engine.compute_layout(blocks, additional_instructions=instructions)
-        plan.header_text = header_text
-        plan.footer_label = footer_text
-        plan.cover = _cover_for(payload, include_cover, title, body, total_marks, is_questions=is_question)
-        pdf = engine.render(plan, fetch_bytes=get_image_bytes)
+        engine, plan = section(is_question=payload.variant == "question")
+        pdf = engine.render(plan, fetch_bytes=fetch_bytes)
     return Response(content=pdf, media_type="application/pdf")

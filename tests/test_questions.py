@@ -1,6 +1,5 @@
 """Tests for the questions list/filter and detail endpoints."""
 from datetime import datetime, UTC
-from unittest.mock import patch
 
 import pytest
 
@@ -497,14 +496,12 @@ def test_list_questions_response_shape(public_client, sample_paper, reference_da
 # ---------------------------------------------------------------------------
 
 
-def test_get_question_returns_all_pages(public_client, sample_paper, db_session):
+def test_get_question_returns_all_pages(public_client, sample_paper, db_session, fake_presign):
     # Q2 in sample_paper has 1 question page + 1 answer page
     from app.models.orm import Question
     q2 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=2).one()
 
-    from unittest.mock import patch
-    with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
-        resp = public_client.get(f"/api/questions/{q2.id}")
+    resp = public_client.get(f"/api/questions/{q2.id}")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -512,14 +509,12 @@ def test_get_question_returns_all_pages(public_client, sample_paper, db_session)
     assert len(body["answer_pages"]) == 1
 
 
-def test_get_question_pages_include_presigned_urls(public_client, sample_paper, db_session):
+def test_get_question_pages_include_presigned_urls(public_client, sample_paper, db_session, fake_presign):
     from app.models.orm import Question
-    from unittest.mock import patch
 
     q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
 
-    with patch("app.routes.questions.get_presigned_url", return_value="https://example.com/signed"):
-        resp = public_client.get(f"/api/questions/{q1.id}")
+    resp = public_client.get(f"/api/questions/{q1.id}")
 
     assert resp.status_code == 200
     urls = [p["url"] for p in resp.json()["question_pages"]]
@@ -543,8 +538,7 @@ def _make_premium(db_session, paper):
 
 def test_list_premium_paper_locked_for_public(public_client, sample_paper, db_session):
     _make_premium(db_session, sample_paper)
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = public_client.get("/api/questions")
+    resp = public_client.get("/api/questions")
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert items  # tiles are still visible
@@ -556,34 +550,30 @@ def test_list_premium_paper_locked_for_public(public_client, sample_paper, db_se
 
 def test_list_premium_paper_locked_for_anonymous(client, sample_paper, db_session):
     _make_premium(db_session, sample_paper)
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = client.get("/api/questions")
+    resp = client.get("/api/questions")
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert items
     assert all(i["locked"] and i["first_page_url"] is None for i in items)
 
 
-def test_list_premium_paper_unlocked_for_premium(premium_client, sample_paper, db_session):
+def test_list_premium_paper_unlocked_for_premium(premium_client, sample_paper, db_session, fake_presign):
     _make_premium(db_session, sample_paper)
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = premium_client.get("/api/questions")
+    resp = premium_client.get("/api/questions")
     assert resp.status_code == 200
     items = resp.json()["items"]
-    assert all(not i["locked"] and i["first_page_url"] == "https://signed" for i in items)
+    assert all(not i["locked"] and i["first_page_url"] == fake_presign for i in items)
 
 
 def test_list_premium_paper_unlocked_for_admin(admin_client, sample_paper, db_session):
     _make_premium(db_session, sample_paper)
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = admin_client.get("/api/questions")
+    resp = admin_client.get("/api/questions")
     assert resp.status_code == 200
     assert all(not i["locked"] for i in resp.json()["items"])
 
 
 def test_non_premium_paper_not_locked(public_client, sample_paper):
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = public_client.get("/api/questions")
+    resp = public_client.get("/api/questions")
     assert resp.status_code == 200
     assert all(not i["locked"] for i in resp.json()["items"])
 
@@ -591,34 +581,30 @@ def test_non_premium_paper_not_locked(public_client, sample_paper):
 def test_get_question_detail_locked_for_public(public_client, sample_paper, db_session):
     _make_premium(db_session, sample_paper)
     q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = public_client.get(f"/api/questions/{q1.id}")
+    resp = public_client.get(f"/api/questions/{q1.id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["locked"] is True
     assert all(p["url"] is None for p in body["question_pages"])
 
 
-def test_get_question_detail_unlocked_for_premium(premium_client, sample_paper, db_session):
+def test_get_question_detail_unlocked_for_premium(premium_client, sample_paper, db_session, fake_presign):
     _make_premium(db_session, sample_paper)
     q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
-    with patch("app.routes.questions.get_presigned_url", return_value="https://signed"):
-        resp = premium_client.get(f"/api/questions/{q1.id}")
+    resp = premium_client.get(f"/api/questions/{q1.id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["locked"] is False
-    assert all(p["url"] == "https://signed" for p in body["question_pages"])
+    assert all(p["url"] == fake_presign for p in body["question_pages"])
 
 
-def test_get_question_includes_topic_chips(public_client, db_session, reference_data, admin_user):
-    from unittest.mock import patch
+def test_get_question_includes_topic_chips(public_client, db_session, reference_data, admin_user, fake_presign):
 
     paper = _add_paper(db_session, reference_data, admin_user)
     q = _add_question(db_session, paper)
     _label(db_session, q, reference_data["topic"].id, reference_data["subtopic"].id)
 
-    with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
-        resp = public_client.get(f"/api/questions/{q.id}")
+    resp = public_client.get(f"/api/questions/{q.id}")
 
     assert resp.status_code == 200
     topics = resp.json()["topics"]
@@ -646,7 +632,7 @@ def test_list_questions_topics_include_topic_number(public_client, db_session, r
 # ---------------------------------------------------------------------------
 
 
-def test_get_question_returns_the_per_part_breakdown(public_client, db_session, reference_data, admin_user):
+def test_get_question_returns_the_per_part_breakdown(public_client, db_session, reference_data, admin_user, fake_presign):
     paper = _add_paper(db_session, reference_data, admin_user)
     q = _add_question(db_session, paper, marks=None)
     q.parts[0].label = "(a)"
@@ -657,8 +643,7 @@ def test_get_question_returns_the_per_part_breakdown(public_client, db_session, 
     q.parts.append(QuestionPart(part_order=1, label="(b)", marks=5))
     db_session.flush()
 
-    with patch("app.routes.questions.get_presigned_url", return_value="https://fake.url"):
-        resp = public_client.get(f"/api/questions/{q.id}")
+    resp = public_client.get(f"/api/questions/{q.id}")
 
     assert resp.status_code == 200
     body = resp.json()

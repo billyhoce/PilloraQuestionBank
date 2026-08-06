@@ -10,12 +10,11 @@ import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 import { buildPdfFilename } from '../utils/pdfFilename'
 import { isLocked } from '../utils/premium'
+import { filtersToListArgs, useQuestionSearch } from '../hooks/useQuestionSearch'
 
 // Shown when a premium/locked question somehow reaches the cart — /generate/paper
 // returns 403 for premium content, so we block before the request and on 403.
 const PREMIUM_WARNING = 'Cannot generate: your selection includes premium questions. Remove them or subscribe to unlock.'
-
-const PAGE_SIZE = 50
 
 // Max questions the "Select All" button adds in one click.
 const SELECT_ALL_LIMIT = 50
@@ -31,24 +30,6 @@ const EMPTY_FILTERS = {
   topic_ids: [],
   exclusive: false,
   search: '',
-}
-
-// Map the UI filter object to api.questions.list arguments (same as BrowsePage).
-function filtersToListArgs(filters, page) {
-  return {
-    subject_id: filters.subject_id || undefined,
-    stream_id: filters.stream_id || undefined,
-    level_id: filters.level_id || undefined,
-    school_id: filters.school_id || undefined,
-    exam_type_id: filters.exam_type_id || undefined,
-    year: filters.year || undefined,
-    paper_number: filters.paper_number || undefined,
-    topic_ids: filters.topic_ids,
-    exclusive: filters.exclusive,
-    search: filters.search || undefined,
-    page,
-    page_size: PAGE_SIZE,
-  }
 }
 
 // Trigger a browser download of a Blob under the given filename.
@@ -89,14 +70,9 @@ export default function GeneratePage() {
   const isAdmin = user?.role === 'admin'
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
-  const filterKey = useMemo(() => JSON.stringify(filters), [filters])
 
-  const [items, setItems] = useState([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState(null)
+  const { items, total, loading, loadingMore, error, loadMore } =
+    useQuestionSearch(filters)
   const [selectedItem, setSelectedItem] = useState(null)
 
   // Selection cart — full list-item objects, de-duped by id.
@@ -174,52 +150,6 @@ export default function GeneratePage() {
       return next
     })
   }, [])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    let cancelled = false
-
-    setItems([])
-    setPage(1)
-    setLoading(true)
-    setError(null)
-
-    api.questions.list(filtersToListArgs(filters, 1), controller.signal)
-      .then(res => {
-        if (cancelled) return
-        setItems(res.items || [])
-        setTotal(res.total || 0)
-      })
-      .catch(e => {
-        if (cancelled || e?.name === 'AbortError') return
-        setError(e?.message || 'Failed to load questions')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-
-    return () => { cancelled = true; controller.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey])
-
-  async function loadMore() {
-    if (loadingMore) return
-    const nextPage = page + 1
-    setLoadingMore(true)
-    setError(null)
-    try {
-      const res = await api.questions.list(filtersToListArgs(filters, nextPage))
-      setItems(prev => {
-        const seen = new Set(prev.map(it => it.id))
-        const additions = (res.items || []).filter(it => !seen.has(it.id))
-        return [...prev, ...additions]
-      })
-      setTotal(res.total || 0)
-      setPage(nextPage)
-    } catch (e) {
-      setError(e?.message || 'Failed to load more questions')
-    } finally {
-      setLoadingMore(false)
-    }
-  }
 
   const cartIds = useMemo(() => new Set(cart.map(it => it.id)), [cart])
   const cartTotalMarks = useMemo(

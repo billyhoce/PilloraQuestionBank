@@ -1,6 +1,6 @@
 # Deployment
 
-**Scope:** Hosting plan, CI/CD pipeline, one-time VM provisioning, configuration, backup strategy. For application code, see [BACKEND.md](./BACKEND.md) and [FRONTEND.md](./FRONTEND.md).
+**Scope:** Hosting plan, CI/CD pipeline, one-time VM provisioning, configuration, backup strategy. For application code, see [ARCHITECTURE.md](./ARCHITECTURE.md) and the feature docs under [`features/`](./features).
 
 ## Hosting Plan
 
@@ -160,7 +160,7 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 | `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
 | `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-backups`) |
 | `ANTHROPIC_API_KEY` | Backend | Claude API auth |
-| `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup)) |
+| `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup) and [features/auth.md](./features/auth.md)) |
 | `GOOGLE_CLIENT_SECRET` | Backend | OAuth client secret. Never reaches the browser |
 | `GOOGLE_REDIRECT_URI` | Backend | `https://questionbank.pillora.com.sg/api/auth/google/callback` — must match a URI registered on the OAuth client exactly |
 

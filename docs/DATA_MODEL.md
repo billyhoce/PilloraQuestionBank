@@ -1,6 +1,8 @@
 # Data Model
 
-**Scope:** Database schema and image storage conventions. Shared knowledge for both backend and frontend. For API shape and how the backend reads/writes these tables, see [BACKEND.md](./BACKEND.md). For how the frontend consumes filter values and result shapes, see [FRONTEND.md](./FRONTEND.md).
+**Scope:** Database schema and image storage conventions — the shared reference every feature builds
+on. For how a given table is read and written, see the matching doc under
+[`features/`](./features) (indexed in [README.md](./README.md)).
 
 ## Reference Tables (Admin CRUD)
 
@@ -18,7 +20,7 @@ CoverTitle:     { id, name (unique) }                 -- cover titles users pick
 
 ### Key Relationship
 
-Topics belong to a **(Subject, Stream)** pair. The same subject can have a different topic list per stream — e.g. "G2 Math" and "G3 Math" can each define their own topics under `Subject = "Math"`. Topic names need only be unique within a `(subject, stream)`, so "Algebra" can exist independently under both G2 Math and G3 Math.
+Topics belong to a **(Subject, Stream)** pair. The same subject can have a different topic list per stream — e.g. "G2 Math" and "G3 Math" can each define their own topics under `Subject = "Math"`. Topic names need only be unique within a `(subject, stream)`, so "Algebra" can exist independently under both G2 Math and G3 Math. See [features/reference-data.md](./features/reference-data.md).
 
 ## Core Tables
 
@@ -133,7 +135,7 @@ subtopics and marks therefore hang off `QuestionPart`, never off `Question`.**
 - **Images are not split per part.** A question is imported as one set of page
   images covering all its parts; splitting is purely a labelling concern, done
   by the AI labeller and corrected by the admin. See
-  [AI_INTEGRATION.md](./AI_INTEGRATION.md).
+  [features/ai-labelling.md](./features/ai-labelling.md).
 
 Deleting a part cascades to its `QuestionTopic` and `QuestionSubtopic` rows, so
 replacing a question's labelling is a single delete-then-insert of its parts.
@@ -141,19 +143,13 @@ replacing a question's labelling is a single delete-then-insert of its parts.
 **Generation config.** `GenerationConfig` is a **single row** (`ck_generation_config_singleton`
 enforces `id = 1`) of admin-set presets applied to every non-admin paper generation; `CoverTitle`
 is the admin-curated list of cover titles those users must pick from (admins may type free text).
-The Alembic migration seeds the row with the canonical defaults (mirrored in
-`app/services/generation_config.py`, which also lazily re-creates the row if missing) and one
-title, `"Topical Worksheets"`. See
-[BACKEND.md](./BACKEND.md#generation-config--cover-titles-implemented) for the API and
-enforcement rules.
+The Alembic migration seeds the row with canonical defaults and one title, `"Topical Worksheets"`.
+See [features/generation-config.md](./features/generation-config.md).
 
 **Roles & the premium paywall.** `role` has three tiers, enforced by a DB check
 constraint (`ck_user_role`): `admin`, `public` (labelled "Normal" in the UI), and
-`premium`. Premium is granted by an admin via the User Management page (there is no
-self-serve payment yet — the Subscribe page is a stub). A paper flagged
-`is_premium = true` is gated: only `admin` and `premium` users may view its question
-images or generate papers from its questions. Non-premium (and anonymous) users still
-see the question tiles and all metadata, but the backend withholds the image URLs.
+`premium`. A paper flagged `is_premium = true` is gated to `admin`/`premium` viewers. See
+[features/users-and-premium.md](./features/users-and-premium.md).
 
 **Names.** `first_name` / `last_name` are `NOT NULL DEFAULT ''`. Manual registration requires both
 (non-blank, ≤100 chars); Google supplies them from `given_name` / `family_name`, which it does not
@@ -176,7 +172,7 @@ address that already has an account, that account gains the `google_sub` and kee
 account. Both sign-in methods then work. Blank names are backfilled from Google at that point, but
 a name the user typed is never overwritten. `password_hash` is nullable purely to represent the
 second row; `verify_password` rejects a NULL/empty hash, so a Google-only account cannot be
-password-logged-in.
+password-logged-in. See [features/auth.md](./features/auth.md).
 
 ## Image Storage Conventions
 
@@ -190,7 +186,7 @@ password-logged-in.
 
 ## Image Dimension Standards
 
-These rules apply at import time when the server converts PDF pages to images. They directly shape the values stored in `QuestionPage.width_px` and `QuestionPage.height_px`, which the paper-generation engine uses for layout math.
+These rules apply at import time when the server converts PDF pages to images (see [features/ingestion.md](./features/ingestion.md)). They directly shape the values stored in `QuestionPage.width_px` and `QuestionPage.height_px`, which the [layout engine](./features/pdf-rendering.md) uses for layout math.
 
 - **Do NOT resize to A4 aspect ratio.** Page heights vary across questions; only width is normalized.
 - **Store content-only images (no baked margin).** Page margins and question numbers are added later, by the paper-generation engine — not at import.
