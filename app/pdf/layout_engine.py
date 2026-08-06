@@ -18,24 +18,30 @@ Layout rules:
 """
 import io
 import os
-import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
 from PIL import Image
 from reportlab.lib.colors import Color
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph
 
-from app.pdf.cover_body import to_paragraphs
+from app.pdf.rich_text import is_blank, to_paragraphs
 
 # A4 @ 300 DPI. PAGE_W_PX matches the standardized image canvas width; PAGE_H_PX
 # follows from the A4 aspect ratio so px map 1:1 onto the page after scaling.
 PAGE_W_PX = 2480
 PAGE_H_PX = 3508
+
+# Points per pixel. Every length in this module is in 300-DPI px; ReportLab
+# works in points, so anything handed to the canvas (or to a ParagraphStyle) is
+# multiplied by this. It is a constant of the page geometry, which lets text be
+# measured at import time and at layout time, not just at render time.
+PT_PER_PX = A4[0] / PAGE_W_PX
 
 # Page chrome (drawn on every page): purple rule lines near the top and bottom,
 # the Pillora logo top-left, the admin-configured header right-aligned on the top
@@ -48,22 +54,7 @@ _HEADER_LINE_Y_PX = 250                # header rule, px from the top
 _FOOTER_LINE_Y_PX = PAGE_H_PX - 250    # footer rule, px from the top
 _CHROME_FONT = "Helvetica"
 _CHROME_FONT_PX = 42                   # ~12pt at 300 DPI (header / footer / page number)
-_CHROME_HEADER_LINE_PX = 52            # line advance for the multi-line page header
-# Tokens in the page header that look like a web address are turned into
-# clickable links (matches "https://…", "www.pillora.com.sg", "pillora.com.sg").
-# A bare domain needs a 2+ letter TLD, so ordinary text like "e.g." is left alone.
-_URL_TOKEN = re.compile(
-    r"https?://\S+|www\.\S+|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:/\S*)?",
-    re.I,
-)
-
-
-def _link_target(token: str) -> str:
-    """Normalize a matched header token to an absolute URL for ``linkURL``."""
-    stripped = token.rstrip(".,;:!?)")
-    if stripped.lower().startswith(("http://", "https://")):
-        return stripped
-    return "https://" + stripped
+_CHROME_LINE_PX = 52                   # line advance for the header and footer text
 _CHROME_RULE_PX = 4                    # rule line thickness
 _LOGO_W_PX = 250                       # header logo width (aspect preserved)
 _LOGO_RULE_GAP_PX = 12                 # gap between the logo's visible bottom and the header rule
@@ -82,8 +73,11 @@ _COVER_SUBTITLE_FONT_PX = 60
 _COVER_BODY_FONT_PX = 45
 _COVER_BODY_LINE_PX = 66        # line advance within the letter paragraph
 _COVER_BODY_W_PX = 1500         # wrap width for the letter paragraph
-_COVER_COPYRIGHT_FONT_PX = 40
-_COVER_COPYRIGHT = "© Pillora Learning — All worksheets are strictly for personal use."
+# Appended to the cover title so the two papers are told apart at a glance. It is
+# the *only* difference between the two covers' headings — title and subtitles
+# are otherwise identical — and the letter body is question-paper-only.
+_QUESTION_TITLE_SUFFIX = "Question Paper"
+_ANSWER_TITLE_SUFFIX = "Answer Key"
 # Marks box (top-right of the cover content area).
 _MARKS_BOX_W_PX = 460
 _MARKS_BOX_H_PX = 150
@@ -105,10 +99,11 @@ _LABEL_FONT = "Helvetica-Bold"
 _LABEL_FONT_PX = 46  # ~14pt at 300 DPI
 _LABEL_TOP_PAD_PX = 34  # nudge the number slightly below the question's top edge
 
-_HEADER_FONT = "Helvetica"
-_HEADER_FONT_PX = 42  # ~12pt at 300 DPI
-_HEADER_LINE_PX = 58
-_HEADER_PAD_PX = 40
+# Additional instructions: the exam instructions band on the first content page.
+_INSTRUCTIONS_FONT = "Helvetica"
+_INSTRUCTIONS_FONT_PX = 42  # ~12pt at 300 DPI
+_INSTRUCTIONS_LINE_PX = 58
+_INSTRUCTIONS_PAD_PX = 40   # clearance between the band and the first question
 
 # Per-question provenance credit (question paper only). Drawn just above each
 # question in small grey type; the whole band is reserved in the block height so
@@ -119,13 +114,91 @@ _CREDIT_GAP_PX = 18   # gap between the credit line and the image below it
 _CREDIT_BAND_PX = _CREDIT_FONT_PX + _CREDIT_GAP_PX  # vertical space one credit reserves
 _CREDIT_GREY = 0.35
 
+# -- rich text ---------------------------------------------------------------
+# The page header, the additional instructions, the footer and the cover body are
+# all authored in the same editor and sanitized to Platypus markup by
+# app/pdf/rich_text.py, so all four support bold/italic/underline and blue
+# clickable links. They differ only in their style and the column they fill.
 
-def _instructions_height_px(additional_instructions: str) -> int:
+
+def _rich_style(name, font_px, line_px, alignment=TA_LEFT, font=_CHROME_FONT):
+    """A ParagraphStyle from 300-DPI px sizes."""
+    return ParagraphStyle(
+        name,
+        fontName=font,
+        fontSize=font_px * PT_PER_PX,
+        leading=line_px * PT_PER_PX,
+        alignment=alignment,
+    )
+
+
+_PAGE_HEADER_STYLE = _rich_style("page_header", _CHROME_FONT_PX, _CHROME_LINE_PX, TA_RIGHT)
+_FOOTER_STYLE = _rich_style("footer", _CHROME_FONT_PX, _CHROME_LINE_PX)
+_INSTRUCTIONS_STYLE = _rich_style(
+    "instructions", _INSTRUCTIONS_FONT_PX, _INSTRUCTIONS_LINE_PX, font=_INSTRUCTIONS_FONT
+)
+_COVER_BODY_STYLE = _rich_style("cover_body", _COVER_BODY_FONT_PX, _COVER_BODY_LINE_PX)
+
+# Header column: right-aligned, running from just right of the logo to the right
+# margin, so a long line wraps instead of colliding with the logo. The block's
+# bottom edge sits _PAGE_HEADER_RULE_GAP_PX above the rule, which is what puts
+# the *last* line on the rule however many lines there are.
+_PAGE_HEADER_X_PX = _MARGIN_X_PX + _LOGO_W_PX + 60
+_PAGE_HEADER_W_PX = PAGE_W_PX - _MARGIN_X_PX - _PAGE_HEADER_X_PX
+_PAGE_HEADER_RULE_GAP_PX = 5
+
+# Footer text: flush-left below the footer rule, its column stopping short of the
+# bottom-right page number. A Paragraph's first baseline sits one fontSize below
+# its top edge, which is how the footer text and the page number — drawn as a
+# bare string at that baseline — end up on one line.
+_FOOTER_TOP_PX = _FOOTER_LINE_Y_PX + 20
+_FOOTER_BASELINE_PX = _FOOTER_TOP_PX + _CHROME_FONT_PX
+_PAGE_NUM_W_PX = 300
+_FOOTER_W_PX = PAGE_W_PX - 2 * _MARGIN_X_PX - _PAGE_NUM_W_PX
+
+
+def _measure_rich(body: str, style: ParagraphStyle, width_px: float, gap_px: float = 0):
+    """Wrap rich text into drawable paragraphs for a ``width_px``-wide column.
+
+    Returns ``(items, total_height_px)``, each item ``(Paragraph | None,
+    advance_px)`` — ``None`` for an empty paragraph, which advances one blank
+    line. ``gap_px`` follows every paragraph. Measuring and drawing go through
+    this one call, so the space a block reserves during layout is the space it
+    occupies when rendered.
+    """
+    items: list[tuple[Paragraph | None, float]] = []
+    total = 0.0
+    line_px = style.leading / PT_PER_PX
+    for markup in to_paragraphs(body or ""):
+        if not markup:
+            items.append((None, line_px))
+            total += line_px
+            continue
+        para = Paragraph(markup, style)
+        _, h_pt = para.wrap(width_px * PT_PER_PX, PAGE_H_PX * PT_PER_PX)
+        advance = h_pt / PT_PER_PX + gap_px
+        items.append((para, advance))
+        total += advance
+    return items, total
+
+
+def _draw_rich(c, items, x_px: float, top_px: float, y_pt) -> None:
+    """Draw measured paragraphs down the page from ``top_px``, at ``x_px``."""
+    y = top_px
+    for para, advance in items:
+        if para is not None:
+            para.drawOn(c, x_px * PT_PER_PX, y_pt(y + para.height / PT_PER_PX))
+        y += advance
+
+
+def _instructions_height_px(additional_instructions: str) -> float:
     """Vertical band reserved for the instructions on the first page (0 if none)."""
-    if not additional_instructions:
+    if is_blank(additional_instructions):
         return 0
-    lines = additional_instructions.splitlines() or [additional_instructions]
-    return len(lines) * _HEADER_LINE_PX + _HEADER_PAD_PX
+    _, total = _measure_rich(
+        additional_instructions, _INSTRUCTIONS_STYLE, _TARGET_CONTENT_W_PX
+    )
+    return total + _INSTRUCTIONS_PAD_PX
 
 
 @dataclass
@@ -142,13 +215,21 @@ class Block:
 class CoverSpec:
     """Editable cover-page content for one section (question or answer paper)."""
 
-    title: str            # e.g. "Topical Worksheets"
-    subtitle1: str        # topic/subject line; " – Questions/Answers" appended per variant
+    title: str            # e.g. "Topical Worksheets"; the variant suffix is appended
+    subtitle1: str        # topic/subject line, drawn verbatim on both variants
     subtitle2: str        # e.g. "2024 Prelim"
     body: str             # the letter: rich-text HTML (<p>/<b>/<i>/<u>/<a href>,
-                          # sanitized by app/pdf/cover_body.py) or legacy plain text
+                          # sanitized by app/pdf/rich_text.py) or legacy plain text.
+                          # Drawn on the question cover only.
     total_marks: int      # shown in the top-right marks box
-    is_questions: bool    # True → "Questions", False → "Answers"
+    is_questions: bool    # True → "… - Question Paper", False → "… - Answer Key"
+
+
+def _cover_title(cover: "CoverSpec") -> str:
+    """The cover heading: the chosen title plus the per-variant suffix. With no
+    title configured the suffix stands alone rather than dangling off a dash."""
+    suffix = _QUESTION_TITLE_SUFFIX if cover.is_questions else _ANSWER_TITLE_SUFFIX
+    return f"{cover.title} - {suffix}" if cover.title else suffix
 
 
 @dataclass(frozen=True)
@@ -455,44 +536,42 @@ class LayoutEngine:
                 mask="auto",
             )
 
-        # Header right-aligned on the top rule; footer label flush-left and the
+        # Header right-aligned on the top rule; footer text flush-left and the
         # page number flush-right below the footer rule.
         c.setFillGray(0)
-        self._draw_page_header(c, header_text, right, scale, y_pt)
+        self._draw_page_header(c, header_text, y_pt)
+        self._draw_footer(c, footer_label, y_pt)
         c.setFont(_CHROME_FONT, _CHROME_FONT_PX * scale)
-        footer_baseline = y_pt(_FOOTER_LINE_Y_PX + _CHROME_FONT_PX + 20)
-        if footer_label:
-            c.drawString(left, footer_baseline, footer_label)
-        c.drawRightString(right, footer_baseline, f"Page {page_num}")
+        c.drawRightString(right, y_pt(_FOOTER_BASELINE_PX), f"Page {page_num}")
 
-    def _draw_page_header(self, c, header_text, right, scale, y_pt) -> None:
-        """Draw the admin-configured header right-aligned on the top rule.
+    def _draw_page_header(self, c, header_text, y_pt) -> None:
+        """Draw the admin-configured header, right-aligned on the top rule.
 
-        Lines stack upward so the *last* line sits on the rule (matching the
-        website's former baseline). Any web-address token is turned into a
-        clickable link positioned within its right-aligned line."""
-        if not header_text:
+        Rich text (see app/pdf/rich_text.py): links render blue, underlined and
+        clickable. The block is bottom-aligned to the rule, so its lines stack
+        *upward* and the last one sits on the rule however many there are."""
+        if is_blank(header_text):
             return
-        lines = header_text.splitlines() or [header_text]
-        font_pt = _CHROME_FONT_PX * scale
-        c.setFont(_CHROME_FONT, font_pt)
-        for i, line in enumerate(reversed(lines)):
-            baseline = y_pt(_HEADER_LINE_Y_PX - 15 - i * _CHROME_HEADER_LINE_PX)
-            c.drawRightString(right, baseline, line)
-            line_left = right - c.stringWidth(line, _CHROME_FONT, font_pt)
-            for m in _URL_TOKEN.finditer(line):
-                x0 = line_left + c.stringWidth(line[: m.start()], _CHROME_FONT, font_pt)
-                x1 = line_left + c.stringWidth(line[: m.end()], _CHROME_FONT, font_pt)
-                c.linkURL(
-                    _link_target(m.group()),
-                    (x0, baseline, x1, baseline + font_pt),
-                    relative=0,
-                )
+        items, total_px = _measure_rich(header_text, _PAGE_HEADER_STYLE, _PAGE_HEADER_W_PX)
+        top_px = _HEADER_LINE_Y_PX - _PAGE_HEADER_RULE_GAP_PX - total_px
+        _draw_rich(c, items, _PAGE_HEADER_X_PX, top_px, y_pt)
+
+    def _draw_footer(self, c, footer_label, y_pt) -> None:
+        """Draw the footer rich text flush-left below the footer rule, in a
+        column that stops short of the bottom-right page number."""
+        if is_blank(footer_label):
+            return
+        items, _ = _measure_rich(footer_label, _FOOTER_STYLE, _FOOTER_W_PX)
+        _draw_rich(c, items, _MARGIN_X_PX, _FOOTER_TOP_PX, y_pt)
 
     def _draw_cover(self, c, cover, header_text, footer_label, page_num, scale, y_pt) -> None:
         """Render the branded cover page: logo, title, subtitles, the letter
-        paragraph, a marks box top-right, a copyright line, and the standard
-        page chrome. Drawn as the section's first page."""
+        paragraph, a marks box top-right, and the standard page chrome. Drawn as
+        the section's first page.
+
+        The two sections' covers are deliberately near-identical: same subtitles,
+        same title bar the ``" - Question Paper"`` / ``" - Answer Key"`` suffix,
+        and the letter body on the question paper only."""
         cx = PAGE_W_PX / 2 * scale
         c.setFillGray(0)
 
@@ -513,15 +592,14 @@ class LayoutEngine:
         else:
             y += 200
 
-        # Title + subtitles, centered.
-        variant_word = "Questions" if cover.is_questions else "Answers"
-        sub1 = f"{cover.subtitle1} – {variant_word}" if cover.subtitle1 else variant_word
+        # Title + subtitles, centered. The variant only shows in the title.
         c.setFont(_LABEL_FONT, _COVER_TITLE_FONT_PX * scale)
-        c.drawCentredString(cx, y_pt(y + _COVER_TITLE_FONT_PX), cover.title)
+        c.drawCentredString(cx, y_pt(y + _COVER_TITLE_FONT_PX), _cover_title(cover))
         y += _COVER_TITLE_FONT_PX + 60
         c.setFont(_LABEL_FONT, _COVER_SUBTITLE_FONT_PX * scale)
-        c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), sub1)
-        y += _COVER_SUBTITLE_FONT_PX + 30
+        if cover.subtitle1:
+            c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), cover.subtitle1)
+            y += _COVER_SUBTITLE_FONT_PX + 30
         if cover.subtitle2:
             c.drawCentredString(cx, y_pt(y + _COVER_SUBTITLE_FONT_PX), cover.subtitle2)
             y += _COVER_SUBTITLE_FONT_PX + 30
@@ -529,31 +607,15 @@ class LayoutEngine:
         # Marks box, top-right of the content area.
         self._draw_marks_box(c, cover.total_marks, scale, y_pt)
 
-        # Letter body: sanitized rich text (see app/pdf/cover_body.py) rendered
-        # as Platypus Paragraphs in a centered column — Paragraph handles the
+        # Letter body: sanitized rich text (see app/pdf/rich_text.py) rendered as
+        # Platypus Paragraphs in a centered column — Paragraph handles the
         # word-wrap and emits clickable link annotations for <a href> markup.
-        col_x = (PAGE_W_PX - _COVER_BODY_W_PX) / 2 * scale
-        col_w = _COVER_BODY_W_PX * scale
-        by = y + 90
-        style = ParagraphStyle(
-            "cover_body",
-            fontName=_HEADER_FONT,
-            fontSize=_COVER_BODY_FONT_PX * scale,
-            leading=_COVER_BODY_LINE_PX * scale,
-        )
-        for markup in to_paragraphs(cover.body):
-            if not markup:  # empty <p></p> -> blank-line gap
-                by += _COVER_BODY_LINE_PX
-                continue
-            para = Paragraph(markup, style)
-            _, h = para.wrap(col_w, y_pt(0))
-            para.drawOn(c, col_x, y_pt(by) - h)
-            # Advance past the paragraph, plus one blank line between paragraphs.
-            by += h / scale + _COVER_BODY_LINE_PX
-
-        # Copyright, just above the footer rule.
-        c.setFont(_HEADER_FONT, _COVER_COPYRIGHT_FONT_PX * scale)
-        c.drawCentredString(cx, y_pt(_CONTENT_BOTTOM_PX - 20), _COVER_COPYRIGHT)
+        # Question paper only: the answer key's cover carries no letter.
+        if cover.is_questions:
+            items, _ = _measure_rich(
+                cover.body, _COVER_BODY_STYLE, _COVER_BODY_W_PX, gap_px=_COVER_BODY_LINE_PX
+            )
+            _draw_rich(c, items, (PAGE_W_PX - _COVER_BODY_W_PX) / 2, y + 90, y_pt)
 
         self._draw_chrome(c, page_num, header_text, footer_label, scale, y_pt)
 
@@ -579,11 +641,13 @@ class LayoutEngine:
         )
 
     def _draw_instructions(self, c, additional_instructions, scale, y_pt) -> None:
-        c.setFont(_HEADER_FONT, _HEADER_FONT_PX * scale)
-        top = _CONTENT_TOP_PX + _HEADER_FONT_PX
-        for line in (additional_instructions.splitlines() or [additional_instructions]):
-            c.drawString(_LEFT_MARGIN_PX * scale, y_pt(top), line)
-            top += _HEADER_LINE_PX
+        """Draw the instructions rich text across the content width, at the top
+        of the first content page. ``_instructions_height_px`` reserved exactly
+        this much space during layout."""
+        items, _ = _measure_rich(
+            additional_instructions, _INSTRUCTIONS_STYLE, _TARGET_CONTENT_W_PX
+        )
+        _draw_rich(c, items, _LEFT_MARGIN_PX, _CONTENT_TOP_PX, y_pt)
 
     @staticmethod
     def _image_reader(raw: bytes) -> ImageReader:

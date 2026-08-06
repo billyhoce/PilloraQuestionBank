@@ -40,7 +40,7 @@ app/
 │                   #   (question selection), question_query.py (filter/eager-load),
 │                   #   question_serialization.py, question_parts.py, generation_config.py
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
-│                   #   (PDF packing + render), cover_body.py, sample_data.py (synthetic fixtures)
+│                   #   (PDF packing + render), rich_text.py, sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
@@ -101,7 +101,7 @@ production) — same code path, no special-casing.
 frontend/src/
 ├── api/            # client.js (fetch wrapper + friendlyMessage) and per-resource modules
 ├── components/     # shared UI — AppShell, NavBar, UserMenu, QuestionCard, QuestionDetailModal,
-│                   #   PartsEditor, TopicCombobox, InfoTooltip, ErrorBanner, CoverBodyEditor
+│                   #   PartsEditor, TopicCombobox, InfoTooltip, ErrorBanner, RichTextEditor
 │   ├── browse/     #   FilterBar, TopicMultiSelect
 │   └── generate/   #   autocreate panel, selection cart
 ├── context/        # AuthContext

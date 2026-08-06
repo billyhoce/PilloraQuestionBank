@@ -96,7 +96,7 @@ Every new feature or behavior change must, **in the same change**:
   `ARCHITECTURE.md` / `DATA_MODEL.md`. Fix any statement the change makes stale, not just add new
   prose.
 - **Visually verify PDF layout changes.** After changing `app/pdf/layout_engine.py`,
-  `app/pdf/cover_body.py`, or anything else that affects generated-PDF appearance (see
+  `app/pdf/rich_text.py`, or anything else that affects generated-PDF appearance (see
   [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md)), run
   `python scripts/generate_sample_pdf.py --png --out <scratch>/sample.pdf` (no DB/S3 needed) and
   inspect the emitted page PNGs before concluding. See

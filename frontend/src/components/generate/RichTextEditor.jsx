@@ -2,11 +2,12 @@ import { useEffect } from 'react'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 
-// Rich-text editor for the cover letter body. Deliberately limited to the
-// marks the PDF cover renderer supports (see app/pdf/cover_body.py): plain
-// paragraphs plus bold / italic / underline / link. Everything richer
-// (headings, lists, code, …) is disabled so the editor can't produce markup
-// the backend would strip.
+// Rich-text editor for every editable text stamped on a generated PDF — the
+// cover letter body, the page header, the additional instructions and the
+// footer. Deliberately limited to the marks the PDF renderer supports (see
+// app/pdf/rich_text.py): plain paragraphs plus bold / italic / underline /
+// link. Everything richer (headings, lists, code, …) is disabled so the editor
+// can't produce markup the backend would strip.
 const EXTENSIONS = [
   StarterKit.configure({
     heading: false,
@@ -43,15 +44,18 @@ function ToolbarButton({ label, title, active, onClick }) {
 
 // value: HTML string (or null while the defaults are still loading).
 // onChange: called with the editor's HTML on every edit.
-export default function CoverBodyEditor({ value, onChange }) {
+// label: accessible name — every instance on a page needs its own.
+// rows: how tall the editable area starts, in text lines.
+export default function RichTextEditor({ value, onChange, label, rows = 6 }) {
   const editor = useEditor({
     extensions: EXTENSIONS,
     content: value ?? '',
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
     editorProps: {
       attributes: {
-        class: 'cover-body-editor min-h-[7rem] max-h-64 overflow-y-auto px-2 py-1 text-xs focus:outline-none',
-        'aria-label': 'Cover letter / message',
+        class: 'rich-text-editor max-h-64 overflow-y-auto px-2 py-1 text-xs focus:outline-none',
+        style: `min-height: ${rows * 1.25}rem`,
+        'aria-label': label,
       },
     },
   })

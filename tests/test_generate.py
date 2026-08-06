@@ -552,6 +552,127 @@ def test_empty_header_draws_no_link(minimal_webp_bytes):
     assert _page_link_uris(pdf, 0) == []
 
 
+def _page_text(pdf: bytes, page_index: int) -> str:
+    return PdfReader(io.BytesIO(pdf)).pages[page_index].extract_text()
+
+
+def _cover_pdf(minimal_webp_bytes, is_questions: bool, **cover_kwargs) -> bytes:
+    """A one-question section whose cover is the only thing under test."""
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout([_make_block("1", [800])])
+    plan.cover = _cover(is_questions=is_questions)
+    for key, value in cover_kwargs.items():
+        setattr(plan.cover, key, value)
+    return engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+
+
+def test_cover_title_carries_the_variant_suffix(minimal_webp_bytes):
+    q_text = _page_text(_cover_pdf(minimal_webp_bytes, True), 0)
+    a_text = _page_text(_cover_pdf(minimal_webp_bytes, False), 0)
+    assert "Topical Worksheets - Question Paper" in q_text
+    assert "Topical Worksheets - Answer Key" in a_text
+
+
+def test_cover_title_suffix_stands_alone_when_untitled(minimal_webp_bytes):
+    # No cover titles configured -> the suffix is the whole heading, not " - …".
+    text = _page_text(_cover_pdf(minimal_webp_bytes, True, title=""), 0)
+    assert "Question Paper" in text
+    assert "- Question Paper" not in text
+
+
+def test_cover_subtitles_are_identical_across_variants(minimal_webp_bytes):
+    # The variant shows in the title only: the subtitles no longer carry a
+    # " – Questions" / " – Answers" suffix, so both covers read the same.
+    for is_questions in (True, False):
+        text = _page_text(_cover_pdf(minimal_webp_bytes, is_questions, body=""), 0)
+        assert "Secondary 3 Mathematics" in text
+        assert "2024 Prelim" in text
+        assert "– Questions" not in text
+        assert "– Answers" not in text
+
+
+def test_answer_cover_omits_the_letter_body(minimal_webp_bytes):
+    body = '<p>Dear students,</p><p>Visit <a href="https://example.com/x">my site</a>.</p>'
+    q_pdf = _cover_pdf(minimal_webp_bytes, True, body=body)
+    a_pdf = _cover_pdf(minimal_webp_bytes, False, body=body)
+    assert "Dear students," in _page_text(q_pdf, 0)
+    assert "https://example.com/x" in _page_link_uris(q_pdf, 0)
+    assert "Dear students," not in _page_text(a_pdf, 0)
+    assert "https://example.com/x" not in _page_link_uris(a_pdf, 0)
+
+
+def test_cover_has_no_copyright_line(minimal_webp_bytes):
+    assert "personal use" not in _page_text(_cover_pdf(minimal_webp_bytes, True), 0)
+
+
+# ---------------------------------------------------------------------------
+# Layout engine — rich-text header / instructions / footer
+# ---------------------------------------------------------------------------
+
+
+def _rich_chrome_pdf(minimal_webp_bytes, header="", footer="", instructions="") -> bytes:
+    from app.pdf.layout_engine import PageChrome
+
+    engine = LayoutEngine(fit_width=True)
+    plan = engine.compute_layout(
+        [_make_block("1", [800])],
+        additional_instructions=instructions,
+        chrome=PageChrome(header_text=header, footer_label=footer),
+    )
+    return engine.render(plan, fetch_bytes=lambda k: minimal_webp_bytes)
+
+
+def test_footer_rich_text_link_is_clickable_on_every_page(minimal_webp_bytes):
+    pdf = _rich_chrome_pdf(
+        minimal_webp_bytes,
+        footer='<p>Pillora — <a href="https://www.pillora.com.sg">site</a></p>',
+    )
+    for page_index in range(_page_count(pdf)):
+        assert "https://www.pillora.com.sg" in _page_link_uris(pdf, page_index)
+    assert "Pillora" in _page_text(pdf, 0)
+
+
+def test_instructions_rich_text_link_is_clickable(minimal_webp_bytes):
+    pdf = _rich_chrome_pdf(
+        minimal_webp_bytes,
+        instructions='<p>Answer <b>all</b> questions: <a href="https://example.com/help">help</a></p>',
+    )
+    assert "https://example.com/help" in _page_link_uris(pdf, 0)
+
+
+def test_cleared_rich_text_prints_nothing(minimal_webp_bytes):
+    # The editor stores "<p></p>" for a field the admin cleared; that must render
+    # exactly like an empty field, not as a blank line reserving space.
+    from app.pdf.layout_engine import _instructions_height_px
+
+    assert _instructions_height_px("<p></p>") == 0
+    cleared = _rich_chrome_pdf(
+        minimal_webp_bytes, header="<p></p>", footer="<p></p>", instructions="<p></p>"
+    )
+    empty = _rich_chrome_pdf(minimal_webp_bytes)
+    assert _page_text(cleared, 0) == _page_text(empty, 0)
+    assert _page_link_uris(cleared, 0) == []
+
+
+def test_instructions_band_is_measured_from_the_wrapped_text():
+    # The reserved band comes from the wrapped paragraph, so instructions that
+    # wrap to several lines push the first question further down.
+    from app.pdf.layout_engine import _instructions_height_px
+
+    one_line = _instructions_height_px("<p>Answer all questions.</p>")
+    wrapped = _instructions_height_px("<p>" + "Answer all questions. " * 20 + "</p>")
+    assert wrapped > one_line > 0
+
+
+def test_page_header_never_eats_into_the_content_band(minimal_webp_bytes):
+    # However many lines the header has, it stacks upward from the rule — page
+    # count is unchanged.
+    engine = LayoutEngine(fit_width=True)
+    tall = _rich_chrome_pdf(minimal_webp_bytes, header="<p>one<br>two<br>three<br>four</p>")
+    plain = _rich_chrome_pdf(minimal_webp_bytes)
+    assert _page_count(tall) == _page_count(plain)
+
+
 def test_question_variant_pads_between_blocks():
     from app.pdf.layout_engine import _QUESTION_GAP_PX
 

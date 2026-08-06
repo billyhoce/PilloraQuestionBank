@@ -110,7 +110,12 @@ GenerationConfig: {
   cover_body (text),           -- rich-text HTML cover letter stamped on non-admin PDFs
   header_text (text),          -- branding preset: right-aligned on the top rule of every page
   additional_instructions (text), -- instructions preset below the top rule, question paper page 1
-  footer_text                  -- footer preset, printed flush-left on every page
+  footer_text (text)           -- footer preset, printed flush-left on every page
+
+  -- All four text fields hold the same rich-text HTML subset (paragraphs plus
+  -- bold/italic/underline/link), sanitized at render time by app/pdf/rich_text.py.
+  -- Plain text stored before they became rich text still renders, and migration
+  -- a1b2c3d4e5f7 converts the seeded values to HTML.
 }
 ```
 

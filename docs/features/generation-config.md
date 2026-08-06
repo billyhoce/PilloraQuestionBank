@@ -25,8 +25,9 @@ GET    /api/generation-config    -- any authenticated user. Returns { titles: [{
                                     Nothing here is secret (every value is printed in the PDFs
                                     users generate); writes are what's restricted.
 PUT    /api/generation-config    -- admin. Replaces the five preset fields; returns the GET shape.
-                                    cover_body is stored as-is and sanitized at render time
-                                    (app/pdf/cover_body.py), same as the request path.
+                                    cover_body / header_text / additional_instructions /
+                                    footer_text are rich-text HTML, stored as-is and sanitized at
+                                    render time (app/pdf/rich_text.py), same as the request path.
 GET    /api/cover-titles         -- any authenticated user. { data: [{id, name}] } in id order.
 POST   /api/cover-titles         -- admin. Body { name }. Duplicate -> 409. Returns 201.
 PUT    /api/cover-titles/:id     -- admin. Body { name }. Duplicate -> 409, unknown id -> 404.
@@ -45,8 +46,10 @@ own copy of the defaults.
   generating a paper must pick from this list (the first entry is the dropdown default); admins can
   also type a custom title during generation.
 - **Generation Presets** form — **subtitle 1 / subtitle 2 placeholders** (the grey hint text in the
-  Generate form), the **cover body** (same `CoverBodyEditor` as the Generate page), the **header**
-  (branding drawn right-aligned on the top rule of every page — multi-line, with any web address
-  auto-linked), the **additional instructions** (below the top rule on the question paper), and the
-  **footer**. Saved via `PUT /api/generation-config` (`api.generationConfig.update`) with an inline
+  Generate form) as plain inputs, then four **rich-text editors** (the same `RichTextEditor` the
+  Generate page uses): the **cover body**, the **header** (branding drawn right-aligned on the top
+  rule of every page — multi-line, stacking upward from the rule), the **additional instructions**
+  (below the top rule on the question paper), and the **footer** (bottom-left of every page). All
+  four support **bold / italic / underline / link**, and links print blue and stay clickable in the
+  PDF. Saved via `PUT /api/generation-config` (`api.generationConfig.update`) with an inline
   success/error notice.

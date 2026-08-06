@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import FilterBar from '../components/browse/FilterBar'
 import QuestionCard from '../components/browse/QuestionCard'
 import QuestionDetailModal from '../components/browse/QuestionDetailModal'
-import CoverBodyEditor from '../components/generate/CoverBodyEditor'
+import RichTextEditor from '../components/generate/RichTextEditor'
 import InfoTooltip from '../components/InfoTooltip'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
@@ -98,8 +98,10 @@ export default function GeneratePage() {
   // Non-admins only control the title (dropdown of configured titles) and the
   // two subtitles — the server forces the config body/header/footer and always
   // adds a cover.
-  // Admins control everything; coverBody holds rich-text HTML (paragraphs plus
-  // bold/italic/underline/link), edited via CoverBodyEditor.
+  // Admins control everything; the cover body, header, instructions and footer
+  // all hold rich-text HTML (paragraphs plus bold/italic/underline/link), edited
+  // via RichTextEditor. Clearing one leaves "<p></p>", which the renderer treats
+  // as blank — so an admin can still choose to print no header.
   const [genConfig, setGenConfig] = useState(null)
   const [includeCover, setIncludeCover] = useState(true) // admin-only toggle
   const [coverTitle, setCoverTitle] = useState(null)
@@ -661,7 +663,11 @@ export default function GeneratePage() {
                       className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
                     />
                     {isAdmin ? (
-                      <CoverBodyEditor value={coverBody} onChange={setCoverBody} />
+                      <RichTextEditor
+                        label="Cover letter / message"
+                        value={coverBody}
+                        onChange={setCoverBody}
+                      />
                     ) : null}
                     <p className="text-[11px] text-gray-400">
                       Marks box on the cover shows the paper total automatically.
@@ -673,44 +679,32 @@ export default function GeneratePage() {
               {isAdmin ? (
                 <>
                   <div className="space-y-1 pt-1">
-                    <label className="text-xs text-gray-600" htmlFor="additional-instructions">
-                      Additional instructions (optional)
-                    </label>
-                    <textarea
-                      id="additional-instructions"
+                    <span className="text-xs text-gray-600">Additional instructions (optional)</span>
+                    <RichTextEditor
+                      label="Additional instructions"
                       rows={2}
-                      value={instructionsText ?? ''}
-                      onChange={e => setInstructionsText(e.target.value)}
-                      placeholder="e.g. Answer all questions. Time: 2 hours."
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                      value={instructionsText}
+                      onChange={setInstructionsText}
                     />
                   </div>
 
                   <div className="space-y-1 pt-1">
-                    <label className="text-xs text-gray-600" htmlFor="header-text">
-                      Header (optional)
-                    </label>
-                    <textarea
-                      id="header-text"
+                    <span className="text-xs text-gray-600">Header (optional)</span>
+                    <RichTextEditor
+                      label="Header"
                       rows={2}
-                      value={headerText ?? ''}
-                      onChange={e => setHeaderText(e.target.value)}
-                      placeholder="e.g. Visit www.pillora.com.sg for more learning resources."
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-y"
+                      value={headerText}
+                      onChange={setHeaderText}
                     />
                   </div>
 
                   <div className="space-y-1 pt-1">
-                    <label className="text-xs text-gray-600" htmlFor="footer-text">
-                      Footer (optional)
-                    </label>
-                    <input
-                      id="footer-text"
-                      type="text"
-                      value={footerText ?? ''}
-                      onChange={e => setFooterText(e.target.value)}
-                      placeholder="e.g. 2024 Prelim Questions"
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
+                    <span className="text-xs text-gray-600">Footer (optional)</span>
+                    <RichTextEditor
+                      label="Footer"
+                      rows={2}
+                      value={footerText}
+                      onChange={setFooterText}
                     />
                   </div>
                 </>

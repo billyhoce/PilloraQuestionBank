@@ -10,7 +10,13 @@ class CoverTitleResponse(BaseModel):
 
 
 class GenerationConfigUpdate(BaseModel):
-    """Admin update of the generation presets (all six scalar fields)."""
+    """Admin update of the generation presets (all six scalar fields).
+
+    ``cover_body``, ``header_text``, ``additional_instructions`` and
+    ``footer_text`` are rich text — the paragraph/bold/italic/underline/link HTML
+    the editor produces, sanitized to the supported subset by
+    ``app/pdf/rich_text.py`` at render time. Plain text is still accepted and
+    treated as the legacy newline-separated format."""
 
     subtitle1_placeholder: str
     subtitle2_placeholder: str

@@ -1,8 +1,9 @@
-"""Tests for the cover-body HTML sanitizer/converter (app/pdf/cover_body.py)."""
+"""Tests for the rich-text HTML sanitizer/converter (app/pdf/rich_text.py) —
+shared by the cover body, the page header, the instructions and the footer."""
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import Paragraph
 
-from app.pdf.cover_body import to_paragraphs
+from app.pdf.rich_text import is_blank, to_paragraphs
 
 
 def test_paragraph_split():
@@ -60,6 +61,32 @@ def test_plain_text_fallback_blocks_and_line_breaks():
 
 def test_plain_text_fallback_escapes():
     assert to_paragraphs("a & b < c") == ["a &amp; b &lt; c"]
+
+
+def test_plain_text_web_addresses_are_auto_linked():
+    # Values stored before these fields became rich text (a plain-text page
+    # header, say) keep their clickable links.
+    [para] = to_paragraphs("Visit www.pillora.com.sg for resources.")
+    assert '<a href="https://www.pillora.com.sg" color="blue"><u>www.pillora.com.sg</u></a>' in para
+    assert para.endswith(" for resources.")
+
+
+def test_plain_text_auto_link_keeps_trailing_punctuation_out_of_the_href():
+    [para] = to_paragraphs("Go to pillora.com.sg.")
+    assert 'href="https://pillora.com.sg"' in para
+    assert para.endswith("</a>.")
+
+
+def test_plain_text_auto_link_ignores_non_addresses():
+    assert to_paragraphs("e.g. answer all questions") == ["e.g. answer all questions"]
+
+
+def test_is_blank():
+    assert is_blank("")
+    assert is_blank("<p></p>")        # what the editor stores for "cleared"
+    assert is_blank("   \n  ")
+    assert not is_blank("<p>text</p>")
+    assert not is_blank("text")
 
 
 def test_output_is_valid_reportlab_markup():

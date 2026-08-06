@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import SimpleTab from '../../features/reference/tabs/SimpleTab'
-import CoverBodyEditor from '../../components/generate/CoverBodyEditor'
+import RichTextEditor from '../../components/generate/RichTextEditor'
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
 
 // Admin page for the generation presets applied to every non-admin generation:
 // the cover-title list users pick from, the subtitle placeholders shown in the
 // Generate form, and the cover body / header / additional instructions / footer
-// stamped on their PDFs.
+// stamped on their PDFs. Those last four are rich text (bold/italic/underline
+// and links, which print blue and clickable) — see app/pdf/rich_text.py.
 export default function GenerationConfigPage() {
   const [titles, setTitles] = useState([])
   const [form, setForm] = useState(null) // null until the config loads
@@ -123,58 +124,50 @@ export default function GenerationConfigPage() {
 
           <div className="space-y-1">
             <span className="text-sm text-gray-700">Cover body</span>
-            <CoverBodyEditor
+            <RichTextEditor
+              label="Cover body"
               value={form.cover_body}
               onChange={value => setField('cover_body', value)}
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-gray-700" htmlFor="config-header-text">
-              Header
-            </label>
+            <span className="text-sm text-gray-700">Header</span>
             <p className="text-xs text-gray-500">
               Branding shown right-aligned on the top rule of every page. Each line stacks
-              upward so the last line sits on the rule; any web address is auto-linked.
+              upward so the last line sits on the rule; links print blue and stay clickable.
             </p>
-            <textarea
-              id="config-header-text"
+            <RichTextEditor
+              label="Header"
               rows={2}
               value={form.header_text}
-              onChange={e => setField('header_text', e.target.value)}
-              placeholder="e.g. Visit www.pillora.com.sg for more learning resources."
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm resize-y"
+              onChange={value => setField('header_text', value)}
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-gray-700" htmlFor="config-additional-instructions">
-              Additional instructions
-            </label>
+            <span className="text-sm text-gray-700">Additional instructions</span>
             <p className="text-xs text-gray-500">
               Shown below the top rule on the first page of the question paper.
             </p>
-            <textarea
-              id="config-additional-instructions"
+            <RichTextEditor
+              label="Additional instructions"
               rows={2}
               value={form.additional_instructions}
-              onChange={e => setField('additional_instructions', e.target.value)}
-              placeholder="e.g. Answer all questions. Time: 2 hours."
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm resize-y"
+              onChange={value => setField('additional_instructions', value)}
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-gray-700" htmlFor="config-footer-text">
-              Footer
-            </label>
-            <input
-              id="config-footer-text"
-              type="text"
+            <span className="text-sm text-gray-700">Footer</span>
+            <p className="text-xs text-gray-500">
+              Shown at the bottom of every page, left of the page number.
+            </p>
+            <RichTextEditor
+              label="Footer"
+              rows={2}
               value={form.footer_text}
-              onChange={e => setField('footer_text', e.target.value)}
-              placeholder="Shown at the bottom of every page"
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+              onChange={value => setField('footer_text', value)}
             />
           </div>
 

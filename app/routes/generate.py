@@ -125,7 +125,12 @@ def _cover_for(
     total_marks: int,
     is_questions: bool,
 ) -> CoverSpec | None:
-    """Build the cover spec for a section, or ``None`` when covers are disabled."""
+    """Build the cover spec for a section, or ``None`` when covers are disabled.
+
+    Both sections get the same title, subtitles and body; the engine is what
+    appends the per-variant title suffix and drops the body from the answer
+    cover, so the two covers can't drift apart caller by caller.
+    """
     if not include_cover:
         return None
     return CoverSpec(

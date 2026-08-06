@@ -33,11 +33,14 @@ from app.pdf.layout_engine import CoverSpec, LayoutEngine, PageChrome, render_co
 from app.pdf.sample_data import build_sample_blocks, sample_marks
 from pdf_to_images import pdf_to_pngs
 
-_DEFAULT_INSTRUCTIONS = "Answer all questions.\nShow your working clearly."
-_DEFAULT_PAGE_HEADER = (
-    "Visit www.pillora.com.sg for more learning resources.\n"
-    "Join @PilloraSecondary on Telegram to learn together!"
+_DEFAULT_INSTRUCTIONS = (
+    "<p>Answer <b>all</b> questions.<br>Show your working clearly.</p>"
 )
+_DEFAULT_PAGE_HEADER = (
+    '<p>Visit <a href="https://www.pillora.com.sg">www.pillora.com.sg</a> for more '
+    "learning resources.<br>Join @PilloraSecondary on Telegram to learn together!</p>"
+)
+_DEFAULT_FOOTER = '<p>Pillora Learning — <a href="https://www.pillora.com.sg">pillora.com.sg</a></p>'
 _DEFAULT_BODY = (
     "<p>Dear student,</p>"
     "<p>This is a <b>sample</b> cover letter with <i>rich-text</i> markup and a "
@@ -64,14 +67,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--page-header",
         default=_DEFAULT_PAGE_HEADER,
-        help="branding header, right-aligned on the top rule of every page",
+        help="branding header (rich-text HTML), right-aligned on the top rule of every page",
     )
     parser.add_argument(
         "--instructions",
         default=_DEFAULT_INSTRUCTIONS,
-        help="additional instructions below the top rule (question paper only)",
+        help="additional instructions (rich-text HTML) below the top rule (question paper only)",
     )
-    parser.add_argument("--footer", default="Pillora Learning", help="footer label on every page")
+    parser.add_argument(
+        "--footer",
+        default=_DEFAULT_FOOTER,
+        help="footer text (rich-text HTML) on every page",
+    )
     parser.add_argument(
         "--cover",
         action=argparse.BooleanOptionalAction,
