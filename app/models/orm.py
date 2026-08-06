@@ -117,7 +117,13 @@ class GenerationConfig(Base):
     footer stored here; the subtitle placeholders are the grey hint text shown
     in the Generate form. ``header_text`` is the branding drawn right-aligned on
     the top rule of every page; ``additional_instructions`` is the exam
-    instructions drawn below the top rule on the first page."""
+    instructions drawn below the top rule on the first page.
+
+    Those four text fields are **rich text** — the paragraph/bold/italic/
+    underline/link HTML subset the editor produces and ``app/pdf/rich_text.py``
+    sanitizes — so all of them are ``Text``, not short strings. Plain text stored
+    before they became rich text still renders (and is converted to HTML by the
+    a1b2c3d4e5f7 migration)."""
 
     __tablename__ = "generation_config"
     __table_args__ = (CheckConstraint("id = 1", name="ck_generation_config_singleton"),)
@@ -128,7 +134,7 @@ class GenerationConfig(Base):
     cover_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
     header_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     additional_instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    footer_text: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    footer_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class User(Base):

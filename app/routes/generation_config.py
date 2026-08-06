@@ -53,8 +53,9 @@ def update_generation_config(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    """Replace the generation presets. ``cover_body`` is stored as-is and
-    sanitized at render time (app/pdf/cover_body.py), same as the request path."""
+    """Replace the generation presets. The four rich-text fields (cover body,
+    header, additional instructions, footer) are stored as-is and sanitized at
+    render time (app/pdf/rich_text.py), same as the request path."""
     cfg = get_or_create_config(db)
     cfg.subtitle1_placeholder = payload.subtitle1_placeholder
     cfg.subtitle2_placeholder = payload.subtitle2_placeholder

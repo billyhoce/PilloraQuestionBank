@@ -7,15 +7,15 @@ body {
   background-color: #f9fafb;
 }
 
-/* Cover-body rich text editor (TipTap) — mirror how the PDF cover renders:
+/* Rich text editor (TipTap) — mirror how the PDF renders these fields:
    a blank line between paragraphs, blue underlined links. */
-.cover-body-editor p {
+.rich-text-editor p {
   margin: 0 0 0.75rem;
 }
-.cover-body-editor p:last-child {
+.rich-text-editor p:last-child {
   margin-bottom: 0;
 }
-.cover-body-editor a {
+.rich-text-editor a {
   color: #2563eb;
   text-decoration: underline;
 }

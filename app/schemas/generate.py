@@ -50,13 +50,17 @@ class GeneratePaperRequest(BaseModel):
 
     The cover fields drive an optional branded cover page (one per section). The
     marks box on the cover shows the paper total, computed server-side from the
-    selected questions. ``cover_subtitle1`` is the topic/subject line; the engine
-    appends " – Questions" / " – Answers" per variant. ``cover_body`` is
-    rich-text HTML (or legacy plain text), sanitized to the supported subset by
-    ``app/pdf/cover_body.py`` before rendering. ``footer_text`` is drawn
-    verbatim under the footer rule of every page, and ``header_text`` is the
-    branding drawn right-aligned on the top rule of every page (multi-line: each
-    line stacks upward so the last line sits on the rule).
+    selected questions. Both sections' covers show the same title and subtitles;
+    the engine appends " - Question Paper" / " - Answer Key" to the title per
+    variant, and draws ``cover_body`` on the question cover only.
+
+    ``cover_body``, ``header_text``, ``additional_instructions`` and
+    ``footer_text`` are all rich-text HTML (or legacy plain text), sanitized to
+    the supported subset by ``app/pdf/rich_text.py`` before rendering, so each
+    can carry bold/italic/underline and blue clickable links. ``footer_text`` is
+    drawn under the footer rule of every page, and ``header_text`` is the
+    branding drawn right-aligned on the top rule of every page (multi-line: the
+    lines stack upward so the last one sits on the rule).
 
     Only admins control all of these: for non-admin users the server forces
     ``include_cover=True`` and replaces

@@ -40,7 +40,7 @@ suspect page).
 
 ## The self-verification loop
 
-1. Change layout code (`app/pdf/layout_engine.py`, `app/pdf/cover_body.py`, …).
+1. Change layout code (`app/pdf/layout_engine.py`, `app/pdf/rich_text.py`, …).
 2. `python scripts/generate_sample_pdf.py --png --out <scratch>/sample.pdf`
 3. Inspect the PNGs: cover (title/subtitles/marks box/rich-text body), page chrome, question
    numbering, credits, packing, section boundaries.

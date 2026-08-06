@@ -16,15 +16,16 @@ DEFAULT_COVER_TITLE = "Topical Worksheets"
 DEFAULT_SUBTITLE1_PLACEHOLDER = "e.g. Secondary 3 Mathematics"
 DEFAULT_SUBTITLE2_PLACEHOLDER = "e.g. 2024 Prelim"
 
-# Branding drawn right-aligned on the top rule of every generated page. Newlines
-# stack upward so the last line sits on the rule; the URL token is auto-linked.
+# Branding drawn right-aligned on the top rule of every generated page. Rich
+# text like the other presets: lines stack upward so the last sits on the rule.
 DEFAULT_HEADER_TEXT = (
-    "Visit www.pillora.com.sg for more learning resources.\n"
-    "Join @PilloraSecondary on Telegram to learn together!"
+    '<p>Visit <a href="https://www.pillora.com.sg">www.pillora.com.sg</a> for more learning '
+    "resources.<br>Join @PilloraSecondary on Telegram to learn together!</p>"
 )
 
-# Rich-text HTML limited to the marks the cover renderer supports
-# (<p>/<br>/<b>/<i>/<u>/<a href>; see app/pdf/cover_body.py).
+# Rich-text HTML limited to the marks the PDF renderer supports
+# (<p>/<br>/<b>/<i>/<u>/<a href>; see app/pdf/rich_text.py). The same subset
+# applies to the header, additional instructions and footer.
 DEFAULT_COVER_BODY = (
     "<p>Dear students,</p>"
     "<p>Did you know that research shows students learn best when they focus on topical practice "

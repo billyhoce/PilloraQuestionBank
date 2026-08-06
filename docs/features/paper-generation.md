@@ -21,6 +21,8 @@ POST   /api/generate/paper       -- render a PDF from a manual selection.
                                     "question"|"answer"|"combined", additional_instructions,
                                     header_text, footer_text, include_cover, cover_title,
                                     cover_subtitle1, cover_subtitle2, cover_body }.
+                                    additional_instructions, header_text, footer_text and
+                                    cover_body are rich-text HTML (app/pdf/rich_text.py).
                                     header_text is nullable: omit it to get the config preset.
                                     Returns application/pdf. Empty question_ids -> 422.
 ```
@@ -48,7 +50,8 @@ on the PDF and a positional mix-up would swap the header with the footer silentl
   config presets.
 - `header_text` is the one nullable field: **admins** may override it per generation, but omitting it
   (`null`) falls back to the config preset, so a client that never loaded the config still gets the
-  branding. An explicit `""` is an admin opting out of the header.
+  branding. An explicit `""` — or the `"<p></p>"` the editor stores for a cleared field — is an admin
+  opting out of the header.
 - `cover_title` must be one of the configured cover titles: an unknown title → `400` (a hand-crafted
   POST can't bypass the dropdown); an empty/omitted title falls back to the **first** configured
   title; with no titles configured the cover is untitled.
@@ -145,17 +148,18 @@ config fetched once from `GET /api/generation-config`:
   `question_ids, variant, cover_title, cover_subtitle1, cover_subtitle2`.
 - **Admins** keep the full controls: an **"Include cover page"** checkbox (on by default), a title
   `<select>` plus a **"Custom…"** option revealing a free-text input, the subtitle inputs, the
-  **letter body** in a rich-text editor (`CoverBodyEditor`, TipTap v3, prefilled from the config and
-  editable per-generation without changing the config), an optional **additional instructions**
-  `<textarea>` printed on the first page of the question PDF, an optional multi-line **header**
-  `<textarea>`, and a **footer** input. The body editor is deliberately limited to what the PDF cover
+  **letter body**, an optional **additional instructions** block printed on the first page of the
+  question PDF, an optional multi-line **header**, and a **footer** — the last four all in the same
+  rich-text editor (`RichTextEditor`, TipTap v3, prefilled from the config and editable
+  per-generation without changing the config). The editor is deliberately limited to what the PDF
   renderer supports — paragraphs plus **bold / italic / underline / link** (a small toolbar; link
-  URLs via prompt); headings and lists are disabled. `cover_body` is sent as HTML and sanitized
+  URLs via prompt); headings and lists are disabled. All four are sent as HTML and sanitized
   server-side.
 - If the config fetch fails, the fields are omitted from the request so the server-side presets (and
-  the first-title fallback) still apply. Cover fields are sent on **every** call (the answer PDF's
-  cover reads "Answers"). The cover's marks box is filled server-side from the selected questions'
-  total.
+  the first-title fallback) still apply. Cover fields are sent on **every** call: both covers show
+  the same title and subtitles, and the renderer appends `" - Question Paper"` / `" - Answer Key"` to
+  the title and draws the letter body on the question cover only. The cover's marks box is filled
+  server-side from the selected questions' total.
 
 A **"Download as"** radio chooses the output mode, defaulting to **1 combined PDF**:
 

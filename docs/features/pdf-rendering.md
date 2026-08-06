@@ -1,8 +1,8 @@
 # PDF Rendering
 
 **Scope:** The layout engine that turns a resolved question selection into PDF bytes — packing, page
-chrome, the cover page, and the rich-text cover body. **Read this before changing
-`app/pdf/layout_engine.py` or `app/pdf/cover_body.py`**, and verify changes visually per
+chrome, the cover page, and the rich text that fills them. **Read this before changing
+`app/pdf/layout_engine.py` or `app/pdf/rich_text.py`**, and verify changes visually per
 [PDF_GENERATION_TESTING.md](../PDF_GENERATION_TESTING.md).
 
 Who calls it and with what: [paper-generation.md](./paper-generation.md). Library: **ReportLab**
@@ -126,42 +126,64 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
   the mark on the line for any future padded asset. The asset is **optional** — if absent or
   unreadable the page renders without it, no error.
 - **Header** (`LayoutPlan.header_text`, the branding) drawn **right-aligned on the header rule** by
-  `_draw_page_header`. Lines stack **upward** so the *last* line sits on the rule; any web-address
-  token (`_URL_TOKEN`) is auto-linked via `canvas.linkURL` to its normalized `https://…` target. An
-  empty header draws nothing. The route sets it to the resolved `header_text` — an admin's request
-  field when they sent one, otherwise the generation-config preset, which is also what every
-  non-admin gets.
-- **Footer label** (`LayoutPlan.footer_label`) **flush-left** under the footer rule, plus **`Page
-  {n}`** bottom-right. The footer label is the resolved `footer_text` **verbatim**. The same text
-  appears on every section — identical footers on the question and answer sections are intentional
-  (the old subtitle2-derived `"… Questions"` / `"… Answers"` labels are gone).
+  `_draw_page_header`, as [rich text](#rich-text). Its column runs from just right of the logo to the
+  right margin, so a long line wraps rather than colliding with the logo, and the block is
+  **bottom-aligned to the rule** — lines stack *upward* and the last one sits on the rule however many
+  there are, without ever eating into the content band. A blank header draws nothing. The route sets
+  it to the resolved `header_text` — an admin's request field when they sent one, otherwise the
+  generation-config preset, which is also what every non-admin gets.
+- **Footer** (`LayoutPlan.footer_label`) **flush-left** under the footer rule as rich text, in a
+  column that stops short of the **`Page {n}`** drawn bottom-right. Both sit on one baseline
+  (`_FOOTER_BASELINE_PX`): a Paragraph's first baseline is one `fontSize` below its top edge, which
+  is what lines the block up with the bare page-number string. The same footer appears on every
+  section — identical footers on the question and answer sections are intentional (the old
+  subtitle2-derived `"… Questions"` / `"… Answers"` labels are gone).
 
 Page numbers **restart at 1 for each section** (each `render_onto` call), so in the `combined` PDF the
-question and answer papers number independently. `additional_instructions` render on the first content
-page, below the header rule (`_draw_instructions`).
+question and answer papers number independently. `additional_instructions` render as rich text on the
+first content page, below the header rule (`_draw_instructions`); the band reserved for them during
+packing is measured from the *wrapped* text (`_instructions_height_px`), so a paragraph that wraps to
+several lines pushes the first question down by exactly as much as it occupies.
 
 ## Cover page
 
 When `LayoutPlan.cover` is set (a `CoverSpec`), `render_onto` draws a branded cover as the section's
 **first page**, then content starts on page 2 (`_draw_cover` → `_draw_marks_box`). The cover shows:
-the logo centered near the top; an editable **title**; **subtitle 1** with `" – Questions"` /
-`" – Answers"` appended per variant (`is_questions`); an editable **subtitle 2**; the editable
-**letter body**; a **marks box top-right** (`______ / {total}`); a copyright line; and the standard
-chrome. A cover-only section (no blocks) stays a single page.
+the logo centered near the top; the **title** with the variant suffix appended (`_cover_title`:
+`"… - Question Paper"` / `"… - Answer Key"`, or the bare suffix when no title is configured); an
+editable **subtitle 1** and **subtitle 2**, both drawn verbatim; the editable **letter body**; a
+**marks box top-right** (`______ / {total}`); and the standard chrome. A cover-only section (no
+blocks) stays a single page.
+
+**The two covers are deliberately near-identical.** Same subtitles, same title bar the suffix — the
+variant no longer shows up in subtitle 1 — and the **letter body is drawn on the question cover
+only** (`is_questions`), so the answer key opens on a bare heading. Both rules live in `_draw_cover`
+rather than in the callers, so the two covers can't drift apart one caller at a time.
 
 The route computes `total_marks = sum(q.total_marks or 0 …)`, resolves the effective cover values by
 role (`_resolve_generation_options`), builds a `CoverSpec` per section (question section
 `is_questions=True`, answer section `False`), and includes it unless covers are disabled — admins
 only; non-admins always get one. In `combined`, a cover is prepended to **each** section.
 
-### Rich-text cover body (`app/pdf/cover_body.py`)
+## Rich text (`app/pdf/rich_text.py`)
 
-The letter body is HTML limited to paragraphs plus bold / italic / underline / link. `to_paragraphs`
-whitelists exactly that subset — unknown tags are stripped (text kept), all text is escaped, `href`s
-are restricted to `http(s)` / `mailto` (a bare `www.` gets `https://` prefixed), and the emitted
-markup is always balanced. The result feeds Platypus `Paragraph` objects, which handle word-wrap and
-emit **clickable link annotations** (links render blue + underlined). Plain text with no tags is
-accepted as the legacy newline-separated format, so older API clients keep working.
+The **cover body, page header, additional instructions and footer** are all rich text: HTML limited
+to paragraphs plus bold / italic / underline / link, authored in one shared editor
+(`RichTextEditor`). `to_paragraphs` whitelists exactly that subset — unknown tags are stripped (text
+kept), all text is escaped, `href`s are restricted to `http(s)` / `mailto` (a bare `www.` gets
+`https://` prefixed), and the emitted markup is always balanced. The result feeds Platypus
+`Paragraph` objects, which handle word-wrap and emit **clickable link annotations** (links render
+blue + underlined).
+
+Plain text with no tags is accepted as the legacy newline-separated format, so older API clients —
+and values stored before these fields became rich text — keep working; **bare web addresses in plain
+text are auto-linked**, which is how the plain-text page header used to get its link. `is_blank`
+answers "would this draw anything?": the editor stores `"<p></p>"` for a cleared field, so a
+falsiness check would mistake *cleared* for *a blank line* and reserve space for it.
+
+In the engine, `_measure_rich` / `_draw_rich` wrap and place these paragraphs from 300-DPI px
+coordinates (`PT_PER_PX`), and the four fields differ only in their `ParagraphStyle` and column.
+Measuring and drawing go through the same call, so what layout reserves is what render occupies.
 
 ## Verifying changes
 

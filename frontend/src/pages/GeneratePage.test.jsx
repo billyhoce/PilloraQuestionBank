@@ -35,10 +35,12 @@ vi.mock('../context/AuthContext', () => ({ useAuth: () => authState }))
 
 // The TipTap editor doesn't run reliably under jsdom; these tests target the
 // page's request behavior, so stand in a plain textarea with the same contract.
-vi.mock('../components/generate/CoverBodyEditor', () => ({
-  default: ({ value, onChange }) => (
+// The page renders four of these (body, instructions, header, footer), so the
+// stand-in must carry each one's label.
+vi.mock('../components/generate/RichTextEditor', () => ({
+  default: ({ value, onChange, label }) => (
     <textarea
-      aria-label="Cover letter / message"
+      aria-label={label}
       value={value ?? ''}
       onChange={e => onChange(e.target.value)}
     />

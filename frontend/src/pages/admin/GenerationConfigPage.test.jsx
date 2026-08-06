@@ -18,10 +18,10 @@ vi.mock('../../api/client', () => ({
 }))
 
 // Same stand-in as the GeneratePage tests — TipTap doesn't run under jsdom.
-vi.mock('../../components/generate/CoverBodyEditor', () => ({
-  default: ({ value, onChange }) => (
+vi.mock('../../components/generate/RichTextEditor', () => ({
+  default: ({ value, onChange, label }) => (
     <textarea
-      aria-label="Cover letter / message"
+      aria-label={label}
       value={value ?? ''}
       onChange={e => onChange(e.target.value)}
     />
