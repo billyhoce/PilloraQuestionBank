@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
 
+from app.schemas.reference import SchoolLevelResponse
+
 _PASSWORD_RULES = [
     (r".{8,}", "at least 8 characters"),
     (r"[A-Z]", "at least one uppercase letter"),
@@ -46,6 +48,9 @@ class UserResponse(BaseModel):
     first_name: str
     last_name: str
     role: str
+    # Which premium groups this account holds, so the SPA can mark owned plans on
+    # the Subscribe page and decide whether to show the upsell.
+    premium_school_levels: list[SchoolLevelResponse] = []
 
     # Excluded from the response; only the two computed flags below are exposed,
     # so the client can tell how the account signs in without seeing the hash.

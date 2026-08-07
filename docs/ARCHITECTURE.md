@@ -38,7 +38,8 @@ app/
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, google_oauth.py, ingest.py, generate.py
 │                   #   (question selection), question_query.py (filter/eager-load),
-│                   #   question_serialization.py, question_parts.py, generation_config.py
+│                   #   question_serialization.py, question_parts.py, generation_config.py,
+│                   #   premium.py (who may open which premium paper)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), cover_body.py, sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
@@ -136,11 +137,11 @@ exports `filtersToListArgs`, which Generate's "Select All" reuses for its one-of
 | `/` or `/browse` | Browse / Filter questions | Authenticated | [browse](./features/browse.md) |
 | `/questions/:id` | Question detail (all pages) | Authenticated | [browse](./features/browse.md) |
 | `/generate` | Paper generation | Authenticated | [paper-generation](./features/paper-generation.md) |
-| `/subscribe` | Subscribe / Go Premium (payment stub) | Authenticated | [users-and-premium](./features/users-and-premium.md) |
+| `/subscribe` | Subscribe — one plan per school level (payment stub) | Authenticated | [users-and-premium](./features/users-and-premium.md) |
 | `/admin/import` | Import flow | Admin | [ingestion](./features/ingestion.md) |
 | `/admin/reference` | Reference data CRUD | Admin | [reference-data](./features/reference-data.md) |
 | `/admin/papers` | Papers list + editor | Admin | [ingestion](./features/ingestion.md) |
-| `/admin/users` | User management (change tiers) | Admin | [users-and-premium](./features/users-and-premium.md) |
+| `/admin/users` | User management (roles + premium access) | Admin | [users-and-premium](./features/users-and-premium.md) |
 | `/admin/generation-config` | Generation config | Admin | [generation-config](./features/generation-config.md) |
 
 ### Navigation (app shell)

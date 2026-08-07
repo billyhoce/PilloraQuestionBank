@@ -17,16 +17,19 @@ summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-
 
 ## User Roles
 
-| Role | Capabilities |
+| Who | Capabilities |
 |---|---|
-| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), configure paper generation (cover titles, subtitle placeholders, cover body, header/footer presets — the Generation Config page), full control of cover/header/footer when generating, manage users (change tiers), all premium capabilities |
-| **Premium** (registered, paid) | All public capabilities, plus view images of premium papers and generate papers using premium questions |
+| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), configure paper generation (cover titles, subtitle placeholders, cover body, header/footer presets — the Generation Config page), full control of cover/header/footer when generating, manage users (roles and premium access), unrestricted by the paywall |
+| **Normal + premium for a school level** (registered, paid) | All Normal capabilities, plus view images of, and generate papers from, premium papers **in that school level** |
 | **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions — always with a cover page, choosing a title from the admin-configured list; the cover body, header, and footer are admin presets |
 
-The stored role values are `admin`, `premium`, and `public` (shown as "Normal" in the UI).
-Papers carry an `is_premium` flag; their images/questions are gated to premium & admin users.
-Premium is granted by an admin via the User Management page — the Subscribe page is a payment
-stub for now.
+The stored role values are just `admin` and `public` (shown as "Normal" in the UI).
+**Premium is not a role — it is the set of school levels a user has paid for** (`Primary`,
+`Secondary`, …), held in `user_premium_school_level`; a user may hold several, and "is this user
+premium" is derived from those rows rather than stored. Papers carry an `is_premium` flag, and a
+premium paper unlocks only for admins and for users holding **its** school level — the one on its
+`level`. Premium is granted per school level by an admin via the User Management page — the
+Subscribe page (one plan per school level) is a payment stub for now.
 
 Users hold a first name, last name and email address. Accounts are created either manually
 (email + password, bcrypt-hashed) or with **Google OAuth 2.0** — a server-side authorization-code

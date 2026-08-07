@@ -39,6 +39,10 @@ The two AI-topics routes are documented in [ai-labelling.md](./ai-labelling.md).
   `page_type`, `page_order`, `width_px`, `height_px`).
 - Accepts an optional `is_premium` flag, **defaulting to `true`** — imported papers are premium
   unless the admin unticks the box.
+- **Rejects a stream and level from different school levels with a `422`**
+  (`school_level_conflict`, shared with the paper `PUT`). Premium is sold per school level and the
+  paywall reads the *level*'s, so a mismatched paper would read as Secondary in the UI while being
+  sold to Primary customers. See [users-and-premium.md](./users-and-premium.md).
 - Creates `Paper`, `Question` and `QuestionPage` rows transactionally. Each question also gets a
   single blank `QuestionPart`: topics and marks arrive later, at the review step, but the
   every-question-has-a-part invariant holds from creation.

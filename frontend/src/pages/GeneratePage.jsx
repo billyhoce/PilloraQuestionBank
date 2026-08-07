@@ -9,12 +9,20 @@ import InfoTooltip from '../components/InfoTooltip'
 import Spinner from '../components/Spinner'
 import ErrorBanner from '../components/ErrorBanner'
 import { buildPdfFilename } from '../utils/pdfFilename'
-import { isLocked } from '../utils/premium'
+import { isLocked, requiredSchoolLevel } from '../utils/premium'
 import { filtersToListArgs, useQuestionSearch } from '../hooks/useQuestionSearch'
 
 // Shown when a premium/locked question somehow reaches the cart — /generate/paper
 // returns 403 for premium content, so we block before the request and on 403.
 const PREMIUM_WARNING = 'Cannot generate: your selection includes premium questions. Remove them or subscribe to unlock.'
+
+// Premium is per school level, so the warning names the groups the selection
+// needs — "subscribe to unlock" is useless when there is more than one plan.
+function premiumWarningFor(items) {
+  const levels = [...new Set(items.map(requiredSchoolLevel).filter(Boolean))]
+  if (levels.length === 0) return PREMIUM_WARNING
+  return `Cannot generate: your selection includes premium questions. Remove them, or subscribe to ${levels.join(' and ')} premium to unlock.`
+}
 
 // Max questions the "Select All" button adds in one click.
 const SELECT_ALL_LIMIT = 50
@@ -292,8 +300,9 @@ export default function GeneratePage() {
     setGenError(null)
     // Pre-flight: /generate/paper 403s on premium content, so block before the
     // request if a locked item slipped into the cart.
-    if (cart.some(isLocked)) {
-      setGenError(PREMIUM_WARNING)
+    const lockedInCart = cart.filter(isLocked)
+    if (lockedInCart.length > 0) {
+      setGenError(premiumWarningFor(lockedInCart))
       return
     }
     setGenerating(true)

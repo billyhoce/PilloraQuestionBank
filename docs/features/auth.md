@@ -1,7 +1,7 @@
 # Auth
 
 **Scope:** Registration, password login, Google OAuth 2.0, session handling, and the security
-posture around them — backend and UI. Roles and the premium tier are in
+posture around them — backend and UI. Roles and per-school-level premium access are in
 [users-and-premium.md](./users-and-premium.md); the `User` table is in
 [DATA_MODEL.md](../DATA_MODEL.md); Google Cloud Console setup is in
 [DEPLOYMENT.md](../DEPLOYMENT.md#google-oauth-setup).
@@ -85,7 +85,7 @@ Google verification review.
   reports `email_verified`**. An unverified address is rejected outright
   (`google_email_unverified`), since it is not proof of identity and would otherwise be a route to
   hijacking an existing account. A verified match attaches `google_sub` to the existing row and
-  preserves its `role`. [DATA_MODEL.md](../DATA_MODEL.md) tabulates the three password/Google
+  preserves its `role` **and its premium school levels**. [DATA_MODEL.md](../DATA_MODEL.md) tabulates the three password/Google
   combinations a `User` row can be in.
 - **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts.
   `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise. Password

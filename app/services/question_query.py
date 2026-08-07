@@ -38,7 +38,9 @@ from app.models.orm import (
 PAPER_EAGER = selectinload(Question.paper).options(
     joinedload(Paper.subject),
     joinedload(Paper.stream),
-    joinedload(Paper.level),
+    # The school level behind the level is what the premium gate checks and what
+    # names a paper's premium group, so it is loaded with the level itself.
+    joinedload(Paper.level).joinedload(Level.school_level),
     joinedload(Paper.school),
     joinedload(Paper.exam_type),
 )

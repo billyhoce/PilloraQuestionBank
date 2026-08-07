@@ -90,8 +90,9 @@ def test_delete_subject_with_dependent_topic_returns_409(admin_client, reference
 
 def test_list_topics_filtered_by_subject_and_stream(admin_client, reference_data):
     rd = reference_data
-    # Add a second stream and subject
-    sl_resp = admin_client.post("/api/school-levels", json={"name": "Primary"})
+    # Add a second stream and subject. The school level needs a name reference_data
+    # doesn't already use — it seeds both Secondary and Primary.
+    sl_resp = admin_client.post("/api/school-levels", json={"name": "Junior College"})
     sl_id = sl_resp.json()["id"]
     stream2_resp = admin_client.post("/api/streams", json={"name": "Foundation", "school_level_id": sl_id})
     stream2_id = stream2_resp.json()["id"]

@@ -27,6 +27,20 @@ of violating a FK constraint.
 Reference data is seeded by the `seed_reference_data` Alembic migration — there is no separate seed
 command.
 
+## School levels are also premium groups
+
+Premium is sold **per school level**, so every `school_level` row is implicitly a purchasable group:
+adding one makes a new plan appear on the Subscribe page and a new checkbox in User Management, with
+no code change. Two consequences:
+
+- Deleting a school level **cascades** its `user_premium_school_level` rows away. In practice the
+  `level` and `stream` foreign keys already `RESTRICT` the delete, so a school level in real use
+  can't be deleted anyway — entitlements deliberately don't add a second, more confusing block.
+- A paper's stream and level must belong to the **same** school level; the paper write endpoints
+  reject a mismatch with a `422`, because the paywall reads the level's.
+
+See [users-and-premium.md](./users-and-premium.md).
+
 ## Topics are scoped to (Subject, Stream)
 
 Topics belong to a **(Subject, Stream)** pair, so the same subject can carry a different topic list

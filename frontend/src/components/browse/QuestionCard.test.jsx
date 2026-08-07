@@ -96,6 +96,26 @@ describe('QuestionCard premium lock', () => {
     expect(screen.queryByRole('button', { name: /add/i })).not.toBeInTheDocument()
   })
 
+  // Premium is sold per school level, so a locked card names the group it needs
+  // rather than pitching a generic subscription.
+  const secondaryLocked = {
+    ...lockedItem,
+    paper_info: { ...lockedItem.paper_info, school_level_name: 'Secondary' },
+  }
+
+  it('names the required premium group on the CTA and deep-links to its plan', () => {
+    renderWithRouter({ item: secondaryLocked, onClick: () => {}, selectable: true })
+    const cta = screen.getByRole('link', { name: /Secondary premium/i })
+    expect(cta).toHaveAttribute('href', '/subscribe?school_level=Secondary')
+  })
+
+  it('names the required premium group in the placeholder alt text', () => {
+    renderWithRouter({ item: secondaryLocked, onClick: () => {} })
+    expect(
+      screen.getByRole('img', { name: /requires Secondary premium/i })
+    ).toBeInTheDocument()
+  })
+
   it('renders the real image and an Add button when not locked', () => {
     const item = {
       ...baseItem,

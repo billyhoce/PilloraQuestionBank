@@ -12,6 +12,7 @@ rather than importing it, so callers and tests cross the same seam.
 from typing import Callable, Optional
 
 from app.models.orm import Paper, Question, QuestionPart
+from app.services.premium import PremiumGate
 
 # Makes a presigned URL for an object key. Injected so tests don't have to
 # monkeypatch a module-level import to keep S3 out of the picture.
@@ -27,6 +28,10 @@ def paper_info(paper: Paper) -> dict:
         "subject_name": paper.subject.name,
         "stream_name": paper.stream.name,
         "level_name": paper.level.name,
+        # Level names collide across school levels ("1" is both Primary 1 and
+        # Secondary 1), so the school level is what names a paper's premium
+        # group to the UI.
+        "school_level_name": paper.level.school_level.name,
         "school_name": paper.school.name,
         "exam_type_name": paper.exam_type.name,
     }
@@ -109,15 +114,16 @@ def tag_infos(question: Question) -> list[dict]:
 
 
 def serialize_list_item(
-    q: Question, presign: Presigner, can_view_premium: bool = True
+    q: Question, presign: Presigner, gate: Optional[PremiumGate] = None
 ) -> dict:
     """Build a QuestionListItem dict for a question (with eager-loaded relations).
 
-    When the question belongs to a premium paper and the viewer isn't entitled
-    (``can_view_premium`` is False), the image URL is withheld and ``locked`` is
-    set so the frontend shows a paywall placeholder instead of the image.
+    ``gate`` decides whether this viewer may see the question's images — build it
+    with ``premium_gate(user)``. When it refuses, the image URL is withheld and
+    ``locked`` is set so the frontend shows a paywall placeholder instead. It
+    defaults to unrestricted, for callers already behind an admin-only route.
     """
-    locked = q.paper.is_premium and not can_view_premium
+    locked = gate is not None and not gate(q.paper)
     return {
         "id": q.id,
         "question_number": q.question_number,

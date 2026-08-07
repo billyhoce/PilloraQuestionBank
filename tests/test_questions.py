@@ -565,11 +565,33 @@ def test_list_premium_paper_unlocked_for_premium(premium_client, sample_paper, d
     assert all(not i["locked"] and i["first_page_url"] == fake_presign for i in items)
 
 
+def test_list_premium_paper_locked_for_other_school_level(
+    other_premium_client, sample_paper, db_session
+):
+    """Premium for Primary buys nothing on a Secondary paper."""
+    _make_premium(db_session, sample_paper)
+    resp = other_premium_client.get("/api/questions")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert items  # tiles are still visible, as they are for a Normal user
+    assert all(i["locked"] and i["first_page_url"] is None for i in items)
+
+
 def test_list_premium_paper_unlocked_for_admin(admin_client, sample_paper, db_session):
     _make_premium(db_session, sample_paper)
     resp = admin_client.get("/api/questions")
     assert resp.status_code == 200
     assert all(not i["locked"] for i in resp.json()["items"])
+
+
+def test_list_reports_school_level_name(public_client, sample_paper):
+    """The UI names a locked paper's premium group from this — level names alone
+    can't, since "1" is both Primary 1 and Secondary 1."""
+    resp = public_client.get("/api/questions")
+    assert resp.status_code == 200
+    assert all(
+        i["paper_info"]["school_level_name"] == "Secondary" for i in resp.json()["items"]
+    )
 
 
 def test_non_premium_paper_not_locked(public_client, sample_paper):
@@ -596,6 +618,18 @@ def test_get_question_detail_unlocked_for_premium(premium_client, sample_paper, 
     body = resp.json()
     assert body["locked"] is False
     assert all(p["url"] == fake_presign for p in body["question_pages"])
+
+
+def test_get_question_detail_locked_for_other_school_level(
+    other_premium_client, sample_paper, db_session
+):
+    _make_premium(db_session, sample_paper)
+    q1 = db_session.query(Question).filter_by(paper_id=sample_paper.id, question_number=1).one()
+    resp = other_premium_client.get(f"/api/questions/{q1.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["locked"] is True
+    assert all(p["url"] is None for p in body["question_pages"])
 
 
 def test_get_question_includes_topic_chips(public_client, db_session, reference_data, admin_user, fake_presign):

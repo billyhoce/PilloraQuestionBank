@@ -132,8 +132,13 @@ class GenerationConfig(Base):
 
 
 class User(Base):
+    """An account. ``role`` says whether it is an admin; premium access is *not*
+    stored here — it is the set of school levels in ``premium_school_levels``,
+    so "is this user premium" can never disagree with what they can actually
+    open. See ``app/services/premium.py``."""
+
     __tablename__ = "app_user"
-    __table_args__ = (CheckConstraint("role IN ('admin', 'public', 'premium')", name="ck_user_role"),)
+    __table_args__ = (CheckConstraint("role IN ('admin', 'public')", name="ck_user_role"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -147,6 +152,32 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, server_default="public")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Eagerly loaded: every user row the API returns carries its entitlements,
+    # so lazy loading would mean a query per user on /api/users.
+    premium_school_levels: Mapped[list[SchoolLevel]] = relationship(
+        secondary="user_premium_school_level",
+        order_by="SchoolLevel.id",
+        lazy="selectin",
+    )
+
+
+class UserPremiumSchoolLevel(Base):
+    """One school level a user has premium access to.
+
+    Premium is sold per school level, so entitlement is a set rather than a role
+    value — a user may hold several. Both sides cascade: deleting an account or a
+    school level takes its grants with it.
+    """
+
+    __tablename__ = "user_premium_school_level"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), primary_key=True
+    )
+    school_level_id: Mapped[int] = mapped_column(
+        ForeignKey("school_level.id", ondelete="CASCADE"), primary_key=True
     )
 
 

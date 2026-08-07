@@ -51,7 +51,11 @@ the same meaning it had when topics were recorded at question level.
 ### Access
 
 Both endpoints take optional auth so they stay public but can withhold image URLs from premium
-papers. See [users-and-premium.md](./users-and-premium.md#how-the-paywall-is-enforced).
+papers the viewer isn't entitled to. `serialize_list_item` takes the decision as an injected
+`PremiumGate` predicate (built once per request by `premium_gate(user)`), the same seam style as the
+presigner above — the serializer never asks who the viewer is. `paper_info` carries
+`school_level_name` so a locked tile can name the premium group the viewer is missing. See
+[users-and-premium.md](./users-and-premium.md#how-the-paywall-is-enforced).
 
 ## Filter panel UI
 

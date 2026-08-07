@@ -170,15 +170,16 @@ def test_callback_session_is_usable(client, google_configured, google_profile):
 
 
 def test_callback_links_existing_password_account_and_keeps_role(
-    client, db_session, google_configured, google_profile
+    client, db_session, google_configured, google_profile, reference_data
 ):
     google_profile["email"] = "premium@test.com"
-    from tests.conftest import _create_user
+    from tests.conftest import _create_user, _grant_premium
 
     existing = _create_user(
-        db_session, "premium@test.com", "Premiumpass123!", "premium",
+        db_session, "premium@test.com", "Premiumpass123!", "public",
         first_name="Existing", last_name="Name",
     )
+    _grant_premium(db_session, existing, reference_data["school_level"])
     existing_id = existing.id
 
     state = _start_flow(client)
@@ -190,7 +191,10 @@ def test_callback_links_existing_password_account_and_keeps_role(
     assert len(matches) == 1, "must link, not create a second account"
     assert matches[0].id == existing_id
     assert matches[0].google_sub == "google-sub-123"
-    assert matches[0].role == "premium", "linking must not downgrade the tier"
+    assert matches[0].role == "public", "linking must not change the role"
+    assert [sl.name for sl in matches[0].premium_school_levels] == ["Secondary"], (
+        "linking must not revoke premium access"
+    )
     # A name the user typed themselves is never overwritten by Google's.
     assert matches[0].first_name == "Existing"
     assert matches[0].password_hash is not None, "password login must still work"

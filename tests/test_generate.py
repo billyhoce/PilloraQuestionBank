@@ -1396,6 +1396,36 @@ def test_generate_select_includes_premium_for_premium(premium_client, sample_pap
     assert resp.json()["count"] == 3
 
 
+def test_generate_select_excludes_premium_from_other_school_level(
+    other_premium_client, sample_paper, db_session, reference_data
+):
+    """Primary premium doesn't put a Secondary paper in the candidate pool."""
+    sample_paper.is_premium = True
+    db_session.flush()
+    resp = other_premium_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "marks",
+        "target_value": 10,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 0
+    assert data["items"] == []
+
+
+def test_generate_select_still_includes_free_papers_for_partial_premium(
+    other_premium_client, sample_paper, db_session, reference_data
+):
+    """Holding the wrong school level must not cost a user the free catalogue."""
+    resp = other_premium_client.post("/api/generate/select", json={
+        "filters": {"subject_id": reference_data["subject"].id},
+        "target_type": "marks",
+        "target_value": 10,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 3
+
+
 def test_generate_paper_premium_blocked_for_public(public_client, sample_paper, db_session, reference_data):
     sample_paper.is_premium = True
     db_session.flush()
@@ -1423,3 +1453,20 @@ def test_generate_paper_premium_allowed_for_premium(premium_client, sample_paper
         })
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
+
+
+def test_generate_paper_premium_blocked_for_other_school_level(
+    other_premium_client, sample_paper, db_session, reference_data
+):
+    """The server-side guard, for ids posted directly past the UI."""
+    sample_paper.is_premium = True
+    db_session.flush()
+    ids = _question_ids(db_session, sample_paper)
+    with (
+        patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
+    ):
+        resp = other_premium_client.post("/api/generate/paper", json={
+            "question_ids": ids,
+            "variant": "question",
+        })
+    assert resp.status_code == 403

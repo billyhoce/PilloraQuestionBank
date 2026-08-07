@@ -14,7 +14,15 @@ from typing import Any, Optional
 from PIL import Image
 from sqlalchemy import select
 
-from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
+from app.models.orm import (
+    Level,
+    Paper,
+    Question,
+    QuestionPage,
+    QuestionPart,
+    QuestionTopic,
+    Stream,
+)
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
@@ -23,6 +31,26 @@ from app.storage.s3_client import copy_only, delete_object, get_presigned_url, p
 # mid-flush (PostgreSQL checks unique constraints per statement, not per
 # transaction).
 _REORDER_OFFSET = 10000
+
+
+def school_level_conflict(db: Any, stream_id: int, level_id: int) -> Optional[str]:
+    """Why this stream and level can't sit on the same paper, or ``None``.
+
+    Both carry a school level, and the premium paywall gates on the *level*'s
+    (``app/services/premium.py``) — so a paper claiming a Secondary stream and a
+    Primary level would be sold to the wrong customers while reading as
+    Secondary everywhere else. Callers turn the message into a 422.
+    """
+    stream = db.get(Stream, stream_id)
+    level = db.get(Level, level_id)
+    if stream is None or level is None:
+        return None  # the FK will reject it; not this check's business
+    if stream.school_level_id == level.school_level_id:
+        return None
+    return (
+        f"Stream '{stream.name}' and level '{level.name}' belong to different "
+        "school levels"
+    )
 
 
 def upload_single_image(image_bytes: bytes) -> dict:

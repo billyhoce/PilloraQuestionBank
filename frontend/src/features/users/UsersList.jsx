@@ -5,17 +5,17 @@ import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
 import { fullName } from '../../utils/userName'
 
-// The stored role value 'public' is shown as "Normal" in the UI; 'premium' and
-// 'admin' map to themselves.
+// The stored role value 'public' is shown as "Normal" in the UI. Premium is not
+// a role — it is the set of school levels in the Premium Access column.
 const ROLE_OPTIONS = [
   { value: 'public', label: 'Normal' },
-  { value: 'premium', label: 'Premium' },
   { value: 'admin', label: 'Admin' },
 ]
 
 export default function UsersList() {
   const { user: currentUser } = useAuth()
   const [rows, setRows] = useState([])
+  const [schoolLevels, setSchoolLevels] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [savingId, setSavingId] = useState(null)
@@ -23,8 +23,12 @@ export default function UsersList() {
 
   const refresh = useCallback(() => {
     setLoading(true)
-    api.users.list()
-      .then((data) => { setRows(data); setError(null) })
+    Promise.all([api.users.list(), api.schoolLevels.list()])
+      .then(([users, levels]) => {
+        setRows(users)
+        setSchoolLevels(levels || [])
+        setError(null)
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -47,12 +51,33 @@ export default function UsersList() {
     }
   }
 
+  // Ticking a box sends the whole resulting set, since the endpoint replaces
+  // rather than merges — one call both grants and revokes.
+  async function handlePremiumToggle(user, schoolLevel, checked) {
+    const next = checked
+      ? [...(user.premium_school_levels || []), schoolLevel]
+      : (user.premium_school_levels || []).filter((sl) => sl.id !== schoolLevel.id)
+
+    setSavingId(user.id)
+    setRowError(null)
+    const prev = rows
+    setRows((rs) => rs.map((r) => (r.id === user.id ? { ...r, premium_school_levels: next } : r)))
+    try {
+      await api.users.setPremiumSchoolLevels(user.id, next.map((sl) => sl.id))
+    } catch (e) {
+      setRows(prev)  // revert
+      setRowError({ id: user.id, message: e.message })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-12"><Spinner size="lg" /></div>
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <h1 className="text-lg font-semibold text-gray-900 mb-4">User Management</h1>
 
       {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
@@ -64,11 +89,13 @@ export default function UsersList() {
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tier</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Premium Access</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {rows.map((u) => {
               const isSelf = currentUser?.id === u.id
+              const held = new Set((u.premium_school_levels || []).map((sl) => sl.id))
               return (
                 <tr key={u.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm text-gray-900">
@@ -88,8 +115,29 @@ export default function UsersList() {
                         <option key={o.value} value={o.value}>{o.label}</option>
                       ))}
                     </select>
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {u.role === 'admin' ? (
+                      <span className="text-xs text-gray-400">All access</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-3">
+                        {schoolLevels.map((sl) => (
+                          <label key={sl.id} className="flex items-center gap-1.5 text-sm text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={held.has(sl.id)}
+                              disabled={savingId === u.id}
+                              onChange={(e) => handlePremiumToggle(u, sl, e.target.checked)}
+                              aria-label={`${sl.name} premium for ${u.email}`}
+                              className="rounded border-gray-300 disabled:opacity-50"
+                            />
+                            {sl.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
                     {rowError?.id === u.id && (
-                      <span className="ml-2 text-xs text-red-600">{rowError.message}</span>
+                      <div className="mt-1 text-xs text-red-600">{rowError.message}</div>
                     )}
                   </td>
                 </tr>

@@ -18,6 +18,7 @@ from app.models.orm import (
     Tag,
     Topic,
     User,
+    UserPremiumSchoolLevel,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "Tag",
     "Topic",
     "User",
+    "UserPremiumSchoolLevel",
 ]
