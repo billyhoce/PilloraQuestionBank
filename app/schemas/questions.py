@@ -11,6 +11,9 @@ class PaperInfoSchema(BaseModel):
     subject_name: str
     stream_name: str
     level_name: str
+    # The premium group a premium paper belongs to. Level names alone can't
+    # identify it — "1" is both Primary 1 and Secondary 1.
+    school_level_name: str
     school_name: str
     exam_type_name: str
 

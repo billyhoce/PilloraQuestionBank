@@ -87,6 +87,41 @@ def test_update_paper_metadata(admin_client, sample_paper, mock_s3):
     assert detail["paper_number"] == "2"
 
 
+def test_update_paper_rejects_level_stream_school_level_mismatch(
+    admin_client, sample_paper, reference_data, mock_s3
+):
+    """The paywall gates on the level's school level, so a stream from a
+    different one would sell the paper to the wrong customers."""
+    payload = {
+        "subject_id": sample_paper.subject_id,
+        "stream_id": sample_paper.stream_id,               # Secondary
+        "level_id": reference_data["other_level"].id,      # Primary
+        "school_id": sample_paper.school_id,
+        "exam_type_id": sample_paper.exam_type_id,
+        "year": sample_paper.year,
+        "paper_number": sample_paper.paper_number,
+    }
+    resp = admin_client.put(f"/api/papers/{sample_paper.id}", json=payload)
+    assert resp.status_code == 422
+    assert "school level" in resp.json()["detail"]
+
+
+def test_update_paper_allows_matching_school_levels(
+    admin_client, sample_paper, reference_data, mock_s3
+):
+    payload = {
+        "subject_id": sample_paper.subject_id,
+        "stream_id": reference_data["other_stream"].id,  # both Primary
+        "level_id": reference_data["other_level"].id,
+        "school_id": sample_paper.school_id,
+        "exam_type_id": sample_paper.exam_type_id,
+        "year": sample_paper.year,
+        "paper_number": sample_paper.paper_number,
+    }
+    resp = admin_client.put(f"/api/papers/{sample_paper.id}", json=payload)
+    assert resp.status_code == 200, resp.text
+
+
 def test_update_paper_is_premium_round_trips(admin_client, sample_paper, mock_s3):
     base = {
         "subject_id": sample_paper.subject_id,

@@ -7,10 +7,14 @@ import Spinner from '../Spinner'
 import ErrorBanner from '../ErrorBanner'
 import TagCombobox from '../TagCombobox'
 import { formatTopic } from '../../utils/topicFormat'
+import { requiredSchoolLevel, subscribeHref } from '../../utils/premium'
 
 export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  // The detail payload has no paper_info, so the premium group the viewer is
+  // missing comes from the list item that opened the modal.
+  const neededLevel = requiredSchoolLevel(item)
 
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -176,15 +180,23 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
                 <section className="flex flex-col items-center justify-center gap-4 rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 to-gray-100 py-10 px-6 text-center">
                   <img
                     src={premiumLocked}
-                    alt="Premium content — subscribe to unlock"
+                    alt={
+                      neededLevel
+                        ? `Premium content — requires ${neededLevel} premium`
+                        : 'Premium content — subscribe to unlock'
+                    }
                     className="w-full max-w-sm rounded border border-amber-200"
                   />
-                  <p className="text-xs text-gray-500">Subscribe to view the full question and answer.</p>
+                  <p className="text-xs text-gray-500">
+                    {neededLevel
+                      ? `${neededLevel} premium unlocks the full question and answer.`
+                      : 'Subscribe to view the full question and answer.'}
+                  </p>
                   <Link
-                    to="/subscribe"
+                    to={subscribeHref(item)}
                     className="text-sm font-medium px-4 py-2 rounded border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 transition-colors"
                   >
-                    Go Premium
+                    {neededLevel ? `Get ${neededLevel} Premium` : 'Go Premium'}
                   </Link>
                 </section>
               ) : (

@@ -66,12 +66,6 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-def can_view_premium(user: Optional[User]) -> bool:
-    """Whether ``user`` may see premium paper images / generate with premium
-    questions. Admins and premium users qualify; public and anonymous do not."""
-    return user is not None and user.role in ("admin", "premium")
-
-
 def _set_session_cookie(response: Response, user: User) -> None:
     """Issue the session JWT. Shared by password login and the Google callback so
     both paths produce an identical session."""

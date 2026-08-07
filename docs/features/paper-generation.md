@@ -34,12 +34,15 @@ the eager-load options from `app/services/question_query.py`) to build the candi
 `exclude_question_ids`, then dispatches on `target_type` + `algorithm`. It **never returns 404** — an
 empty result with a `warning` string keeps the live builder UI responsive.
 
-For the premium restrictions on both endpoints, see
-[users-and-premium.md](./users-and-premium.md#how-the-paywall-is-enforced).
+The pool is then narrowed by `restrict_premium_pool` (`app/services/premium.py`): free papers always
+survive, but a premium paper only does if the viewer holds **its** school level. This is why the pool
+query joins `Paper.level` explicitly rather than reaching it through a `.has()` subquery like the
+Browse filters do. `/generate/paper` applies the same rule per question and `403`s on any the viewer
+can't open. See [users-and-premium.md](./users-and-premium.md#how-the-paywall-is-enforced).
 
 ### Role enforcement on `/generate/paper`
 
-Admins control every field verbatim. For non-admin users (`public` and `premium`) the admin-set
+Admins control every field verbatim. For every non-admin user — whatever premium they hold — the admin-set
 [generation config](./generation-config.md) wins. `_resolve_generation_options` in
 `app/routes/generate.py` applies the rules and returns a `ResolvedGenerationOptions` — a frozen
 dataclass rather than a tuple, since four of its fields are strings that all get stamped somewhere

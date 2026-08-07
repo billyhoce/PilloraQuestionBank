@@ -41,6 +41,7 @@ from app.models.orm import (
     Tag,
     Topic,
     User,
+    UserPremiumSchoolLevel,
 )
 
 _S3_BUCKET = "test-bucket"
@@ -207,9 +208,34 @@ def public_user(db_session):
     return _create_user(db_session, "user@test.com", "Userpass123!", "public")
 
 
+def _grant_premium(db_session: Session, user: User, *school_levels) -> User:
+    """Give ``user`` premium access to each school level."""
+    for sl in school_levels:
+        db_session.add(
+            UserPremiumSchoolLevel(user_id=user.id, school_level_id=sl.id)
+        )
+    db_session.flush()
+    db_session.refresh(user)
+    return user
+
+
 @pytest.fixture
-def premium_user(db_session):
-    return _create_user(db_session, "premium@test.com", "Premiumpass123!", "premium")
+def premium_user(db_session, reference_data):
+    """Premium for the reference data's school level (Secondary) only.
+
+    Premium is not a role — it is a set of school levels — so this user's role is
+    still 'public'. `other_premium_user` holds the *other* school level, which is
+    what proves the two groups are actually separate.
+    """
+    user = _create_user(db_session, "premium@test.com", "Premiumpass123!", "public")
+    return _grant_premium(db_session, user, reference_data["school_level"])
+
+
+@pytest.fixture
+def other_premium_user(db_session, reference_data):
+    """Premium for the *other* school level (Primary), not the sample paper's."""
+    user = _create_user(db_session, "otherpremium@test.com", "Otherpass123!", "public")
+    return _grant_premium(db_session, user, reference_data["other_school_level"])
 
 
 @pytest.fixture
@@ -230,9 +256,17 @@ def public_client(client, public_user):
 
 @pytest.fixture
 def premium_client(client, premium_user):
-    """TestClient pre-authenticated as a premium user."""
+    """TestClient pre-authenticated as a user with Secondary premium."""
     resp = client.post("/api/auth/login", json={"email": "premium@test.com", "password": "Premiumpass123!"})
     assert resp.status_code == 200, f"Premium login failed: {resp.text}"
+    return client
+
+
+@pytest.fixture
+def other_premium_client(client, other_premium_user):
+    """TestClient pre-authenticated as a user with Primary premium only."""
+    resp = client.post("/api/auth/login", json={"email": "otherpremium@test.com", "password": "Otherpass123!"})
+    assert resp.status_code == 200, f"Other-premium login failed: {resp.text}"
     return client
 
 
@@ -268,9 +302,16 @@ def mock_s3():
 
 @pytest.fixture
 def reference_data(db_session):
-    """One row of every reference table, flushed but not committed."""
+    """One row of every reference table, flushed but not committed.
+
+    A *second* school level with its own stream and level comes along for the
+    ride: premium is sold per school level, so most paywall tests need a paper
+    outside the one under test to prove the two groups don't leak into each
+    other. Everything else (subject, topics, school…) hangs off the first.
+    """
     school_level = SchoolLevel(name="Secondary")
-    db_session.add(school_level)
+    other_school_level = SchoolLevel(name="Primary")
+    db_session.add_all([school_level, other_school_level])
     db_session.flush()
 
     subject = Subject(name="Math")
@@ -281,8 +322,13 @@ def reference_data(db_session):
     db_session.add(stream)
     db_session.flush()
 
+    other_stream = Stream(name="Standard", school_level_id=other_school_level.id)
+    db_session.add(other_stream)
+    db_session.flush()
+
     level = Level(name="Sec 3", sort_order=9, school_level_id=school_level.id)
-    db_session.add(level)
+    other_level = Level(name="Pri 5", sort_order=5, school_level_id=other_school_level.id)
+    db_session.add_all([level, other_level])
     db_session.flush()
 
     school = School(name="Raffles Institution")
@@ -312,9 +358,12 @@ def reference_data(db_session):
 
     return {
         "school_level": school_level,
+        "other_school_level": other_school_level,
         "subject": subject,
         "stream": stream,
+        "other_stream": other_stream,
         "level": level,
+        "other_level": other_level,
         "school": school,
         "exam_type": exam_type,
         "topic": topic,

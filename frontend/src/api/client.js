@@ -88,6 +88,9 @@ export const api = {
   users: {
     list: () => request('GET', '/api/users').then(r => r.data),
     updateRole: (id, role) => request('PATCH', `/api/users/${id}/role`, { role }),
+    // Replaces the user's premium school levels wholesale — send every ticked box.
+    setPremiumSchoolLevels: (id, schoolLevelIds) =>
+      request('PUT', `/api/users/${id}/premium-school-levels`, { school_level_ids: schoolLevelIds }),
   },
 
   schoolLevels: {

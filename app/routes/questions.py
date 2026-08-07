@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.db import get_db
 from app.deps import Presigner, get_presigner
 from app.models.orm import Question, QuestionPage, User
-from app.routes.auth import can_view_premium, get_current_user_optional
+from app.routes.auth import get_current_user_optional
 from app.schemas.questions import QuestionDetailResponse, QuestionListResponse
+from app.services.premium import can_view_paper, premium_gate
 from app.services.question_query import (
     PAPER_EAGER,
     PARTS_EAGER,
@@ -43,7 +44,7 @@ def list_questions(
     current_user: Optional[User] = Depends(get_current_user_optional),
     presign: Presigner = Depends(get_presigner),
 ):
-    viewer_premium = can_view_premium(current_user)
+    gate = premium_gate(current_user)
     filter_args = (
         subject_id,
         stream_id,
@@ -70,7 +71,7 @@ def list_questions(
         .all()
     )
 
-    items = [serialize_list_item(q, presign, viewer_premium) for q in questions]
+    items = [serialize_list_item(q, presign, gate) for q in questions]
 
     return {"total": total, "items": items}
 
@@ -91,7 +92,7 @@ def get_question(
     if question is None:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    locked = question.paper.is_premium and not can_view_premium(current_user)
+    locked = not can_view_paper(current_user, question.paper)
 
     def _page_dict(p: QuestionPage) -> dict:
         return {

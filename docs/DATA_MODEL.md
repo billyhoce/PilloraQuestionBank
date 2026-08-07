@@ -99,8 +99,14 @@ User: {
   last_name,                                 -- '' for accounts predating the field
   password_hash (nullable),                  -- NULL for accounts created via Google
   google_sub (unique, nullable),             -- Google's 'sub' claim; set once linked to Google
-  role ENUM('admin', 'public', 'premium'),   -- 'public' is shown as "Normal" in the UI
+  role ENUM('admin', 'public'),              -- 'public' is shown as "Normal" in the UI
   created_at
+}
+
+UserPremiumSchoolLevel: {
+  user_id         (PK, FK → app_user,     ON DELETE CASCADE),
+  school_level_id (PK, FK → school_level, ON DELETE CASCADE),
+  PRIMARY KEY (user_id, school_level_id)
 }
 
 GenerationConfig: {
@@ -151,10 +157,19 @@ is the admin-curated list of cover titles those users must pick from (admins may
 The Alembic migration seeds the row with canonical defaults and one title, `"Topical Worksheets"`.
 See [features/generation-config.md](./features/generation-config.md).
 
-**Roles & the premium paywall.** `role` has three tiers, enforced by a DB check
-constraint (`ck_user_role`): `admin`, `public` (labelled "Normal" in the UI), and
-`premium`. A paper flagged `is_premium = true` is gated to `admin`/`premium` viewers. See
-[features/users-and-premium.md](./features/users-and-premium.md).
+**Roles & the premium paywall.** `role` has just two values, enforced by a DB check constraint
+(`ck_user_role`): `admin` and `public` (labelled "Normal" in the UI).
+
+**Premium is not a role — it is a set of school levels.** It is sold per school level (Primary and
+Secondary are separate products) and a user may hold several, so it lives in
+`UserPremiumSchoolLevel` rather than in `role`. Like `Question.total_marks`, "is this user premium"
+is **derived, never stored**, so it can never disagree with what the user can actually open.
+
+A paper flagged `is_premium = true` unlocks for admins and for users holding **its own school
+level**, which is the one on its `level` (`paper.level.school_level_id`). A paper reaches a school
+level through its `stream` too, so paper writes reject the two disagreeing with a 422 — otherwise a
+paper could read as Secondary in the UI while being sold to Primary customers. The policy lives in
+`app/services/premium.py`; see [features/users-and-premium.md](./features/users-and-premium.md).
 
 **Names.** `first_name` / `last_name` are `NOT NULL DEFAULT ''`. Manual registration requires both
 (non-blank, ≤100 chars); Google supplies them from `given_name` / `family_name`, which it does not
@@ -173,8 +188,8 @@ than on email. An account may have a password, a Google link, or both:
 
 The third row is produced by **auto-linking**: when Google reports `email_verified = true` for an
 address that already has an account, that account gains the `google_sub` and keeps its existing
-`role` — Google has proven ownership of the address, so this is safe, and it avoids a duplicate
-account. Both sign-in methods then work. Blank names are backfilled from Google at that point, but
+`role` **and premium school levels** — Google has proven ownership of the address, so this is safe,
+and it avoids a duplicate account. Both sign-in methods then work. Blank names are backfilled from Google at that point, but
 a name the user typed is never overwritten. `password_hash` is nullable purely to represent the
 second row; `verify_password` rejects a NULL/empty hash, so a Google-only account cannot be
 password-logged-in. See [features/auth.md](./features/auth.md).

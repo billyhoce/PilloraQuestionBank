@@ -405,6 +405,22 @@ describe('GeneratePage premium generate guard', () => {
     expect(screen.queryByRole('button', { name: /\+ add/i })).not.toBeInTheDocument()
   })
 
+  it('points a locked question at the plan for its school level', async () => {
+    const lockedItem = {
+      ...item,
+      locked: true,
+      paper_info: { ...item.paper_info, school_level_name: 'Primary' },
+    }
+    api.questions.list.mockResolvedValue({ items: [lockedItem], total: 1 })
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    const cta = await screen.findByRole('link', { name: /Primary premium/i })
+    expect(cta).toHaveAttribute('href', '/subscribe?school_level=Primary')
+  })
+
   it('maps a 403 from generate to the premium warning and shows no crash notice', async () => {
     const user = await renderWithCartItem()
     await screen.findByRole('option', { name: 'Topical Worksheets' })

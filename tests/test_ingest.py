@@ -175,6 +175,29 @@ def test_confirm_route_defaults_to_premium(admin_client, mock_s3, reference_data
     assert paper["is_premium"] is True
 
 
+def test_confirm_route_rejects_level_stream_school_level_mismatch(
+    admin_client, mock_s3, reference_data
+):
+    rd = reference_data
+    temp_key = "tmp/route-mismatch/page_0.webp"
+    mock_s3.put_object(Bucket="test-bucket", Key=temp_key, Body=b"fake")
+    payload = {
+        "subject_id": rd["subject"].id,
+        "stream_id": rd["stream"].id,          # Secondary
+        "level_id": rd["other_level"].id,      # Primary
+        "school_id": rd["school"].id,
+        "exam_type_id": rd["exam_type"].id,
+        "year": 2024,
+        "paper_number": "4",
+        "questions": [
+            {"question_number": 1, "pages": [{"temp_key": temp_key, "page_type": "question", "page_order": 0, "width_px": 2480, "height_px": 800}]},
+        ],
+    }
+    resp = admin_client.post("/api/import/confirm", json=payload)
+    assert resp.status_code == 422
+    assert "school level" in resp.json()["detail"]
+
+
 def db_session_from_client_paper(client, paper_id):
     """Fetch a paper's detail via the API (the editor endpoint exposes is_premium)."""
     r = client.get(f"/api/papers/{paper_id}")

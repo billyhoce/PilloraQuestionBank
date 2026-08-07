@@ -29,6 +29,7 @@ from app.services.paper_admin import (
     commit_with_page_moves,
     create_question,
     delete_question,
+    school_level_conflict,
     update_paper,
     upload_single_image,
 )
@@ -327,6 +328,9 @@ def update_paper_route(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    conflict = school_level_conflict(db, payload.stream_id, payload.level_id)
+    if conflict:
+        raise HTTPException(status_code=422, detail=conflict)
     try:
         paper = update_paper(paper_id, payload.model_dump(), db)
     except IntegrityError:

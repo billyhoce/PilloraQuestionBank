@@ -13,6 +13,7 @@ from app.models.orm import Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
 from app.storage.s3_client import delete_object, get_presigned_url
 
@@ -136,6 +137,12 @@ def confirm(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    # A paper's premium group comes from its level's school level, so a stream
+    # from a different school level would gate it to the wrong customers.
+    conflict = school_level_conflict(db, payload.stream_id, payload.level_id)
+    if conflict:
+        raise HTTPException(status_code=422, detail=conflict)
+
     paper = confirm_import(payload.model_dump(), current_user, db)
     paper = (
         db.query(Paper)

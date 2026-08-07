@@ -1,11 +1,12 @@
 import { Link } from 'react-router-dom'
 import premiumLocked from '../../assets/premium-locked.svg'
 import { formatTopic } from '../../utils/topicFormat'
-import { isLocked } from '../../utils/premium'
+import { isLocked, requiredSchoolLevel, subscribeHref } from '../../utils/premium'
 
 export default function QuestionCard({ item, onClick, selectable = false, selected = false, onToggleSelect }) {
   const { paper_info, topics, tags, first_page_url, question_number, marks } = item
   const locked = isLocked(item)
+  const neededLevel = requiredSchoolLevel(item)
   const uniqueTopics = [...new Map((topics || []).map(t => [t.topic_name, t])).values()]
   const subtopicNames = [...new Set((topics || []).flatMap(t => t.subtopic_names || []))]
   const questionTags = tags || []
@@ -16,7 +17,11 @@ export default function QuestionCard({ item, onClick, selectable = false, select
       {locked ? (
         <img
           src={premiumLocked}
-          alt="Premium content — subscribe to unlock"
+          alt={
+            neededLevel
+              ? `Premium content — requires ${neededLevel} premium`
+              : 'Premium content — subscribe to unlock'
+          }
           className="w-full h-full object-contain"
         />
       ) : first_page_url ? (
@@ -87,10 +92,11 @@ export default function QuestionCard({ item, onClick, selectable = false, select
             </span>
             {locked ? (
               <Link
-                to="/subscribe"
+                to={subscribeHref(item)}
+                title={neededLevel ? `Requires ${neededLevel} premium` : undefined}
                 className="text-xs font-medium px-2.5 py-1 rounded border border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 transition-colors"
               >
-                🔒 Subscribe
+                🔒 {neededLevel ? `${neededLevel} premium` : 'Subscribe'}
               </Link>
             ) : (
               <button
