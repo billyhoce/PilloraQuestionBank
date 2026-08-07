@@ -7,8 +7,8 @@ Existing ``role='premium'`` users bought unrestricted premium, so they are
 granted *every* school level — over-granting is visible and revocable in User
 Management, whereas silently downgrading a paying account is not.
 
-Revision ID: a1b2c3d4e5f7
-Revises: c9d8e7f6a5b4
+Revision ID: 9f0a1b2c3d4e
+Revises: a1b2c3d4e5f7
 Create Date: 2026-08-07 00:00:00.000000
 
 """
@@ -18,8 +18,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'a1b2c3d4e5f7'
-down_revision: Union[str, None] = 'c9d8e7f6a5b4'
+revision: str = '9f0a1b2c3d4e'
+down_revision: Union[str, None] = 'a1b2c3d4e5f7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
