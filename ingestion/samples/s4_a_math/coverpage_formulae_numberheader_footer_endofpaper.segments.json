@@ -1,0 +1,27 @@
+{
+  "pdf": "samples/s4_a_math/coverpage_formulae_numberheader_footer_endofpaper.pdf",
+  "paper": "coverpage_formulae_numberheader_footer_endofpaper",
+  "page_count": 19,
+  "generated_at": "2026-10-03T19:55:19+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 3,
+      "last_page": 19,
+      "note": "Paper 2 question paper, ending on END OF PAPER; p1 cover, p2 formula sheet",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    }
+  ],
+  "attempts": [],
+  "warnings": [],
+  "config": null
+}

@@ -1,0 +1,44 @@
+{
+  "pdf": "samples/s4_a_math/coverpage_formulae_numberheader_footer_blankpage_graphgrid.pdf",
+  "paper": "coverpage_formulae_numberheader_footer_blankpage_graphgrid",
+  "page_count": 22,
+  "generated_at": "2026-10-03T19:55:19+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 3,
+      "last_page": 19,
+      "note": "Paper 1 question paper, p17 a blank graph grid; p1 cover, p2 formula sheet, p20 blank padding",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 21,
+      "last_page": 21,
+      "note": "Paper 1 answer key, one page of table; p22 blank padding",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0,
+        2
+      ],
+      "reading_order": "down"
+    }
+  ],
+  "attempts": [],
+  "warnings": [
+    "1 page(s) between sections belong to none of them (20); front matter for the section that follows reads this way, and so does a section left out altogether"
+  ],
+  "config": null
+}

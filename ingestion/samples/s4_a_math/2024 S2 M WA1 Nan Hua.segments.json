@@ -1,0 +1,42 @@
+{
+  "pdf": "samples/s4_a_math/2024 S2 M WA1 Nan Hua.pdf",
+  "paper": "2024 S2 M WA1 Nan Hua",
+  "page_count": 10,
+  "generated_at": "2026-10-06T10:46:14+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 2,
+      "last_page": 9,
+      "note": "WA1 question paper, ending on End of Paper; p1 cover",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 10,
+      "last_page": 10,
+      "note": "Answer Key, one page: two column pairs sharing one row grid, a graph in the 6b cell",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0,
+        2
+      ],
+      "reading_order": "across"
+    }
+  ],
+  "attempts": [],
+  "warnings": [],
+  "config": null
+}

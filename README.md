@@ -29,6 +29,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 │   ├── ai/             # Anthropic Claude clients (filename + topic labeling)
 │   └── main.py         # app factory + /api/health
 ├── alembic/            # DB migrations (initial schema + seed reference data)
+├── ingestion/          # PDF ingester library (question_extractor, ingester) + samples + Tesseract image; must not import app/
 ├── tests/              # pytest — unit (SQLite + moto); tests/integration needs live creds
 ├── frontend/           # React + Vite SPA
 │   └── src/
@@ -36,7 +37,7 @@ This project is small (1–2 devs, low traffic). The workflow below favours simp
 ├── docs/               # ARCHITECTURE, DATA_MODEL, DEPLOYMENT + one file per feature in features/
 ├── .github/workflows/  # ci.yml (PRs), deploy.yml (push to main)
 ├── Dockerfile          # backend production image
-├── docker-compose.yml  # local MinIO (S3-compatible dev only)
+├── docker-compose.yml  # local MinIO (S3-compatible dev) + `tesseract` OCR image build (`docker compose build tesseract`)
 ├── requirements.txt    # runtime deps
 ├── requirements-dev.txt # test/dev deps (pytest, moto, httpx, ...)
 └── .env.example        # local dev env template
@@ -107,6 +108,7 @@ Migrations are auto-applied on deploy (see [CD](#cd-on-push-to-main)), after a s
 | Frontend build | Vite | `cd frontend && npm run build` |
 
 Notes:
+- `ingestion/` has no unit-test suite: verify a change by running its commands over `ingestion/samples/` before and after and diffing the output ([ingestion/CLAUDE.md](./ingestion/CLAUDE.md)). CI only runs the `app`-independence test for it.
 - PDF layout changes need a visual check as well as tests — see [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md).
 - Frontend lint currently reports pre-existing warnings under the newer ESLint/react-hooks rules; it's informational and does not block CI.
 

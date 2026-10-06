@@ -23,6 +23,7 @@ question by reading one file instead of three.
 | [features/browse.md](./features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
 | [features/paper-generation.md](./features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
 | [features/generation-config.md](./features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
+| [../ingestion/README.md](../ingestion/README.md) | The PDF ingester package (booklet segmentation, splitting, question-rectangle location, answer tables + OCR); verified by diffing `ingestion/samples/` output, not by unit tests |
 | [features/pdf-rendering.md](./features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
 
 ## Operations
