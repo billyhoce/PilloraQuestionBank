@@ -1,19 +1,26 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
+    Enum,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     false,
     func,
     select,
+    text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.db import Base
@@ -205,6 +212,10 @@ class Paper(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Provenance: the auto-import job this paper came from (NULL for manual imports).
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="SET NULL"), nullable=True
+    )
 
     questions: Mapped[list["Question"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
 
@@ -361,3 +372,124 @@ Question.total_marks = column_property(
     .correlate_except(QuestionPart)
     .scalar_subquery()
 )
+
+
+# ---------------------------------------------------------------------------
+# Auto-import jobs
+#
+# JSONB / INT[] are Postgres types; the unit tests build the schema on SQLite,
+# so each is a portable JSON type with a Postgres variant (as the migration
+# creates them).
+# ---------------------------------------------------------------------------
+
+_JSON = JSON().with_variant(JSONB(), "postgresql")
+_INT_ARRAY = JSON().with_variant(ARRAY(Integer()), "postgresql")
+
+INGEST_JOB_STATUSES = (
+    "queued", "running", "review_ready", "failed", "confirmed", "cancelled", "expired",
+)
+INGEST_TASK_STATUSES = (
+    "pending", "ready", "running", "done", "skipped", "failed", "blocked",
+)
+
+
+class IngestJob(Base):
+    """One automatic import of a source PDF. See docs/features/ingestion.md."""
+
+    __tablename__ = "ingest_job"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Enum(*INGEST_JOB_STATUSES, name="ingest_job_status"),
+        nullable=False,
+        default="queued",
+        server_default="queued",
+    )
+    proposal: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    proposal_edited: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    # Run report; the worker's ``register`` task stores ``filename_metadata`` here.
+    report: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    confirmed_paper_ids: Mapped[list[int] | None] = mapped_column(_INT_ARRAY, nullable=True)
+
+    tasks: Mapped[list["IngestTask"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="IngestTask.id",
+    )
+
+
+class IngestTask(Base):
+    """One unit of work in a job; ``section`` is NULL for job-level stages."""
+
+    __tablename__ = "ingest_task"
+    __table_args__ = (
+        UniqueConstraint("job_id", "section", "stage", name="uq_ingest_task_job_section_stage"),
+        # A UNIQUE over a NULL ``section`` never conflicts in Postgres, so
+        # job-level tasks (section NULL) get their own partial unique index.
+        Index(
+            "uq_ingest_task_job_stage_jobwide",
+            "job_id",
+            "stage",
+            unique=True,
+            postgresql_where=text("section IS NULL"),
+            sqlite_where=text("section IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False
+    )
+    section: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(
+        Enum(*INGEST_TASK_STATUSES, name="ingest_task_status"),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warnings: Mapped[list] = mapped_column(
+        _JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    job: Mapped[IngestJob] = relationship(back_populates="tasks")
+
+
+class WorkerHeartbeat(Base):
+    """Single row (``id = 1``) the ingest worker touches so the API can tell it is alive."""
+
+    __tablename__ = "worker_heartbeat"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_worker_heartbeat_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    current_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="SET NULL"), nullable=True
+    )

@@ -42,7 +42,8 @@ app/
 │                   #   premium.py (who may open which premium paper)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), rich_text.py, sample_data.py (synthetic fixtures)
-├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers
+├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers;
+│                   # object_store.py — the ObjectStore (put/get/presign/delete_prefix) the import jobs use
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
 ├── deps.py         # FastAPI providers for outbound I/O (presigner, image fetcher, AI labeller)
@@ -59,9 +60,11 @@ module's internals is the smell that puts something here.
 ### Outbound I/O goes through `Depends`
 
 S3 and the Claude API reach the routes as injected callables from `app/deps.py` —
-`get_presigner`, `get_image_fetcher`, `get_question_labeller` — not as module-level imports the
+`get_presigner`, `get_image_fetcher`, `get_question_labeller`, `get_object_store`,
+`get_metadata_extractor` — not as module-level imports the
 route calls directly. Production gets the real client; `tests/conftest.py` swaps in a fake via
-`app.dependency_overrides` (the `fake_presign`, `fake_image_bytes` and `stub_labeller` fixtures).
+`app.dependency_overrides` (the `fake_presign`, `fake_image_bytes`, `stub_labeller`, `fake_object_store` and
+`fake_metadata_extractor` fixtures).
 
 The point is that callers and tests cross the **same** seam. Patching a name inside a route module
 couples a test to that module's import list, so relocating a helper breaks tests that never
@@ -82,6 +85,8 @@ which is why `scripts/generate_sample_pdf.py` can drive the real engine from an 
 - `delete_object(key)` — callers commit the DB deletion **before** removing objects, since S3
   deletes are irreversible.
 - `get_image_bytes(key)` — raw bytes for server-side use (AI labelling, PDF rendering).
+- `put_object(key, bytes, content_type)` / `delete_prefix(prefix)` — generic put and bulk delete,
+  used through `ObjectStore` (`app/storage/object_store.py`) by the auto-import jobs.
 
 **Local dev:** `boto3` points at an S3-compatible endpoint via `S3_ENDPOINT_URL` (unset in
 production) — same code path, no special-casing.
