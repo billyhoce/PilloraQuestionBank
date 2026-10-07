@@ -222,3 +222,115 @@ def test_record_filename_metadata_falls_back_to_empty_on_error(db_session, admin
 
     assert record_filename_metadata(job, db_session, boom) == {}
     assert job.report == {"filename_metadata": {}}
+
+
+# --- retry, progress and worker liveness -----------------------------------
+
+
+def _tasks(db_session, job_id):
+    db_session.expire_all()
+    return {t.stage: t for t in db_session.get(IngestJob, uuid.UUID(job_id)).tasks}
+
+
+def _seed_failed_job(db_session, job_id):
+    """register done; segment failed; split done (stale, downstream); report blocked."""
+    job = db_session.get(IngestJob, uuid.UUID(job_id))
+    t = _tasks(db_session, job_id)["register"]
+    t.status, t.attempts = "done", 1
+    for stage, status, attempts in (("segment", "failed", 3), ("split", "done", 1), ("report", "blocked", 0)):
+        job.tasks.append(IngestTask(section=None, stage=stage, status=status, attempts=attempts, error="boom" if status == "failed" else ""))
+    job.status = "failed"
+    job.error = "segment failed: boom"
+    db_session.flush()
+
+
+def test_retry_resets_failed_blocked_and_downstream(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    _seed_failed_job(db_session, job_id)
+
+    resp = admin_client.post(f"/api/import/jobs/{job_id}/retry")
+    assert resp.status_code == 200
+    assert resp.json()["reopened"] == 3
+    tasks = _tasks(db_session, job_id)
+    assert tasks["register"].status == "done"  # upstream of the failure: untouched
+    assert tasks["segment"].status == "ready" and tasks["segment"].attempts == 0
+    assert tasks["segment"].error == ""
+    assert tasks["split"].status == "pending"  # downstream finished task, waits for segment
+    assert tasks["report"].status == "pending"
+    body = admin_client.get(f"/api/import/jobs/{job_id}").json()
+    assert body["status"] == "running" and body["error"] is None  # re-derived; the worker picks it up
+
+
+def test_retry_with_nothing_broken_is_a_noop(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    resp = admin_client.post(f"/api/import/jobs/{job_id}/retry")
+    assert resp.status_code == 200 and resp.json()["reopened"] == 0
+    assert resp.json()["status"] == "queued"
+
+
+@pytest.mark.parametrize("status", ["cancelled", "confirmed", "expired"])
+def test_retry_of_api_owned_job_conflicts(admin_client, db_session, fake_object_store, status):
+    job_id = upload(admin_client).json()["job_id"]
+    db_session.get(IngestJob, uuid.UUID(job_id)).status = status
+    db_session.flush()
+    assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 409
+
+
+def test_retry_non_admin_forbidden(public_client):
+    assert public_client.post(f"/api/import/jobs/{uuid.uuid4()}/retry").status_code == 403
+
+
+def test_retry_unknown_or_other_admins_job_is_404(admin_client, db_session, fake_object_store):
+    from tests.conftest import _create_user
+    other = _create_user(db_session, "admin2@test.com", "x", "admin")
+    job = IngestJob(created_by=other.id, filename="t.pdf", source_key="k", sha256="0" * 64, page_count=1)
+    db_session.add(job)
+    db_session.flush()
+    assert admin_client.post(f"/api/import/jobs/{job.id}/retry").status_code == 404
+    assert admin_client.post(f"/api/import/jobs/{uuid.uuid4()}/retry").status_code == 404
+
+
+def test_list_and_detail_report_progress(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    row = admin_client.get("/api/import/jobs").json()["data"][0]
+    assert (row["stage"], row["tasks_done"], row["tasks_total"]) == (None, 0, 1)
+
+    job = db_session.get(IngestJob, uuid.UUID(job_id))
+    reg = job.tasks[0]
+    reg.status, reg.warnings, reg.finished_at = "done", ["w1", "w2"], datetime(2026, 1, 1, tzinfo=UTC)
+    job.tasks.append(IngestTask(section=None, stage="segment", status="running"))
+    job.tasks.append(IngestTask(section=None, stage="split", status="pending", needs_review=True))
+    db_session.flush()
+    row = admin_client.get("/api/import/jobs").json()["data"][0]
+    assert row["stage"] == "segment"  # the running task
+    assert (row["tasks_done"], row["tasks_total"], row["warnings_count"], row["needs_review"]) == (1, 3, 2, True)
+
+    job.tasks[1].status = "done"
+    job.tasks[1].finished_at = datetime(2026, 1, 2, tzinfo=UTC)
+    db_session.flush()
+    detail = admin_client.get(f"/api/import/jobs/{job_id}").json()
+    assert detail["stage"] == "segment"  # nothing running: the latest finished
+
+
+def test_worker_liveness_from_heartbeat(admin_client, db_session, fake_object_store):
+    from datetime import timedelta
+    from app.models.orm import WorkerHeartbeat
+    from app.services.ingest_jobs import WORKER_STALE_SECONDS
+
+    job_id = upload(admin_client).json()["job_id"]
+    listing = admin_client.get("/api/import/jobs").json()
+    assert listing["worker_alive"] is False and listing["heartbeat_age_s"] is None  # never started
+
+    now = datetime.now(UTC)
+    db_session.add(WorkerHeartbeat(id=1, seen_at=now - timedelta(seconds=10)))
+    db_session.flush()
+    listing = admin_client.get("/api/import/jobs").json()
+    assert listing["worker_alive"] is True and 9 <= listing["heartbeat_age_s"] <= 15
+    assert admin_client.get(f"/api/import/jobs/{job_id}").json()["worker_alive"] is True
+
+    db_session.get(WorkerHeartbeat, 1).seen_at = now - timedelta(seconds=WORKER_STALE_SECONDS + 30)
+    db_session.flush()
+    listing = admin_client.get("/api/import/jobs").json()
+    assert listing["worker_alive"] is False and listing["heartbeat_age_s"] >= WORKER_STALE_SECONDS
+    detail = admin_client.get(f"/api/import/jobs/{job_id}").json()
+    assert detail["worker_alive"] is False and detail["status"] == "queued"

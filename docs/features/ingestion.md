@@ -15,8 +15,9 @@ POST   /api/import/save-topics      -- persist user-reviewed parts for a paper's
 DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
 
 POST   /api/import/jobs             -- (Auto-detect) submit a PDF as an ingest job; returns {job_id}
-GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first
-GET    /api/import/jobs/{id}        -- one job, its report and its tasks
+GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first, with progress + worker_alive
+GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
+POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
@@ -45,9 +46,27 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
   needs the DB reference data (`ingestion/` never imports `app`).
 - `GET /api/import/jobs?status=` — **only jobs the requesting admin created**, newest first, as
-  `{"data": [...]}`; an unknown `status` is `422`.
-- `GET /api/import/jobs/{id}` — the job plus `report` and its `tasks`. Another admin's job, or an
-  unknown id, is `404`.
+  `{"data": [...], "worker_alive": bool, "heartbeat_age_s": int|null}`; an unknown `status` is `422`.
+  Each job carries its progress (below).
+- `GET /api/import/jobs/{id}` — the job plus `report`, its `tasks` (status, attempts, duration,
+  warnings, reason/error, ...), its progress and `worker_alive` / `heartbeat_age_s`. Another admin's
+  job, or an unknown id, is `404`.
+- `POST /api/import/jobs/{id}/retry` — runs the pipeline's own `Runner.retry` over the `ingest_task`
+  rows (`_RequestStore` in `app/services/ingest_jobs.py`: `SqlStore` on the request's session), so
+  the dependency rules (needs, soft needs, `report` after the sections, per-route chains) are not
+  re-implemented. Failed and blocked tasks, and every finished task downstream of them, go back to
+  `ready` (or `pending` while their needs are unfinished) with `attempts` reset; the job status is
+  re-derived (`queued`/`running`) so the worker picks it up. Returns the job plus `reopened` (a
+  count; `0` when nothing was broken). A `cancelled`, `confirmed` or `expired` job is a `409`.
+- **Progress** on every job (`job_progress`): `stage` — the stage of the running task, else of the
+  most recently finished task, `null` before anything has started; `tasks_done` / `tasks_total` —
+  tasks `done` or `skipped` over all tasks (the total grows as sections fan out);
+  `warnings_count` — warnings summed over the tasks; `needs_review` — any task flagged.
+- **Worker liveness**: `worker_alive` is true when the `worker_heartbeat` row (touched every 30 s)
+  is at most `WORKER_STALE_SECONDS` (90, `app/services/ingest_jobs.py`) old; `heartbeat_age_s` is
+  its age in whole seconds. No row (worker never started) gives `false` / `null`. The server computes
+  both so the UI never compares clocks. With the worker stopped a new job stays `queued`; starting
+  the worker drains it.
 - `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
   `tmp/ingest/{id}/` prefix (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
   `cancelled` or `expired` job is a `409`.
@@ -81,8 +100,14 @@ extracted from — or when the pipeline ends with no proposal. A job in an API-o
 
 `ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in
 progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
-compact drop zone (one job per dropped PDF) above the job list — filename, status, created time and
-a Cancel button for jobs that can still be cancelled — with a manual Refresh button (no polling yet).
+compact drop zone (one job per dropped PDF) above the job list. Each row shows the filename (click
+to open the job detail), status, the current stage with a `done/total` progress bar, the warnings
+count, a "Needs review" marker, created time, and Retry and Cancel buttons. The list polls
+`GET /api/import/jobs` every 3 s (`POLL_MS`) while any job is `queued` or `running` and stops when
+none is and on unmount; Refresh is still there. While a job is active and `worker_alive` is false
+the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
+lists every task with its section, status, duration, warnings and reason or error, and refreshes
+with each poll.
 
 ### The worker
 

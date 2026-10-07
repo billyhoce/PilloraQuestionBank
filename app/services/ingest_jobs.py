@@ -1,17 +1,28 @@
-"""Auto-import jobs: create, list and cancel. Processing lives in the worker."""
+"""Auto-import jobs: create, list, cancel, retry and progress. Processing lives in the worker."""
 
 import hashlib
 import logging
 import uuid
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
-from app.models.orm import IngestJob, IngestTask
+from app.models.orm import IngestJob, IngestTask, WorkerHeartbeat
 from app.storage.object_store import ObjectStore
+from app.worker.store import SqlStore
 
 log = logging.getLogger(__name__)
+
+# The worker touches its heartbeat every 30 s (app.worker.main); older than this and the API
+# reports it offline. The one place the threshold lives: the UI only reads ``worker_alive``.
+WORKER_STALE_SECONDS = 90
+# Job states retry does not apply to (the API owns them; same set as cancel refuses).
+_NOT_RETRYABLE = ("confirmed", "cancelled", "expired")
+_SETTLED = ("done", "skipped")
 
 
 class InvalidPdfError(ValueError):
@@ -108,3 +119,82 @@ def cancel_job(job: IngestJob) -> str:
         raise JobNotCancellableError(job.status)
     job.status = "cancelled"
     return job_prefix(job.id)
+
+
+class JobNotRetryableError(Exception):
+    def __init__(self, status: str):
+        super().__init__(status)
+        self.status = status
+
+
+def heartbeat_age_s(db: Session, now: datetime | None = None) -> float | None:
+    """Seconds since the worker last touched its heartbeat; ``None`` if it never has."""
+    row = db.get(WorkerHeartbeat, 1)
+    if row is None:
+        return None
+    seen = row.seen_at if row.seen_at.tzinfo else row.seen_at.replace(tzinfo=UTC)
+    return max(0.0, ((now or datetime.now(UTC)) - seen).total_seconds())
+
+
+def worker_state(db: Session) -> dict:
+    age = heartbeat_age_s(db)
+    return {
+        "worker_alive": age is not None and age <= WORKER_STALE_SECONDS,
+        "heartbeat_age_s": None if age is None else round(age),
+    }
+
+
+def job_progress(job: IngestJob) -> dict:
+    """Progress of a job from its tasks.
+
+    ``done``/``total`` count tasks (``done`` = done or skipped; ``total`` grows as the job's
+    sections fan out). ``stage`` is the stage of the running task, else of the task that
+    finished most recently, else ``None`` before anything has started."""
+    tasks = list(job.tasks)
+    running = next((t for t in tasks if t.status == "running"), None)
+    if running is not None:
+        stage = running.stage
+    else:
+        finished = [t for t in tasks if t.finished_at is not None]
+        # Naive (SQLite) and aware (Postgres) datetimes never mix within one backend.
+        stage = max(finished, key=lambda t: (t.finished_at, t.id)).stage if finished else None
+    return {
+        "stage": stage,
+        "tasks_done": sum(1 for t in tasks if t.status in _SETTLED),
+        "tasks_total": len(tasks),
+        "warnings_count": sum(len(t.warnings or ()) for t in tasks),
+        "needs_review": any(t.needs_review for t in tasks),
+    }
+
+
+def retry_job(job: IngestJob, db: Session) -> int:
+    """Return the job's failed and blocked tasks, and everything downstream of them, to ``ready``
+    by running the pipeline's own ``Runner.retry`` over the ``ingest_task`` rows; the job's
+    status is re-derived so the worker picks it up. Returns how many tasks were reopened."""
+    if job.status in _NOT_RETRYABLE:
+        raise JobNotRetryableError(job.status)
+    from pipeline.registry import default_registry
+    from pipeline.runner import Runner
+
+    store = _RequestStore(db)
+
+    def no_job_dir(_job_id: str) -> Path:
+        raise RuntimeError("the API never runs a stage")
+
+    db.flush()
+    reopened = Runner(store, default_registry(), no_job_dir).retry(str(job.id))
+    db.expire(job)  # the store updated the rows with bulk UPDATEs
+    return len(reopened)
+
+
+class _RequestStore(SqlStore):
+    """``SqlStore`` on the request's own session, so a retry shares its transaction (and a
+    test's savepoint) rather than opening and closing sessions of its own."""
+
+    def __init__(self, db: Session) -> None:
+        super().__init__(lambda: db, Path("."))
+        self._db = db
+
+    @contextmanager
+    def _session(self):
+        yield self._db
