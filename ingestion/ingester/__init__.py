@@ -8,7 +8,7 @@ from __future__ import annotations
 from .config import IngestConfig
 from .request import ModelAnswer
 from .router import IngestResult, Route, SectionReport, choose_route, ingest_paper
-from .segmenter import find_plan, fixture_path, segment_paper, too_large_to_ask
+from .segmenter import find_plan, fixture_path, segment_into, segment_paper, too_large_to_ask
 from .segments import (
     SEGMENTS_NAME,
     TEMPLATES,
@@ -20,7 +20,7 @@ from .segments import (
     read_plan,
     write_plan,
 )
-from .splitter import Section, SplitResult, split_paper
+from .splitter import Section, SplitResult, split_into, split_paper
 from .validation import anomalies, validate
 
 __all__ = [
@@ -44,7 +44,9 @@ __all__ = [
     "ingest_paper",
     "parse_label",
     "read_plan",
+    "segment_into",
     "segment_paper",
+    "split_into",
     "split_paper",
     "too_large_to_ask",
     "validate",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -179,7 +180,10 @@ class SegmentPlan:
 
 def write_plan_to(plan: SegmentPlan, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(plan.entry(), indent=2) + "\n", encoding="utf-8")
+    # Write beside, then rename: a reader (or a crash) never sees half a plan.
+    partial = path.with_name(path.name + ".tmp")
+    partial.write_text(json.dumps(plan.entry(), indent=2) + "\n", encoding="utf-8")
+    os.replace(partial, path)
     return path
 
 

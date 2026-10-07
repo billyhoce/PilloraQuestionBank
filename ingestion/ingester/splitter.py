@@ -76,9 +76,16 @@ class SplitResult:
 
 
 def split_paper(pdf: Path, output_dir: Path) -> SplitResult:
-    work_dir = output_dir / paper_name(pdf) / SPLIT_DIR
+    paper_dir = output_dir / paper_name(pdf)
+    return split_into(pdf, paper_dir, paper_dir / SPLIT_DIR)
+
+
+def split_into(pdf: Path, paper_dir: Path, work_dir: Path) -> SplitResult:
+    """:func:`split_paper` with the folders named: the plan is read from ``paper_dir``
+    and the section PDFs written to ``work_dir`` (which the stage runner builds
+    beside the final ``_split`` and swaps in once complete)."""
     with collect_warnings() as warnings:
-        sections, skipped, replaced = _split(pdf, output_dir, work_dir)
+        sections, skipped, replaced = _split(pdf, paper_dir, work_dir)
 
     result = SplitResult(
         pdf=pdf,
@@ -96,7 +103,7 @@ def split_paper(pdf: Path, output_dir: Path) -> SplitResult:
 
 
 def _split(
-    pdf: Path, output_dir: Path, work_dir: Path
+    pdf: Path, paper_dir: Path, work_dir: Path
 ) -> tuple[list[Section], list[str], bool]:
     paper = paper_name(pdf)
     try:
@@ -107,7 +114,7 @@ def _split(
         log.warning("%s: cannot replace the work directory %s (%s)", paper, work_dir, exc)
         return [], [], False
 
-    plan = find_plan(pdf, output_dir / paper)
+    plan = find_plan(pdf, paper_dir)
     if plan is None:
         log.warning("%s: no segments.json; run `segment` first; nothing was split", paper)
         return [], [], True
