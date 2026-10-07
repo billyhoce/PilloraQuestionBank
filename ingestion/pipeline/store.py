@@ -9,7 +9,7 @@ SQL treats NULLs as distinct, so a Postgres unique constraint needs
 
 Task statuses::
 
-    pending   waiting on a dependency
+    pending   waiting on a dependency (also where ``reopen`` puts a task to run again)
     ready     runnable; ``claim_ready`` picks from these
     running   claimed; its lease expires at ``lease_until``
     done / skipped / failed   finished
@@ -70,7 +70,7 @@ class Task:
     error: str = ""
     warnings: tuple[str, ...] = ()
     needs_review: bool = False
-    fingerprint: str | None = None  # filled in when staleness is detected
+    fingerprint: str | None = None  # of the inputs a ``done`` task's artefacts were made from
     lease_until: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -84,13 +84,29 @@ class Task:
 class Store(Protocol):
     # --- the runner's loop ------------------------------------------------
     def claim_ready(self, lease_seconds: float) -> Task | None:
-        """Atomically take the oldest ready task (earliest job first) as running."""
+        """Atomically take the oldest ready task (earliest job first) as running.
+
+        The stored fingerprint, warnings and review flag are cleared (a runner killed
+        mid-task must not leave a fingerprint vouching for half-written artefacts), but
+        the returned :class:`Task` still carries the previous run's values, so the runner
+        can complete a task whose fingerprint still matches without running it."""
 
     def heartbeat(self, task_id: int, lease_seconds: float) -> bool:
         """Extend a running task's lease; ``False`` when it is no longer ours."""
 
-    def complete(self, task_id: int, outcome: Outcome) -> bool:
-        """Record a ``done`` or ``skipped`` outcome on a running task."""
+    def complete(
+        self,
+        task_id: int,
+        outcome: Outcome,
+        *,
+        fingerprint: str | None = None,
+        spawn: Sequence[TaskSpec] = (),
+    ) -> bool:
+        """Record a ``done`` or ``skipped`` outcome on a running task, with the fingerprint
+        of the inputs it ran on (kept for a ``done`` task only) and the tasks its fan-out
+        creates, **in one transaction**: a crash cannot leave a finished fan-out stage
+        whose tasks were never created (``report`` would then run early). ``spawn`` is
+        ignored, and ``False`` returned, when the task is no longer ours."""
 
     def fail(self, task_id: int, outcome: Outcome) -> bool:
         """Record a ``failed`` outcome (its error, warnings) on a running task."""
@@ -101,6 +117,12 @@ class Store(Protocol):
     def reset_stale(self, retry_limit: int) -> list[Task]:
         """Hand back running tasks whose lease expired: ``ready`` again, or ``failed``
         once they have used ``retry_limit`` attempts. Returns the tasks changed."""
+
+    def reopen(self, task_ids: Sequence[int]) -> None:
+        """Return finished tasks (``done``, ``skipped``, ``failed``, ``blocked``) to
+        ``pending`` with no attempts used, keeping their fingerprint, warnings and review
+        flag so the run that follows can still reuse an unchanged result. Running, ready
+        and pending tasks are left alone."""
 
     # --- bookkeeping the runner also needs --------------------------------
     def add_job(self, job_id: str, source: str) -> Job: ...

@@ -29,10 +29,11 @@ from pathlib import Path
 
 from question_extractor.warnscope import collect_warnings
 
+from . import fingerprint
 from .artefacts import OPTIONS_NAME, read_options, write_json
 from .config import PipelineConfig
 from .outcome import FAILED, Outcome, StageContext, TaskSummary, Unmet, failed
-from .registry import UNROUTED, Registry
+from .registry import UNROUTED, Registry, Stage
 from .store import (
     BLOCKED,
     DONE,
@@ -51,6 +52,9 @@ from .store import (
 from .store import FAILED as TASK_FAILED
 
 log = logging.getLogger(__name__)
+
+# What a task that was found unchanged and not run again records as its reason.
+UNCHANGED = "unchanged: its inputs match the last run and its artefacts are present"
 
 # Statuses that stop a task's dependents from running.
 _BROKEN = (TASK_FAILED, BLOCKED)
@@ -166,23 +170,44 @@ class Runner:
         if task is None:
             return None
         self._refresh(task.job_id)
-        outcome = self._execute(task)
+        stage, ctx = self._prepare(task, {t.key: t for t in self.store.tasks(task.job_id)})
+        expected = self._fingerprint(stage, ctx)
+        unchanged = (
+            expected is not None
+            and task.fingerprint == expected
+            and fingerprint.outputs_exist(stage, ctx)
+        )
+        if unchanged:
+            # What the claim returns of the last run is what is still on disk: keep it.
+            log.info("%s %s: unchanged, not run again", task.stage, task.section or "-")
+            outcome = Outcome(
+                DONE,
+                reason=UNCHANGED,
+                needs_review=task.needs_review,
+                warnings=task.warnings,
+            )
+        else:
+            outcome = self._execute(task, stage, ctx)
         if outcome.status == FAILED:
             self.store.fail(task.id, outcome)
         else:
-            self.store.complete(task.id, outcome)
-        if (
-            outcome.status != FAILED
-            and task.section is None
-            and self.registry.get(task.stage).fan_out
-        ):
-            self._expand(task, outcome)
+            # A fan-out stage records its tasks in the same transaction as its own
+            # completion (a crash between the two would let `report` run early). A fan-out
+            # stage found unchanged has nothing new to create: its tasks are already there.
+            self.store.complete(
+                task.id,
+                outcome,
+                fingerprint=expected,
+                spawn=() if unchanged else self._fan_out(task, stage, outcome),
+            )
         self._refresh(task.job_id)
         return task
 
     def run(self, *, watch: bool = False) -> int:
         """Drain the queue; with ``watch`` keep polling for new work. Returns tasks run."""
         ran = 0
+        for job in self.store.jobs():
+            self.revalidate(job.id)
         while True:
             if self.run_one() is not None:
                 ran += 1
@@ -196,12 +221,11 @@ class Runner:
             self._sleep(self.config.poll_interval_seconds)
 
     # --- internals --------------------------------------------------------
-    def _execute(self, task: Task) -> Outcome:
+    def _prepare(self, task: Task, tasks: dict) -> tuple[Stage, StageContext]:
+        """The stage a task runs and the context it runs with, from the job's tasks as given."""
         job = self.store.get_job(task.job_id)
         job_dir = self.job_dir(task.job_id)
-        job_dir.mkdir(parents=True, exist_ok=True)
         route = None
-        tasks = {t.key: t for t in self.store.tasks(task.job_id)}
         if task.section is not None:
             siblings = [t.stage for t in tasks.values() if t.section == task.section]
             route = self.registry.route_of(siblings)
@@ -226,6 +250,20 @@ class Runner:
             unmet=unmet,
             tasks=summaries,
         )
+        return stage, ctx
+
+    @staticmethod
+    def _fingerprint(stage: Stage, ctx: StageContext) -> str | None:
+        """The fingerprint of the task's inputs now; ``None`` when they cannot be read
+        (the task then runs, and its stage reports whatever is wrong)."""
+        try:
+            return fingerprint.compute(stage, ctx)
+        except Exception:
+            log.debug(traceback.format_exc())
+            return None
+
+    def _execute(self, task: Task, stage: Stage, ctx: StageContext) -> Outcome:
+        ctx.job_dir.mkdir(parents=True, exist_ok=True)
         stopped = threading.Event()
         beat = threading.Thread(target=self._heartbeats, args=(task.id, stopped), daemon=True)
         beat.start()
@@ -278,15 +316,90 @@ class Runner:
             if not self.store.heartbeat(task_id, self.config.lease_seconds):
                 return
 
-    def _expand(self, task: Task, outcome: Outcome) -> None:
+    def _fan_out(self, task: Task, stage: Stage, outcome: Outcome) -> list[TaskSpec]:
         """A fan-out stage finished: one task per stage of each section's route."""
-        specs = [
-            TaskSpec(task.job_id, stage.name, section)
+        if not stage.fan_out or outcome.status == FAILED:
+            return []
+        return [
+            TaskSpec(task.job_id, chain_stage.name, section)
             for section in outcome.sections
-            for stage in self.registry.chain_for(outcome.routes.get(section, UNROUTED))
+            for chain_stage in self.registry.chain_for(outcome.routes.get(section, UNROUTED))
         ]
-        if specs:
-            self.store.add_tasks(specs)
+
+    # --- resuming and retrying ---------------------------------------------
+    def _dependents(self, tasks: dict) -> dict:
+        """For each task key, the keys of the tasks that wait on it: by ``needs``, by
+        ``soft_needs``, and (the ``after_sections`` stage) every section task."""
+        routes = _routes(self.registry, tasks.values())
+        waiting: dict = {key: set() for key in tasks}
+        for task in tasks.values():
+            route = routes.get(task.section)
+            stage = self.registry.get(task.stage, route)
+            deps = [
+                *self.registry.needs(task.stage, task.section, route),
+                *self.registry.soft_needs(task.stage, task.section, route),
+            ]
+            if stage.after_sections:
+                deps += [key for key, other in tasks.items() if other.section is not None]
+            for key in deps:
+                if key in waiting:
+                    waiting[key].add(task.key)
+        return waiting
+
+    def revalidate(self, job_id: str) -> list[Task]:
+        """Reopen the finished tasks of a job that are stale; returns them.
+
+        A ``done`` task is stale when its recorded fingerprint is not the one its inputs
+        give now (an input artefact, the configuration it reads or its code changed) or
+        when an artefact it should have left is missing (a scratch folder that was
+        rebuilt). Everything downstream of a stale task is stale with it. The reopened
+        tasks go back to ``pending`` and then ``ready``; each, when claimed, is run again
+        unless its fingerprint turns out unchanged (an upstream task that came out the
+        same). Failed tasks are left for :meth:`retry`.
+        """
+        tasks = {t.key: t for t in self.store.tasks(job_id)}
+        waiting = self._dependents(tasks)
+        stale: set = set()
+        for task in tasks.values():
+            if task.status != DONE:
+                continue
+            stage, ctx = self._prepare(task, tasks)
+            expected = self._fingerprint(stage, ctx)
+            if expected is None or task.fingerprint != expected or not fingerprint.outputs_exist(stage, ctx):
+                stale.add(task.key)
+        # Everything downstream of a stale task that has finished, whichever way, is stale.
+        stack = list(stale)
+        while stack:
+            for key in waiting[stack.pop()]:
+                if key not in stale and tasks[key].status in (DONE, SKIPPED):
+                    stale.add(key)
+                    stack.append(key)
+        return self._reopen(job_id, [tasks[key] for key in stale], "stale")
+
+    def retry(self, job_id: str) -> list[Task]:
+        """Return a job's failed and blocked tasks, and everything downstream of them that
+        has finished, to ``ready`` (via ``pending``: a task whose needs are not ``done`` yet
+        waits for them). Their attempts start again. Tasks that are running or still waiting
+        are left alone, as is everything not downstream of a failure. Returns the tasks reopened."""
+        tasks = {t.key: t for t in self.store.tasks(job_id)}
+        waiting = self._dependents(tasks)
+        chosen = {key for key, t in tasks.items() if t.status in _BROKEN}
+        stack = list(chosen)
+        while stack:
+            for key in waiting[stack.pop()]:
+                if key not in chosen and tasks[key].status in (DONE, SKIPPED):
+                    chosen.add(key)
+                    stack.append(key)
+        return self._reopen(job_id, [tasks[key] for key in chosen], "retry")
+
+    def _reopen(self, job_id: str, tasks: list[Task], why: str) -> list[Task]:
+        tasks = sorted(tasks, key=lambda t: t.id)
+        if tasks:
+            for task in tasks:
+                log.info("%s %s: %s, back to the queue", task.stage, task.section or "-", why)
+            self.store.reopen([t.id for t in tasks])
+            self._refresh(job_id)
+        return tasks
 
     def _refresh(self, job_id: str) -> None:
         settle(self.store, self.registry, job_id)

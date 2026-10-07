@@ -13,6 +13,7 @@ import shutil
 from ingester.splitter import split_into
 
 from .. import artefacts
+from ..fingerprint import source_input
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, JOB, Stage
 from ..sections import section_route
@@ -37,4 +38,13 @@ def run(ctx: StageContext) -> Outcome:
     )
 
 
-STAGE = Stage(name="split", scope=JOB, kind=CPU, run=run, needs=("segment",), fan_out=True)
+STAGE = Stage(
+    name="split",
+    scope=JOB,
+    kind=CPU,
+    run=run,
+    needs=("segment",),
+    fan_out=True,
+    inputs=lambda ctx: [source_input(ctx), ctx.path(artefacts.SEGMENTS_NAME)],
+    outputs=lambda ctx: [ctx.path(artefacts.SPLIT_DIR, artefacts.SPLIT_NAME)],
+)

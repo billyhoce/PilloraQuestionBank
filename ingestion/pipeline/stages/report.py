@@ -183,6 +183,20 @@ def _first(tasks: list[TaskSummary], status: str) -> TaskSummary | None:
     return next((t for t in tasks if t.status == status), None)
 
 
+def _inputs(ctx: StageContext) -> list:
+    """What the report is built from: the plan, the split map, every section's manifest and
+    how each other task ended (the report says what became of every section)."""
+    split = ctx.path(artefacts.SPLIT_DIR, artefacts.SPLIT_NAME)
+    manifests = sorted(ctx.job_dir.glob("*/manifest.json")) if ctx.job_dir.is_dir() else []
+    ended = sorted(
+        repr((t.section, t.stage, t.status, t.detail if t.status != "done" else "",
+              t.needs_review, t.warnings))
+        for t in ctx.tasks
+        if t.stage != STAGE.name
+    )
+    return [ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *ended]
+
+
 STAGE = Stage(
     name="report",
     scope=JOB,
@@ -190,4 +204,6 @@ STAGE = Stage(
     run=run,
     soft_needs=("register", "segment", "split"),
     after_sections=True,
+    inputs=_inputs,
+    outputs=lambda ctx: [ctx.path(artefacts.REPORT_NAME)],
 )

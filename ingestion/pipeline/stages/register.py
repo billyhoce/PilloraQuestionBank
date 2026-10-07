@@ -71,4 +71,13 @@ def run(ctx: StageContext) -> Outcome:
     return done(needs_review=needs_review)
 
 
-STAGE = Stage(name="register", scope=JOB, kind=CPU, run=run)
+STAGE = Stage(
+    name="register",
+    scope=JOB,
+    kind=CPU,
+    run=run,
+    inputs=lambda ctx: [ctx.source],
+    # job.json records the configuration's hash and the too-large check, so all of it counts
+    settings=lambda ctx: {"config": ctx.config.stage_config_hash()},
+    outputs=lambda ctx: [ctx.path(artefacts.JOB_NAME)],
+)

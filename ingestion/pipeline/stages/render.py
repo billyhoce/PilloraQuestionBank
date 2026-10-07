@@ -19,6 +19,7 @@ import logging
 from question_extractor.pipeline import DETECTIONS_NAME, render_saved
 from question_extractor.render import page_filename
 
+from ..fingerprint import plan_inputs, render_settings
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, QUESTION, SECTION, Stage
 from ..sections import load_section
@@ -45,4 +46,19 @@ def run(ctx: StageContext) -> Outcome:
     )
 
 
-STAGE = Stage(name="render", scope=SECTION, kind=CPU, run=run, needs=("locate",), route=QUESTION)
+def _outputs(ctx: StageContext) -> list:
+    out = [ctx.path(ctx.section, "review")]
+    return out + [ctx.path(ctx.section, "_debug")] if ctx.debug else out
+
+
+STAGE = Stage(
+    name="render",
+    scope=SECTION,
+    kind=CPU,
+    run=run,
+    needs=("locate",),
+    route=QUESTION,
+    inputs=lambda ctx: [*plan_inputs(ctx), ctx.path(ctx.section, DETECTIONS_NAME)],
+    settings=render_settings,
+    outputs=_outputs,
+)

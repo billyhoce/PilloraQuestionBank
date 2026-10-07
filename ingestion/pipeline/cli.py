@@ -84,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_runner_options(ingest)
 
+    retry = commands.add_parser(
+        "retry",
+        help="return a job's failed and blocked tasks, and everything downstream of them, to the queue",
+    )
+    retry.add_argument("job", help="a job id")
+
     status = commands.add_parser("status", help="show each job's tasks")
     status.add_argument("job", nargs="?", help="a job id (default: every job)")
     status.add_argument("--json", action="store_true", help="print JSON")
@@ -93,6 +99,17 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_runner_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=None, help=f"default: {IngestConfig.model}")
     parser.add_argument("--retry-model", default=None, help=f"default: {IngestConfig.retry_model}")
+    parser.add_argument(
+        "--lease-seconds",
+        type=float,
+        default=None,
+        metavar="S",
+        help=(
+            "how long a claimed task stays this runner's without a heartbeat (default: "
+            f"{PipelineConfig.lease_seconds:g}); a runner killed mid-task has its task handed "
+            "back after this long. Heartbeats go out every third of it. Not part of any fingerprint"
+        ),
+    )
     parser.add_argument(
         "--ocr-command",
         type=shlex.split,
@@ -121,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
             return _submit(args, store)
         if args.command == "run":
             return _run(args, store)
+        if args.command == "retry":
+            return _retry(args, store)
         return _status(args, store)
     finally:
         store.close()
@@ -153,12 +172,31 @@ def _run_config(args: argparse.Namespace) -> PipelineConfig:
     extract = ExtractConfig()
     if args.ocr_command:
         extract = replace(extract, ocr_command=tuple(args.ocr_command))
-    return replace(PipelineConfig(), ingest=IngestConfig(**overrides), extract=extract)
+    config = replace(PipelineConfig(), ingest=IngestConfig(**overrides), extract=extract)
+    if args.lease_seconds is not None:
+        if args.lease_seconds <= 0:
+            raise SystemExit("--lease-seconds must be above 0")
+        config = replace(config, lease_seconds=args.lease_seconds)
+    return config
 
 
 def _run(args: argparse.Namespace, store: Store) -> int:
     ran = _runner(args, store, _run_config(args)).run(watch=args.watch)
     log.info("ran %d task(s)", ran)
+    return 0
+
+
+def _retry(args: argparse.Namespace, store: Store) -> int:
+    """Queue a job's failed and blocked tasks, and what follows them, to run again;
+    ``pipeline run`` then runs them. Everything else keeps its result."""
+    if store.get_job(args.job) is None:
+        log.error("no job %s", args.job)
+        return 1
+    reopened = _runner(args, store, PipelineConfig()).retry(args.job)
+    if not reopened:
+        print("nothing to retry")
+    for task in reopened:
+        print(f"{task.stage}" + (f" {task.section}" if task.section else ""))
     return 0
 
 

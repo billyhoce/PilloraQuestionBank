@@ -46,6 +46,13 @@ rectangles, with every flag raised along the way. A proposal is a suggestion for
 review and correct; nothing in it is a stored question until the admin confirms it.
 
 **Fingerprint**
-A hash of what a task's artefact was produced from (the input artefacts, the stage's
-configuration and its code version). A task whose recorded fingerprint no longer matches what its
-inputs would give is stale and is run again.
+A hash of what a task's artefact was produced from (the content of the input artefacts, the
+slice of configuration and options the stage reads, and its code version), recorded when the task is
+`done`. A task whose recorded fingerprint no longer matches what its inputs would give, or whose
+artefacts are gone, is stale and is run again, with everything downstream of it; one whose fingerprint
+matches and whose artefacts exist completes without running.
+
+**Retry**
+Returning a job's failed and blocked tasks, and everything downstream of them, to the queue
+(`pipeline retry`). Distinct from the lease: a task whose runner died is handed back automatically
+until its retry limit; a retry is a person's request.

@@ -17,6 +17,7 @@ from question_extractor.ocr import read_tiff
 from question_extractor.tablepipeline import GRID_NAME, read_grid
 
 from .. import artefacts
+from ..fingerprint import extract_settings
 from ..outcome import Outcome, StageContext, done, failed, skipped
 from ..registry import SECTION, SUBPROCESS, TABLE, Stage
 from ..sections import load_section
@@ -41,5 +42,16 @@ def run(ctx: StageContext) -> Outcome:
 
 
 STAGE = Stage(
-    name="ocr", scope=SECTION, kind=SUBPROCESS, run=run, needs=("grid",), route=TABLE
+    name="ocr",
+    scope=SECTION,
+    kind=SUBPROCESS,
+    run=run,
+    needs=("grid",),
+    route=TABLE,
+    inputs=lambda ctx: [
+        ctx.path(ctx.section, GRID_NAME),
+        ctx.path(ctx.section, artefacts.CELLS_TIFF_NAME),
+    ],
+    settings=extract_settings,  # without ocr_command: where Tesseract runs, not how it reads
+    outputs=lambda ctx: [ctx.path(ctx.section, artefacts.OCR_NAME)],
 )

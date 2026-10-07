@@ -30,7 +30,7 @@ module map, the reasoning behind each heuristic and how to verify a change.
 
 - **`pipeline`** — runs a booklet as a job of small, file-based stages, each a task in a
   store (`register` → `segment` → `split`, then per section `locate` → `render` for question and
-  `annotated_booklet` sections; `grid` → `ocr` → `questions` → `render` for table sections, and `report` once every section has settled). `python -m pipeline ingest` runs a folder of PDFs and is what `ingester ingest` forwards to. A stage is
+  `annotated_booklet` sections; `grid` → `ocr` → `questions` → `render` for table sections, and `report` once every section has settled; `pipeline retry` and a fingerprint per task resume a killed or partly failed job). `python -m pipeline ingest` runs a folder of PDFs and is what `ingester ingest` forwards to. A stage is
   `run(ctx) -> outcome` that reads and writes artefacts under the job's folder; the runner
   claims, runs, records and fans out; the `Store` Protocol has a SQLite implementation here and
   a Postgres one in the webapp. `segment` and `split` call `ingester`'s functions, they do not

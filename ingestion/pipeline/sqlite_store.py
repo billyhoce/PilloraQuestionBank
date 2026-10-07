@@ -13,11 +13,13 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .outcome import Outcome
 from .store import (
+    BLOCKED,
     DONE,
     FAILED,
     PENDING,
@@ -130,11 +132,12 @@ class SQLiteStore:
                 if row is None:
                     self._db.execute("COMMIT")
                     return None
+                before = self._get(row["id"])
                 now = self._clock()
                 self._db.execute(
                     "UPDATE ingest_task SET status = ?, attempts = attempts + 1, "
                     "reason = '', error = '', warnings = '[]', needs_review = 0, "
-                    "started_at = ?, finished_at = NULL, duration_ms = NULL, "
+                    "fingerprint = NULL, started_at = ?, finished_at = NULL, duration_ms = NULL, "
                     "lease_until = ? WHERE id = ?",
                     (
                         RUNNING,
@@ -147,7 +150,13 @@ class SQLiteStore:
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
-            return self._get(row["id"])
+            # The row is cleared; the caller still sees what the last run left.
+            return replace(
+                self._get(row["id"]),
+                fingerprint=before.fingerprint,
+                warnings=before.warnings,
+                needs_review=before.needs_review,
+            )
 
     def heartbeat(self, task_id: int, lease_seconds: float) -> bool:
         with self._lock:
@@ -157,17 +166,36 @@ class SQLiteStore:
             )
             return cursor.rowcount == 1
 
-    def complete(self, task_id: int, outcome: Outcome) -> bool:
+    def complete(
+        self,
+        task_id: int,
+        outcome: Outcome,
+        *,
+        fingerprint: str | None = None,
+        spawn: Sequence[TaskSpec] = (),
+    ) -> bool:
         if outcome.status not in (DONE, SKIPPED):
             raise ValueError(f"complete() takes done or skipped, not {outcome.status}")
-        return self._finish(task_id, outcome)
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                finished = self._finish(task_id, outcome, fingerprint)
+                if finished and spawn:
+                    self.add_tasks(spawn)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+        return finished
 
     def fail(self, task_id: int, outcome: Outcome) -> bool:
         if outcome.status != FAILED:
             raise ValueError(f"fail() takes failed, not {outcome.status}")
         return self._finish(task_id, outcome)
 
-    def _finish(self, task_id: int, outcome: Outcome) -> bool:
+    def _finish(
+        self, task_id: int, outcome: Outcome, fingerprint: str | None = None
+    ) -> bool:
         with self._lock:
             row = self._db.execute(
                 "SELECT started_at FROM ingest_task WHERE id = ? AND status = ?",
@@ -180,7 +208,8 @@ class SQLiteStore:
             duration = int((now - started).total_seconds() * 1000) if started else None
             self._db.execute(
                 "UPDATE ingest_task SET status = ?, reason = ?, error = ?, warnings = ?, "
-                "needs_review = ?, lease_until = NULL, finished_at = ?, duration_ms = ? "
+                "needs_review = ?, fingerprint = ?, lease_until = NULL, finished_at = ?, "
+                "duration_ms = ? "
                 "WHERE id = ?",
                 (
                     outcome.status,
@@ -188,6 +217,7 @@ class SQLiteStore:
                     outcome.error,
                     json.dumps(list(outcome.warnings)),
                     int(outcome.needs_review),
+                    fingerprint if outcome.status == DONE else None,
                     _text(now),
                     duration,
                     task_id,
@@ -234,6 +264,16 @@ class SQLiteStore:
                         (READY, row["id"]),
                     )
             return [self._get(row["id"]) for row in rows]
+
+    def reopen(self, task_ids: Sequence[int]) -> None:
+        with self._lock:
+            for task_id in task_ids:
+                self._db.execute(
+                    "UPDATE ingest_task SET status = ?, attempts = 0, reason = '', error = '', "
+                    "lease_until = NULL, finished_at = NULL WHERE id = ? AND status IN "
+                    f"({', '.join(repr(s) for s in (DONE, SKIPPED, FAILED, BLOCKED))})",
+                    (PENDING, task_id),
+                )
 
     # --- bookkeeping ------------------------------------------------------
     def add_job(self, job_id: str, source: str) -> Job:

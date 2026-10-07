@@ -21,9 +21,10 @@ import shutil
 from ingester.router import table_layout
 from question_extractor import ExtractionError, grid_pages
 from question_extractor.ocr import encode_cells
-from question_extractor.tablepipeline import write_grid
+from question_extractor.tablepipeline import GRID_NAME, write_grid
 
 from .. import artefacts
+from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, SECTION, TABLE, Stage
 from ..sections import load_section
@@ -59,4 +60,14 @@ def run(ctx: StageContext) -> Outcome:
     )
 
 
-STAGE = Stage(name="grid", scope=SECTION, kind=CPU, run=run, needs=("split",), route=TABLE)
+STAGE = Stage(
+    name="grid",
+    scope=SECTION,
+    kind=CPU,
+    run=run,
+    needs=("split",),
+    route=TABLE,
+    inputs=plan_inputs,
+    settings=extract_settings,
+    outputs=lambda ctx: [ctx.path(ctx.section, GRID_NAME)],
+)

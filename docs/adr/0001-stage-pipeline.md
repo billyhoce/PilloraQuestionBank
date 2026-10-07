@@ -46,6 +46,13 @@ Run a booklet as a **job** of small **stages**, each recorded as a **task** in a
   runs them with one worker, and `ingester ingest` forwards to it.
 - Leases and heartbeats cover a runner that dies mid-task: a task whose lease lapses is made
   ready again until it has used its retry limit. Thresholds live in `PipelineConfig`.
+- A fan-out stage's completion and its section tasks are recorded in one `complete` call, so a crash
+  cannot leave the fan-out unrecorded (and `report` free to run early).
+- A `done` task records a **fingerprint** of its inputs, settings and code version, and each stage
+  declares its outputs. A run starts by reopening stale tasks (and what follows them); a claimed
+  task whose fingerprint still matches completes without running, which is what lets a resumed
+  or retried job, or a webapp worker whose scratch folder was rebuilt, redo only what changed.
+  `pipeline retry` returns failed and blocked tasks and their downstream to the queue.
 
 ## Consequences
 
