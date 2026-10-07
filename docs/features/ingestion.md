@@ -22,7 +22,11 @@ The two AI-topics routes are documented in [ai-labelling.md](./ai-labelling.md).
 ### 1. `POST /api/import/upload-pdf`
 
 - Accepts a single PDF (multipart). Non-PDF content types → `422`.
-- **PyMuPDF** renders every page to an RGB image at 300 dpi.
+- **PyMuPDF** renders each page to an RGB image at 300 dpi. Pages are processed **one at a time**
+  (`app/services/ingest.py::iter_pdf_pages` is a generator): a page is rendered, standardised,
+  encoded and uploaded, then released before the next is rendered. A 300 dpi page is ~26 MB, so
+  holding a whole booklet (~2 GB for 80 pages) would not fit the 6 GB VM; the peak is now one page's
+  pixmap/image plus the stored WebP bytes.
 - `app/pdf/image_processing.py::standardize` stores each page **content-only** (no margin),
   downscaling to a **1760 px** width (aspect preserved) only when wider, otherwise unchanged. Page
   margins and question numbers are added later by the generation engine. See

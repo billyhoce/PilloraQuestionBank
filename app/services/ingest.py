@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, UTC
+from collections.abc import Iterator
 from typing import Any
 
 import fitz  # PyMuPDF
@@ -12,31 +13,49 @@ from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
 
-def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
-    images = []
+def iter_pdf_pages(pdf_bytes: bytes) -> Iterator[Image.Image]:
+    """Yield each page as a 300 dpi RGB image, rendering lazily.
+
+    A 300 dpi A4 page is ~26 MB, so an 80-page booklet held at once is ~2 GB.
+    The pixmap is released as soon as its pixels are copied into the PIL image,
+    and the next page is not rendered until the caller asks for it.
+    """
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         for page in doc:
             pix = page.get_pixmap(dpi=300)
-            images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-    return images
+            try:
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            finally:
+                del pix
+            yield img
+            # The suspended generator frame would otherwise keep this page alive
+            # while the next one is rendered.
+            del img
 
 
 def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
     with Timer() as t_total:
-        with Timer() as t_raster:
-            images = pdf_to_images(pdf_bytes)
-        log.info(f"{'upload_pages':<22}| rasterize | {t_raster.s}  ({len(images)} pages)")
-
         upload_id = str(uuid.uuid4())
         pages = []
-        t_proc = t_s3 = 0.0
+        t_raster = t_proc = t_s3 = 0.0
 
-        for i, img in enumerate(images):
+        # Render, standardise and upload one page at a time, dropping every
+        # reference to a page before the next is rendered (see iter_pdf_pages).
+        page_iter = iter_pdf_pages(pdf_bytes)
+        i = 0
+        while True:
+            with Timer() as _t:
+                img = next(page_iter, None)
+            t_raster += _t.elapsed
+            if img is None:
+                break
+
             with Timer() as _t:
                 std = standardize(img)
                 webp = to_webp_bytes(std)
                 w, h = get_dimensions(std)
             t_proc += _t.elapsed
+            del img, std
 
             key = f"tmp/{upload_id}/page_{i}.webp"
 
@@ -44,14 +63,17 @@ def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
                 put_image(key, webp)
                 url = get_presigned_url(key, expires_in=7200)
             t_s3 += _t.elapsed
+            del webp
 
             pages.append({
                 "temp_key": key,
                 "url": url,
                 "dimensions": {"width": w, "height": h},
             })
+            i += 1
 
-        n = len(images)
+        n = len(pages)
+        log.info(f"{'upload_pages':<22}| rasterize | {t_raster:.3f}s  ({n} pages)")
         log.info(f"{'upload_pages':<22}| img_proc  | {t_proc:.3f}s  ({n} pages)")
         log.info(f"{'upload_pages':<22}| s3_upload | {t_s3:.3f}s  ({n} pages)")
 
@@ -137,7 +159,7 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         try:
             delete_object(temp_key)
         except Exception:
-            pass
+            del img
 
     return paper
 
