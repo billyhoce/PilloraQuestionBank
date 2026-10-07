@@ -25,39 +25,33 @@ Turns exam-paper PDFs into located questions, in three packages:
 flowchart TD
     pdf[/"booklet PDF<br/>question papers and answer papers bound together"/]
 
-    subgraph ING["ingester functions, run as pipeline stages"]
-        seg["segment<br/>label page ranges q1, a1, ...<br/>and each answer paper's template"]
-        plan[("segments.json")]
-        split["split<br/>one PDF per section,<br/>with a page map back to the booklet"]
-        route{"route<br/>by kind and template"}
-        seg --> plan --> split --> route
-    end
+    ing["ingester: segment + split<br/>one PDF per section"]
+    route{"route<br/>by kind and template"}
 
-    model[["Claude vision model<br/>only when no plan is on disk"]]
-    fixture[("committed fixture<br/>paper.segments.json")]
+    model[["Claude vision model"]]
+    tess[["Tesseract container"]]
 
-    subgraph QE["question_extractor"]
-        qp["question pipeline<br/>gutter numbers, boundaries, trim"]
-        tp["--table pipeline<br/>ruled grid, row labels, reading order"]
-    end
+    qr["question route<br/>question_extractor"]
+    tr["table route<br/>question_extractor --table"]
+    nr["not routed<br/>flagged for review"]
 
-    tess[["Tesseract container<br/>pillora-tesseract"]]
+    rep["report"]
+    out[("ingest.json + proposal.json")]
 
-    pdf --> seg
-    fixture -.-> seg
-    model -.-> seg
-    route -->|"question paper, or annotated_booklet<br/>answers, with a text layer"| qp
-    route -->|"table answers,<br/>digital or scanned"| tp
-    route -->|"no template, or a scanned<br/>question or annotated section"| nr["not routed<br/>flagged for review"]
-    tp -.->|"scanned question cells"| tess
-
-    qp --> res["per section folder<br/>manifest.json + pNN.png"]
-    tp --> res
-    tp --> tj[("tables.json<br/>row-level reading")]
-    res --> rep[("ingest.json<br/>every section's route, status, flags")]
+    pdf --> ing --> route
+    model -.-> ing
+    route --> qr
+    route --> tr
+    route --> nr
+    tr -.-> tess
+    qr --> rep
+    tr --> rep
     nr --> rep
-    res --> prop[("proposal.json + pages/<br/>the review page's document")]
+    rep --> out
 ```
+
+Each box is broken down below; the stage table, with every input and output, is in
+[pipeline/README.md](pipeline/README.md).
 
 ```bash
 python -m venv .venv
@@ -70,6 +64,106 @@ python -m pipeline submit paper.pdf && python -m pipeline run && python -m pipel
 python -m pipeline ingest samples/ --recursive --output-dir output/   # a folder, one <paper>/ each; `ingester ingest` is the same
 ```
 
+## The stages in detail
+
+### Segment and split
+
+`ingester`'s functions label the booklet's page ranges and cut it into one PDF per section, then
+each section is routed by its kind and template:
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart TD
+    pdf[/"booklet PDF"/]
+    reg["register<br/>sha256, page count, size, config hash"]
+    job[("job.json")]
+    seg["segment<br/>label page ranges q1, a1, ...<br/>and each answer paper's template"]
+    fixture[("committed fixture<br/>#lt;paper#gt;.segments.json")]
+    model[["Claude vision model<br/>only when no fixture is on disk"]]
+    plan[("segments.json<br/>sections, templates, table layout")]
+    split["split<br/>one PDF per section"]
+    parts[("_split/#lt;label#gt;.pdf<br/>_split/split.json: page map back to the booklet")]
+    route{"route<br/>by kind and template"}
+
+    pdf --> reg --> job
+    reg --> seg
+    fixture -.-> seg
+    model -.-> seg
+    seg --> plan --> split --> parts --> route
+    route -->|"question paper, or annotated_booklet<br/>answers, with a text layer"| qr["question route"]
+    route -->|"table answers,<br/>digital or scanned"| tr["table route"]
+    route -->|"no template, or a scanned<br/>question or annotated section"| nr["not routed<br/>flagged for review"]
+```
+
+### Question route
+
+Question papers and `annotated_booklet` answer sections with a text layer; `locate` is `skipped`
+when no page has text (a scan):
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart TD
+    sec[/"_split/#lt;label#gt;.pdf"/]
+    loc["locate<br/>gutter numbers, boundaries, trim"]
+    man[("#lt;label#gt;/manifest.json<br/>#lt;label#gt;/detections.json")]
+    ren["render"]
+    img[("pNN.png: rectangles in red<br/>review/pNN.webp: clean pages<br/>_debug/pNN.png: with --debug")]
+
+    sec --> loc --> man --> ren --> img
+```
+
+### Table route
+
+Table answer sections, digital or scanned. `questions` needs `ocr` only softly: a failed OCR still
+gives a manifest, with the scanned pages flagged:
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart TD
+    sec[/"_split/#lt;label#gt;.pdf"/]
+    grid["grid<br/>ruled grid: column pairs, row bands<br/>scans straightened first"]
+    gj[("grid.json<br/>labels unread")]
+    cells[("cells.tiff<br/>scanned question cells, one page each")]
+    ocr["ocr<br/>skipped when no page is scanned"]
+    tess[["Tesseract container<br/>pillora-tesseract"]]
+    oj[("ocr.json")]
+    q["questions<br/>row labels, reading order,<br/>one rectangle per run of rows"]
+    man[("manifest.json<br/>tables.json: row-level reading<br/>labelled.json")]
+    ren["render"]
+    img[("pNN.png: straightened, rectangles drawn<br/>review/pNN.webp: unstraightened, clean")]
+
+    sec --> grid
+    grid --> gj --> q
+    grid --> cells --> ocr
+    ocr <--> tess
+    ocr --> oj
+    oj -.->|"soft"| q
+    q --> man --> ren --> img
+```
+
+### Report
+
+Runs once every section task has settled, whatever became of them:
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart TD
+    plan[("segments.json<br/>_split/split.json")]
+    mans[("every section's manifest.json<br/>and review/ folder")]
+    tasks[("how every task ended<br/>not routed, failed, skipped")]
+    rep["report"]
+    ij[("ingest.json<br/>every section's route, status, flags")]
+    prop[("proposal.json + pages/pNN.webp<br/>the review page's document")]
+
+    plan --> rep
+    mans --> rep
+    tasks --> rep
+    rep --> ij
+    rep --> prop
+```
+
+`proposal.json` is described next.
+
 ## The proposal
 
 The `report` stage also writes `proposal.json`: the one document the webapp's review page reads
@@ -78,20 +172,68 @@ mentions (copied from each section's `review/pNN.webp`; `pNN` is the **booklet**
 digits or more). Everything in it is in booklet terms: page numbers are booklet pages, rectangles
 are PDF points on that page, image paths are relative to the job folder.
 
-```
+```json
 {
-  "papers": [                       # one per question section, with its answer section
-    {"label": "q1", "answer_label": "a1", "answer_template": "table",
-     "pages": [{"page": 7, "image": "pages/p07.webp", "width_pt": 595.3, "height_pt": 841.9,
-                "needs_review": false, "review_reason": null}],
-     "questions": [{"number": 1,
-                    "question_rects": [{"page": 7, "x0": 72.0, "y0": 100.0, "x1": 523.0, "y1": 160.0}],
-                    "answer_rects":   [{"page": 23, "x0": 72.0, "y0": 100.0, "x1": 290.0, "y1": 160.0}],
-                    "flags": []}],
-     "orphan_answers": [{"page": 23, "x0": ..., "y0": ..., "x1": ..., "y1": ...}],
-     "warnings": []}
+  "papers": [
+    {
+      "label": "q1",
+      "answer_label": "a1",
+      "answer_template": "table",
+      "pages": [
+        {
+          "page": 7,
+          "image": "pages/p07.webp",
+          "width_pt": 595.3,
+          "height_pt": 841.9,
+          "needs_review": false,
+          "review_reason": null
+        }
+      ],
+      "questions": [
+        {
+          "number": 1,
+          "question_rects": [
+            {
+              "page": 7,
+              "x0": 72.0,
+              "y0": 100.0,
+              "x1": 523.0,
+              "y1": 160.0
+            }
+          ],
+          "answer_rects": [
+            {
+              "page": 23,
+              "x0": 72.0,
+              "y0": 100.0,
+              "x1": 290.0,
+              "y1": 160.0
+            }
+          ],
+          "flags": []
+        }
+      ],
+      "orphan_answers": [
+        {
+          "page": 23,
+          "x0": ...,
+          "y0": ...,
+          "x1": ...,
+          "y1": ...
+        }
+      ],
+      "warnings": []
+    }
   ],
-  "unrouted": [{"label": "a2", "status": "not_routed", "reason": "...", "first_page": 31, "last_page": 36}],
+  "unrouted": [
+    {
+      "label": "a2",
+      "status": "not_routed",
+      "reason": "...",
+      "first_page": 31,
+      "last_page": 36
+    }
+  ],
   "warnings": []
 }
 ```
