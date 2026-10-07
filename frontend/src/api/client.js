@@ -91,6 +91,8 @@ export const api = {
     getJob: (id) => request('GET', `/api/import/jobs/${id}`),
     // The proposal under review, with presigned page-image URLs and pixel sizes.
     review: (id) => request('GET', `/api/import/jobs/${id}/review`),
+    // Save the corrected proposal ({papers: [{questions, orphan_answers}]}); 422 carries a message.
+    saveProposal: (id, body) => request('PUT', `/api/import/jobs/${id}/proposal`, body),
     // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
     manualPages: (id, first_page, last_page) =>
       request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),

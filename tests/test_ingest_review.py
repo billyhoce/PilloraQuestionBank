@@ -119,3 +119,79 @@ def test_manual_pages_rejects_bad_range(admin_client, db_session, admin_user, fa
     fake_object_store.objects[job.source_key] = doc.tobytes()
     resp = admin_client.post(f"/api/import/jobs/{job.id}/manual-pages", json={"first_page": first, "last_page": last})
     assert resp.status_code == 422
+
+
+# --- PUT /jobs/{id}/proposal ---------------------------------------------------------------
+
+def edit_body(paper_edit=None):
+    base = PROPOSAL["papers"][0]
+    return {"papers": [{"questions": base["questions"], "orphan_answers": base["orphan_answers"], **(paper_edit or {})}]}
+
+
+def test_put_requires_admin(public_client, fake_object_store):
+    assert public_client.put(f"/api/import/jobs/{uuid.uuid4()}/proposal", json=edit_body()).status_code == 403
+
+
+def test_put_persists_and_get_returns_it(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user)
+    q = {"number": 7, "question_rects": [rect(2, 50, 90)], "answer_rects": [{"page": 3, "x0": 10.0, "y0": 10.0, "x1": 100.0, "y1": 40.0}], "flags": []}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q]}))
+    assert r.status_code == 200
+    db_session.refresh(job)
+    assert job.proposal == PROPOSAL  # the original is kept
+    assert job.proposal_edited["papers"][0]["questions"][0]["number"] == 7
+    body = admin_client.get(f"/api/import/jobs/{job.id}/review").json()
+    assert body["edited"] is True
+    paper = body["proposal"]["papers"][0]
+    assert paper["questions"][0]["number"] == 7
+    assert paper["pages"][0]["url"].endswith("pages/p02.webp")
+    assert body["proposal"]["unrouted"][0]["label"] == "q2"
+
+
+def test_put_cannot_rewrite_non_editable_fields(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user)
+    body = edit_body()
+    body["papers"][0]["pages"] = [page(2, 9999, 9999)]
+    assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=body).status_code == 422
+    body = edit_body()
+    body["unrouted"] = []
+    assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=body).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "bad, message",
+    [
+        ({"page": 2, "x0": 72.0, "y0": 100.0, "x1": 700.0, "y1": 160.0}, "outside page 2"),
+        ({"page": 2, "x0": -1.0, "y0": 100.0, "x1": 200.0, "y1": 160.0}, "outside page 2"),
+        ({"page": 9, "x0": 1.0, "y0": 1.0, "x1": 20.0, "y1": 20.0}, "page 9 is not one"),
+        ({"page": 2, "x0": 80.0, "y0": 100.0, "x1": 80.0, "y1": 160.0}, "no area"),
+        ({"page": 2, "x0": 1.0, "y0": 1.0, "x1": 20.0}, "exactly page"),
+    ],
+)
+def test_put_rejects_bad_rects(admin_client, db_session, admin_user, fake_object_store, bad, message):
+    job = make_job(db_session, admin_user)
+    q = {"number": 1, "question_rects": [bad], "answer_rects": [], "flags": []}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q]}))
+    assert r.status_code == 422
+    assert message in r.json()["detail"]
+    db_session.refresh(job)
+    assert job.proposal_edited is None
+
+
+def test_put_rejects_duplicate_numbers_and_empty_questions(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user)
+    q = {"number": 1, "question_rects": [rect(2)], "answer_rects": [], "flags": []}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q, q]}))
+    assert r.status_code == 422 and "question number 1 is used more than once" in r.json()["detail"]
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [{**q, "question_rects": []}]}))
+    assert r.status_code == 422 and "at least one rectangle" in r.json()["detail"]
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [{**q, "number": "1"}]}))
+    assert r.status_code == 422
+
+
+def test_put_wrong_paper_count_and_status(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user)
+    assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json={"papers": []}).status_code == 422
+    other = make_job(db_session, admin_user, status="running")
+    assert admin_client.put(f"/api/import/jobs/{other.id}/proposal", json=edit_body()).status_code == 409
+    assert admin_client.put(f"/api/import/jobs/{uuid.uuid4()}/proposal", json=edit_body()).status_code == 404

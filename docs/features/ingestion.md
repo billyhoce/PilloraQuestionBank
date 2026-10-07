@@ -19,6 +19,7 @@ GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first
 GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
 POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
 GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
+PUT    /api/import/jobs/{id}/proposal -- save the admin's corrections as `proposal_edited`
 POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
@@ -75,7 +76,17 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
   `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
   SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`. A job with
-  no proposal yet is a `409`. Read-only: editing the proposal is a later step.
+  no proposal yet is a `409`.
+- `PUT /api/import/jobs/{id}/proposal` `{papers: [{questions, orphan_answers}, ...]}` — saves the
+  admin's edits as `ingest_job.proposal_edited`; the generated `proposal` is never touched. Admin-only;
+  `409` unless the job is `review_ready`. **Only the editable part is accepted**: one entry per
+  proposal paper holding exactly `questions` and `orphan_answers`, merged server-side onto the
+  *original* proposal (`save_edited_proposal`), so the client cannot rewrite `pages[]` (images, sizes),
+  labels, `unrouted` or warnings. Validation (`422` with a readable message, nothing stored): every
+  rectangle has exactly `page,x0,y0,x1,y1`, its page is one of that paper's `pages[]`, `x0<x1`,
+  `y0<y1` and it lies inside `[0,width_pt]×[0,height_pt]`; question numbers are positive integers
+  unique within a paper; a question has at least one question rectangle. Question numbers stay
+  integers (the proposal's type). The next `GET .../review` returns the edit (`edited: true`).
 - `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` (booklet pages, 1-based,
   inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
   Manual flow's own renderer), using the job's stored `filename_metadata` instead of a second Claude
@@ -139,7 +150,28 @@ the question rectangles (blue), answer rectangles (green) and unmatched `orphan_
 dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
 points by `rectToPx` in `reviewGeometry.js` (`width_px / width_pt` per axis, from the API's sizes).
 Right: the question list with each question's flags (`pixel_ink`, `grid_page`, `page N: reason`);
-clicking a question selects it and jumps to its first page. Read-only for now.
+clicking a question selects it and jumps to its first page.
+
+**Editing.** Click a rectangle to select it (its question is highlighted); the selected rectangle
+gets four edge handles to drag (pointer position → points via `clientToPt`), and Delete/Backspace
+removes it unless focus is in an input. In the question list each question has a number field
+(committed on blur/Enter; a duplicate or non-positive number is refused with the reason), and the
+selected question offers "Merge with previous", "Split before selected rectangle" and "Split
+selected rectangle in half". All edits are pure functions on the paper in `proposalReducer.js`
+(points; a refused edit returns the paper unchanged), covered by `proposalReducer.test.js`. Rules:
+- *Resize* clamps to the page and a 4 pt minimum size; works for question, answer and orphan rectangles.
+- *Delete* removes one rectangle. Deleting a question's last question rectangle deletes the question
+  and its answer rectangles become orphan answers (nothing disappears silently).
+- *Merge* folds a question into the previous one: it keeps the previous number and concatenates
+  question rects, answer rects and flags.
+- *Split* — between rectangles or by a horizontal cut through one (here the rectangle's midpoint;
+  adjust the edges afterwards). The first part keeps the number and **all answer rects**; the new
+  second part gets `max(number)+1` (renumber it) and no answers.
+
+Edits save through `PUT .../proposal` debounced by 800 ms (and immediately when leaving the page); the
+header shows Saving… / Saved / Not saved, with the server's message on a rejected save. Reloading
+shows the saved edits because `GET .../review` prefers `proposal_edited`. There is no "reset to
+original" yet.
 
 Every `unrouted` section is listed above the paper with its reason and page range. "Handle manually"
 calls `manual-pages` for that range, writes the Manual wizard's `sessionStorage` session

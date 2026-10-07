@@ -28,3 +28,13 @@ export function firstPageOf(question) {
   const pages = [...(question.question_rects || []), ...(question.answer_rects || [])].map(r => r.page)
   return pages.length ? Math.min(...pages) : null
 }
+
+// A pointer position as a point on the page: `box` is the overlay's on-screen bounding box
+// (getBoundingClientRect) showing the page image whole.
+export function clientToPt(clientX, clientY, box, page) {
+  const { sx, sy } = pageScale(page)
+  return {
+    x: ((clientX - box.left) * (page.width_px / box.width)) / sx,
+    y: ((clientY - box.top) * (page.height_px / box.height)) / sy,
+  }
+}

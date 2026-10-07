@@ -2,7 +2,7 @@ import uuid
 from typing import Optional
 
 import anthropic
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -31,9 +31,11 @@ from app.services.ingest_jobs import (
 )
 from app.services.ingest_review import (
     NoProposalError,
+    ProposalEditError,
     PageRangeError,
     build_review,
     extract_page_range,
+    save_edited_proposal,
 )
 from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
@@ -473,6 +475,29 @@ def review_ingest_job(
         return build_review(job, store)
     except NoProposalError:
         raise HTTPException(status_code=409, detail="This job has no proposal to review yet")
+
+
+@router.put("/jobs/{job_id}/proposal")
+def save_proposal(
+    job_id: uuid.UUID,
+    payload: dict = Body(...),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Save the admin's corrections as ``proposal_edited`` (the original ``proposal`` is kept).
+    Body: ``{"papers": [{"questions": [...], "orphan_answers": [...]}, ...]}``, one entry per
+    proposal paper; everything else is taken from the original."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's proposal cannot be edited")
+    try:
+        save_edited_proposal(job, payload)
+    except NoProposalError:
+        raise HTTPException(status_code=409, detail="This job has no proposal to edit yet")
+    except ProposalEditError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    db.commit()
+    return {"saved": True}
 
 
 class ManualPagesIn(BaseModel):
