@@ -39,6 +39,26 @@ class Anchor:
     when it continues the question sequence.
     """
 
+    def entry(self) -> dict:
+        """JSON-ready; ``line`` is a :meth:`.geometry.TextLine.entry`."""
+        return {
+            "page": self.page,
+            "number": self.number,
+            "line": self.line.entry(),
+            "top": self.top,
+            "repaired": self.repaired,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> Anchor:
+        return cls(
+            entry["page"],
+            entry["number"],
+            TextLine.from_entry(entry["line"]),
+            entry["top"],
+            entry["repaired"],
+        )
+
 
 def _corrected_top(anchor_line: TextLine, body_lines: list[TextLine], config: ExtractConfig) -> float:
     """Return the true top of the question that starts at ``anchor_line``.

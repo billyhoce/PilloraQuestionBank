@@ -38,7 +38,8 @@ docker/tesseract/              Tesseract OCR image (the root docker-compose.yml'
 samples/<paper>.segments.json  hand-written segmentation fixture, one per sample paper
 output/<paper name>/           manifest.json, segments.json, pNN.png, _split/, _debug/,
                                ingest.json, <label>/ (one extractor run per routed section),
-                               tables.json (a --table run's row-level reading)
+                               tables.json (a --table run's row-level reading),
+                               detections.json / grid.json (the saved intermediates the --debug renders are drawn from)
 ```
 
 ## Verifying a change

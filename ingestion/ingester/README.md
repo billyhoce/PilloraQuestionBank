@@ -21,7 +21,8 @@ python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--deb
 output/<paper>/segments.json
 output/<paper>/_split/<label>.pdf, split.json
 output/<paper>/<label>/manifest.json, pNN.png   # one question_extractor run per routed section
-                                                # (a table section adds tables.json)
+                                                # (every run adds detections.json, or grid.json for a table;
+                                                # a table section also adds tables.json)
 output/<paper>/ingest.json                      # the paper-level report
 ```
 

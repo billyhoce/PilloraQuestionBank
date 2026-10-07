@@ -37,7 +37,7 @@ import pymupdf
 from .calibration import cluster_1d
 from .config import ExtractConfig
 from .furniture import BodyBand
-from .geometry import PageGeometry
+from .geometry import PageGeometry, rect_entry, rect_from_entry
 
 _POSITION_TOL = 0.5
 """Rules whose leading edges are this close are the same grid line drawn twice."""
@@ -53,6 +53,26 @@ class GridPage:
     rows: int
     column_pitch: float
     row_pitch: float
+
+    def entry(self) -> dict:
+        """JSON-ready: ``bbox`` as ``[x0, y0, x1, y1]`` and the four numbers by name."""
+        return {
+            "bbox": rect_entry(self.bbox),
+            "columns": self.columns,
+            "rows": self.rows,
+            "column_pitch": self.column_pitch,
+            "row_pitch": self.row_pitch,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> GridPage:
+        return cls(
+            rect_from_entry(entry["bbox"]),
+            entry["columns"],
+            entry["rows"],
+            entry["column_pitch"],
+            entry["row_pitch"],
+        )
 
     def holds(self, rule: pymupdf.Rect) -> bool:
         """Whether ``rule`` is part of this grid rather than printed beside it.

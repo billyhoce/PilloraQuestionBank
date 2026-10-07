@@ -17,6 +17,22 @@ from .tokens import is_anchor_token
 log = logging.getLogger(__name__)
 
 
+def rect_entry(rect: pymupdf.Rect) -> list[float]:
+    """A rectangle as ``[x0, y0, x1, y1]``, in PDF points, unrounded.
+
+    The shape every ``entry()`` in this package writes a rectangle in. JSON writes
+    a float by its shortest round-tripping form, so :func:`rect_from_entry` gives
+    back the same four numbers.
+    """
+    return [rect.x0, rect.y0, rect.x1, rect.y1]
+
+
+def rect_from_entry(entry: list[float]) -> pymupdf.Rect:
+    """The rectangle :func:`rect_entry` wrote."""
+    x0, y0, x1, y1 = entry
+    return pymupdf.Rect(x0, y0, x1, y1)
+
+
 @dataclass(frozen=True)
 class Span:
     """One run of text within a line, with its own box.
@@ -38,6 +54,14 @@ class Span:
     :func:`_x0_after_leading_number`.
     """
 
+    def entry(self) -> dict:
+        """JSON-ready: ``{"rect": [x0, y0, x1, y1], "text", "content_x0"}``."""
+        return {"rect": rect_entry(self.rect), "text": self.text, "content_x0": self.content_x0}
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> Span:
+        return cls(rect_from_entry(entry["rect"]), entry["text"], entry["content_x0"])
+
 
 @dataclass(frozen=True)
 class TextLine:
@@ -58,6 +82,28 @@ class TextLine:
     a row like ``13  Angle ABC …`` it starts in the number gutter. The individual
     span boxes are what say where the content column really begins.
     """
+
+    def entry(self) -> dict:
+        """JSON-ready; ``spans`` is a list of :meth:`Span.entry`."""
+        return {
+            "page": self.page,
+            "rect": rect_entry(self.rect),
+            "text": self.text,
+            "leading_token": self.leading_token,
+            "leading_x": self.leading_x,
+            "spans": [span.entry() for span in self.spans],
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> TextLine:
+        return cls(
+            entry["page"],
+            rect_from_entry(entry["rect"]),
+            entry["text"],
+            entry["leading_token"],
+            entry["leading_x"],
+            tuple(Span.from_entry(span) for span in entry["spans"]),
+        )
 
     @property
     def x0(self) -> float:

@@ -21,7 +21,7 @@ import pymupdf
 from .calibration import Calibration
 from .config import ExtractConfig
 from .furniture import BodyBand
-from .geometry import PageGeometry
+from .geometry import PageGeometry, rect_entry, rect_from_entry
 
 
 @dataclass
@@ -30,6 +30,20 @@ class PageFigures:
 
     figures: list[pymupdf.Rect] = field(default_factory=list)
     dividers: list[pymupdf.Rect] = field(default_factory=list)
+
+    def entry(self) -> dict:
+        """JSON-ready: ``{"figures": [[x0, y0, x1, y1], ...], "dividers": [...]}``."""
+        return {
+            "figures": [rect_entry(r) for r in self.figures],
+            "dividers": [rect_entry(r) for r in self.dividers],
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> PageFigures:
+        return cls(
+            [rect_from_entry(r) for r in entry["figures"]],
+            [rect_from_entry(r) for r in entry["dividers"]],
+        )
 
     def divider_between(self, top: float, bottom: float) -> pymupdf.Rect | None:
         """The first divider whose centre lies strictly inside ``(top, bottom)``."""

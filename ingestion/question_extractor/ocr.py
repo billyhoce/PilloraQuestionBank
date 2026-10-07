@@ -31,14 +31,14 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 import pymupdf
 
 from .config import ExtractConfig
-from .geometry import Span, TextLine
+from .geometry import Span, TextLine, rect_entry, rect_from_entry
 from .scanpage import ScanPage
 from .tables import RowBand, TablePage
 
@@ -56,13 +56,53 @@ class OcrCell:
     """The row whose question cell this is."""
     rect: pymupdf.Rect
     """The cropped area, in the straightened page's points."""
-    image: np.ndarray
-    """The crop, padded on every side with ``ocr_pad`` white pixels."""
+    image: np.ndarray | None = field(compare=False)
+    """The crop, padded on every side with ``ocr_pad`` white pixels. ``None`` on a
+    cell read back from a file: the pixels are not saved, and are cut from the
+    page again when a run needs them."""
     origin_px: tuple[int, int]
     """Page pixel of the crop's top-left corner, before padding."""
     pad_px: int
     scale: float
     """Pixels per point."""
+
+    def entry(self, result: TablePage) -> dict:
+        """JSON-ready metadata, without the pixels.
+
+        ``row`` is ``[pair index, row index]``, both 1-based as in
+        :attr:`TablePage.sequence`, found in ``result`` (this cell's page); the
+        rest are ``rect`` as ``[x0, y0, x1, y1]``, ``origin_px`` as ``[x, y]``,
+        ``pad_px`` and ``scale``.
+        """
+        for pair in result.pairs:
+            for i, row in enumerate(pair.rows, start=1):
+                if row is self.row:
+                    return {
+                        "page": self.page,
+                        "row": [pair.index, i],
+                        "rect": rect_entry(self.rect),
+                        "origin_px": list(self.origin_px),
+                        "pad_px": self.pad_px,
+                        "scale": self.scale,
+                    }
+        raise ValueError(f"p{self.page}: the cell's row is not in the page given")
+
+    @classmethod
+    def from_entry(cls, entry: dict, result: TablePage) -> OcrCell:
+        """The cell :meth:`entry` described, its row looked up in ``result``,
+        with ``image`` left ``None``."""
+        pair_index, row_index = entry["row"]
+        pair = next(p for p in result.pairs if p.index == pair_index)
+        x, y = entry["origin_px"]
+        return cls(
+            entry["page"],
+            pair.rows[row_index - 1],
+            rect_from_entry(entry["rect"]),
+            None,
+            (x, y),
+            entry["pad_px"],
+            entry["scale"],
+        )
 
 
 @dataclass(frozen=True)

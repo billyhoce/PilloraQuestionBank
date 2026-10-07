@@ -156,6 +156,7 @@ groups side by side. Each question gets one rectangle per run of its rows, in th
 output/<paper>/pNN.png         # page whole, each question's rectangles in red
 output/<paper>/manifest.json   # questions and rectangles, output_mode "table_questions"
 output/<paper>/tables.json     # the row-level reading behind them, in PDF points
+output/<paper>/grid.json       # the labelled grid, lossless (GridPages.entry); --debug draws from it
 output/<paper>/_debug/pNN.png  # with --debug: pairs, rows, rules, table boxes, inferred edges
 ```
 
@@ -285,6 +286,17 @@ cells cropped for OCR), `read_labels` (question labels from the text layer or fr
 OCR failure comes back as flagged pages) and `group_questions` (rows → questions, renders,
 `manifest.json`, `tables.json`); `extract_table_paper` is the three in sequence.
 
+**Saved intermediates.** Every type a stage hands the next has an `entry()` / `from_entry()`
+pair: JSON-ready dicts, rects as `[x0, y0, x1, y1]` in PDF points, floats unrounded (JSON
+writes the shortest form that reads back as the same float), so `from_entry(entry(x)) == x`.
+The shape is in each docstring. `write_renders` always saves `detections.json` beside the
+manifest (the calibration and every `PageResult`: bands, anchors, figures, body band, grid)
+and `group_questions` always saves `grid.json` (`GridPages.entry()`: the labelled
+`TablePage`s, column pairs, row bands and the OCR cells' metadata, without pixels or the
+PDF's own `geoms`/`furniture`, which `from_entry` takes from the caller). Both are new files
+beside the old ones; `manifest.json` and `tables.json` are unchanged. The `--debug` renders
+are drawn from these files (`render_saved`, `read_grid`), not from the in-memory results.
+
 | Module | Stage |
 | --- | --- |
 | `geometry.py` | **The only module that talks to PyMuPDF extraction.** Page → `Span`, `TextLine`, `PageGeometry`. |
@@ -308,7 +320,7 @@ OCR failure comes back as flagged pages) and `group_questions` (rows → questio
 | `tables.py` | `--table`: rules → column pairs, row bands, labels, reading order. |
 | `tablequestions.py` | `--table`: rows → `Question`s, one `Band` per run of rows. |
 | `tablerender.py` | `--table --debug`: the row-level geometry on `_debug/pNN.png`. |
-| `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json` and `tables.json`); `extract_table_paper` runs them. |
+| `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json`, `tables.json` and `grid.json`); `extract_table_paper` runs them. |
 | `cli.py` / `__main__.py` | The command line. |
 
 Public surface: `ExtractConfig`, `extract_paper`, `locate_questions`, `LocatedPaper`, `Band`, `Question`, `PageResult`,
