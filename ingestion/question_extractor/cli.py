@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shlex
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -92,6 +93,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --table: how the answers read; measured when left out",
     )
     parser.add_argument(
+        "--ocr-command",
+        type=shlex.split,
+        default=None,
+        metavar="CMD",
+        help=(
+            "with --table: the command that runs Tesseract on a scanned table, e.g. "
+            "'tesseract' where the binary is installed; defaults to `docker run` of "
+            "the pillora-tesseract image"
+        ),
+    )
+    parser.add_argument(
         "--recursive",
         action="store_true",
         help="when the input is a folder, search it recursively",
@@ -133,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     config = replace(ExtractConfig(), zoom=args.zoom)
+    if args.ocr_command:
+        config = replace(config, ocr_command=tuple(args.ocr_command))
 
     if args.input.is_dir():
         pdfs = find_pdfs(args.input, args.recursive)

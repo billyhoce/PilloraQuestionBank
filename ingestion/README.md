@@ -76,7 +76,11 @@ docker compose build tesseract    # from the repo root: the service lives in the
 of the section, as one multi-page TIFF, to `docker run --rm -i --network none
 pillora-tesseract` (`question_extractor/ocr.py`). Nothing is mounted or written to disk.
 With Docker stopped or the image not built, those pages come back flagged with the
-reason; digital pages never call Docker. Scanned *question* and `annotated_booklet`
+reason; digital pages never call Docker. The command is a setting
+(`ExtractConfig.ocr_command`, `--ocr-command` on `question_extractor --table` and
+`ingester ingest`): `--ocr-command tesseract` runs the binary directly, as the
+production container will, and reads the same. The question-cell crops are also a stage
+artefact: `ocr.encode_cells` makes the multi-page TIFF and `ocr.read_tiff` reads it. Scanned *question* and `annotated_booklet`
 sections are still left unrouted.
 
 The container also runs on its own, e.g. to give page images a text layer:

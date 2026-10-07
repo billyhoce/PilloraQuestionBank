@@ -416,7 +416,8 @@ def _read_scanned_labels(
         return {}
     reads = read_cells(cells, config)
     if isinstance(reads, str):
-        log.warning("%s: OCR unavailable: %s (%s)", name, reads, BUILD_HINT)
+        hint = f" ({BUILD_HINT})" if config.ocr_command[:1] == ("docker",) else ""
+        log.warning("%s: OCR unavailable: %s%s", name, reads, hint)
         for result in results:
             if result.scanned and result.tables:
                 result.problems.append(f"OCR unavailable, so no question label was read: {reads}")

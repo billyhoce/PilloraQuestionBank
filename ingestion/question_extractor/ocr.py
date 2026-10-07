@@ -1,9 +1,11 @@
 """Reading a scanned table's question cells with Tesseract.
 
-The only module that runs Tesseract. It runs in the repo's own container
+The only module that runs Tesseract. By default it runs in the repo's own container
 (``ingestion/docker/tesseract/``, built by ``docker compose build tesseract``), so the host
 needs Docker and nothing else, and every machine reads with the same Tesseract
-release.
+release. The command is a setting (``ExtractConfig.ocr_command``): ``("tesseract",)``
+runs the binary directly, as inside the production container. Only the argv differs;
+the TIFF in, the TSV out and everything after the subprocess call are shared.
 
 **Only the question cells are read**, cut from the straightened page
 (:mod:`.scanpage`) one row at a time. A scan's own text layer, where it has one,
@@ -18,9 +20,11 @@ a label like ``12(a)(ii)`` can hold.
 multi-page TIFF, piped to ``tesseract stdin stdout ... tsv``. Each TIFF page is
 one cell, and the TSV's ``page_num`` says which. Nothing is written to disk and
 nothing is mounted. Starting a container costs about half a second, which is
-paid once.
+paid once. The TIFF is a stage artefact of its own: :func:`encode_cells` makes it
+and :func:`read_tiff` reads it, so a separate ``ocr`` stage can run from the saved
+file (the cells' metadata, in ``grid.json``, places the words).
 
-**Failure is reported, never raised.** Docker missing, the daemon down, the image
+**Failure is reported, never raised.** The command missing, Docker's daemon down, the image
 not built, a timeout, or a reply that does not cover every cell: :func:`read_cells`
 returns the reason as a string, and the pipeline flags the scanned pages with
 it. ``--pull never`` keeps a missing image from being fetched from Docker Hub
@@ -134,40 +138,61 @@ def question_cells(scan: ScanPage, result: TablePage, config: ExtractConfig) -> 
     return cells
 
 
-def read_cells(cells: list[OcrCell], config: ExtractConfig) -> list[OcrRead] | str:
-    """What each cell says, in order, or why nothing could be read."""
-    if not cells:
-        return []
+def encode_cells(cells: list[OcrCell], config: ExtractConfig) -> bytes | str:
+    """Every cell's crop as one multi-page TIFF, one page per cell, in order.
+
+    The stage's artefact: :func:`read_tiff` reads it back without the page pixels.
+    A string says why the cells could not be encoded.
+    """
     params = [cv2.IMWRITE_TIFF_XDPI, config.scan_dpi, cv2.IMWRITE_TIFF_YDPI, config.scan_dpi]
     ok, tiff = cv2.imencodemulti(".tiff", [cell.image for cell in cells], params)
     if not ok:
         return "the question cells could not be encoded as a TIFF"
+    return tiff.tobytes()
+
+
+def read_cells(cells: list[OcrCell], config: ExtractConfig) -> list[OcrRead] | str:
+    """What each cell says, in order, or why nothing could be read."""
+    if not cells:
+        return []
+    tiff = encode_cells(cells, config)
+    if isinstance(tiff, str):
+        return tiff
+    return read_tiff(tiff, cells, config)
+
+
+def read_tiff(tiff: bytes, cells: list[OcrCell], config: ExtractConfig) -> list[OcrRead] | str:
+    """What each cell says, from the TIFF :func:`encode_cells` made for ``cells``.
+
+    ``cells`` supply only the metadata that places a word on the page (their
+    ``image`` may be ``None``) and say how many TIFF pages to expect.
+    """
+    if not cells:
+        return []
     command = [
-        "docker", "run", "--rm", "-i", "--pull", "never", "--network", "none",
-        config.ocr_image,
+        *config.ocr_command,
         "stdin", "stdout",
         "--psm", str(config.ocr_psm),
         "--dpi", str(config.scan_dpi),
         "-c", f"tessedit_char_whitelist={config.ocr_whitelist}",
         "tsv",
     ]
+    program = command[0]
     try:
-        proc = subprocess.run(
-            command, input=tiff.tobytes(), capture_output=True, timeout=config.ocr_timeout_s
-        )
+        proc = subprocess.run(command, input=tiff, capture_output=True, timeout=config.ocr_timeout_s)
     except FileNotFoundError:
-        return "docker is not installed or not on PATH"
+        return f"{program} is not installed or not on PATH"
     except subprocess.TimeoutExpired:
-        return f"the Tesseract container did not finish within {config.ocr_timeout_s}s"
+        return f"Tesseract (via {program}) did not finish within {config.ocr_timeout_s}s"
     except OSError as exc:
-        return f"docker could not be run ({exc})"
+        return f"{program} could not be run ({exc})"
     if proc.returncode != 0:
-        return f"the Tesseract container failed: {_last_error(proc.stderr)}"
+        return f"Tesseract (via {program}) failed: {_last_error(proc.stderr)}"
 
     pages, words = _parse_tsv(proc.stdout.decode("utf-8", errors="replace"))
     if pages != len(cells):
         return f"Tesseract returned {pages} page(s) for {len(cells)} cell(s)"
-    log.info("OCR read %d question cell(s) in one container run", len(cells))
+    log.info("OCR read %d question cell(s) in one run of %s", len(cells), program)
     return [_read(cell, words.get(n, [])) for n, cell in enumerate(cells, start=1)]
 
 
