@@ -49,3 +49,19 @@ def get_object_store() -> ObjectStore:
 def get_metadata_extractor():
     """The Claude call that reads paper metadata out of a filename."""
     return extract_metadata
+
+
+def get_pipeline_runner():
+    """The factory the ingest worker builds its pipeline runner with.
+
+    Returns ``factory(store, job_dir, config, wrap) -> runner``; the runner needs
+    ``run_one()`` and ``revalidate(job_id)``. ``wrap`` adds the worker's S3 and database edges
+    to a registry. Tests override it with a factory whose stages write a canned proposal
+    (``tests/test_worker.py``) so no PDF, OCR or Claude call is needed."""
+    from pipeline.registry import default_registry
+    from pipeline.runner import Runner
+
+    def factory(store, job_dir, config, wrap):
+        return Runner(store, wrap(default_registry()), job_dir, config)
+
+    return factory

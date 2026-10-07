@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,21 @@ from .config import IngestConfig
 from .segments import READING_ORDERS, TEMPLATES, Segment
 
 log = logging.getLogger(__name__)
+
+# A caller that wants the Messages API's token usage (the webapp's worker logs it with its
+# prices) sets this: ``listener(model, usage)`` after every request. The ingester knows no
+# prices and never imports the app, so the usage is handed out instead of logged here.
+usage_listener: Callable[[str, object], None] | None = None
+
+
+def _report_usage(model: str, response: object) -> None:
+    usage = getattr(response, "usage", None)
+    if usage_listener is None or usage is None:
+        return
+    try:
+        usage_listener(model, usage)
+    except Exception:  # a logging hook must never fail a segmentation
+        log.debug("usage listener failed", exc_info=True)
 
 SEGMENT_SYSTEM = """\
 You are reading an exam paper PDF and reporting its structure, nothing else.
@@ -250,6 +266,7 @@ def ask(model: str, pdf_b64: str, page_count: int, config: IngestConfig) -> Mode
     except Exception as exc:  # the SDK's whole error tree, plus a missing key
         return ModelAnswer(model=model, error=f"{type(exc).__name__}: {exc}")
 
+    _report_usage(model, response)
     if response.stop_reason == "refusal":
         return ModelAnswer(model=model, error="the request was refused by the model")
     if response.stop_reason == "max_tokens":

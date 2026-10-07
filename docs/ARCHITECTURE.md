@@ -15,8 +15,17 @@ FastAPI                                              │
     ├──► PostgreSQL (Supabase)        — metadata     │
     ├──► AWS S3                       — images       │
     └──► Anthropic Claude API         — AI labeling  │
+                                                     │
+Ingest worker  (python -m app.worker, same VM)       │
+    ├──► PostgreSQL — claims ingest_task rows        │
+    ├──► AWS S3     — source PDF in, review images out│
+    └──► Tesseract (`tesseract` in the container), Claude API (segment stage)
 ─────────────────────────────────────────────────────┘
 ```
+
+The **worker** is a second process, not part of the API: it takes queued auto-import jobs through
+the `ingestion/pipeline` stages, one job at a time, and leaves a proposal on the job row. See
+[features/ingestion.md](./features/ingestion.md#the-worker).
 
 Infrastructure detail (Cloudflare, CI/CD, provisioning) is in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
@@ -45,6 +54,9 @@ app/
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers;
 │                   # object_store.py — the ObjectStore (put/get/presign/delete_prefix) the import jobs use
 ├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py
+├── worker/         # the ingest worker (`python -m app.worker`) — main.py (loop, settings, signals),
+│                   #   store.py (the pipeline Store over ingest_task, job-status derivation),
+│                   #   edges.py (S3 + DB hooks composed around the pipeline's stages)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
 ├── deps.py         # FastAPI providers for outbound I/O (presigner, image fetcher, AI labeller)
 ├── logger.py       # file logger + Timer + token/cost logging helper
@@ -61,7 +73,7 @@ module's internals is the smell that puts something here.
 
 S3 and the Claude API reach the routes as injected callables from `app/deps.py` —
 `get_presigner`, `get_image_fetcher`, `get_question_labeller`, `get_object_store`,
-`get_metadata_extractor` — not as module-level imports the
+`get_metadata_extractor`, `get_pipeline_runner` (the worker's runner factory) — not as module-level imports the
 route calls directly. Production gets the real client; `tests/conftest.py` swaps in a fake via
 `app.dependency_overrides` (the `fake_presign`, `fake_image_bytes`, `stub_labeller`, `fake_object_store` and
 `fake_metadata_extractor` fixtures).
