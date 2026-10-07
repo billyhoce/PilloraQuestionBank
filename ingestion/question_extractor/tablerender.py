@@ -21,18 +21,11 @@ A scanned page is drawn on its straightened image, the frame its rules are in.
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
 import pymupdf
 
-from .config import ExtractConfig
 from .debug import shade_furniture
-from .render import DEBUG_SUBDIR, page_filename
-from .scanpage import straightened_document
+from .raster import Draw
 from .tables import DOWN, ColumnPair, TablePage
-
-log = logging.getLogger(__name__)
 
 BLUE = (0.1, 0.35, 0.9)
 RED = (0.85, 0.05, 0.05)
@@ -41,46 +34,22 @@ GREY = (0.45, 0.45, 0.45)
 ROW_FILLS = ((0.2, 0.7, 0.3), (0.95, 0.6, 0.1))
 
 
-def render_table_pages(
-    pdf_path: Path,
-    out_dir: Path,
-    results: list[TablePage],
-    config: ExtractConfig,
-    debug: bool = False,
-) -> dict[int, str]:
-    """Render every page with its table geometry, returning page -> file name."""
-    target = out_dir / DEBUG_SUBDIR if debug else out_dir
-    target.mkdir(parents=True, exist_ok=True)
-    matrix = pymupdf.Matrix(config.zoom, config.zoom)
-    written: dict[int, str] = {}
+def table_debug_draws(results: list[TablePage]) -> dict[int, Draw]:
+    """Each page's ``--debug`` marks: its table geometry, drawn by :func:`.render.render_outputs`.
 
-    with pymupdf.open(pdf_path) as doc:
-        for result in results:
-            page = doc[result.page - 1]
-            # A straightened scan's geometry is in its straightened frame, so it
-            # is drawn on the straightened image rather than the page as filed.
-            sheet = (
-                straightened_document(page, result.straightened_deg, config)
-                if result.straightened_deg
-                else None
-            )
-            if sheet is not None:
-                page = sheet[0]
-            if debug:
-                _draw_debug(page, result)
-            if debug or not result.needs_review:
-                _draw_geometry(page, result)
-            if debug:
-                _draw_legend(page, result)
+    A straightened scan's geometry is in its straightened frame, so the caller
+    draws it on the straightened image rather than the page as filed.
+    """
+    draws: dict[int, Draw] = {}
+    for result in results:
 
-            name = page_filename(result.page)
-            page.get_pixmap(matrix=matrix).save(target / name)
-            written[result.page] = f"{DEBUG_SUBDIR}/{name}" if debug else name
-            if sheet is not None:
-                sheet.close()
+        def draw(page: pymupdf.Page, result=result) -> None:
+            _draw_debug(page, result)
+            _draw_geometry(page, result)
+            _draw_legend(page, result)
 
-    log.info("rendered %d table page(s) to %s", len(written), target)
-    return written
+        draws[result.page] = draw
+    return draws
 
 
 def _draw_geometry(page: pymupdf.Page, result: TablePage) -> None:

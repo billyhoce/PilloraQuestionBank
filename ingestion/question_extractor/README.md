@@ -12,6 +12,7 @@ crops is a change confined to `render.py`.
 output/<paper>/pNN.png          # page NN, whole, with its question rectangles drawn
 output/<paper>/manifest.json
 output/<paper>/_debug/pNN.png   # with --debug
+output/<paper>/review/pNN.webp  # with --review: clean page, nothing drawn on it
 ```
 
 ## Usage
@@ -28,6 +29,7 @@ python -m question_extractor paper.pdf --output-dir output/ --start-page 3 --deb
 | `--start-page N` | 1-based first question page; inferred by default |
 | `--zoom` | Render scale, 3.0 ≈ 216 dpi (default 3.0) |
 | `--debug` | Also write `_debug/` renders of every intermediate detection |
+| `--review` | Also write `review/pNN.webp`, the clean pages for the admin review page (below) |
 | `--recursive` | Search a folder input recursively |
 | `-v` | Debug-level logging |
 
@@ -275,6 +277,27 @@ for header/footer, green for anchors and eligible figures, magenta for dividers,
 a graph grid, orange for pixel-scan ink. The gap between grey and red is what the trim
 removed.
 
+## `--review`
+
+`review/pNN.webp` is each page with **nothing drawn on it**, at `review_zoom` (2.0, ~144 dpi,
+lossy WebP at `review_webp_quality`), for the admin review page, which lays an SVG of the
+manifest's rectangles over it, scaling the PDF-point coordinates by image width over page
+width. So it is always the page in the PDF's own frame: a scanned table page is **not**
+straightened here, although its `manifest.json` rectangles are in the straightened frame
+(`pages[].straightened`, rotated by `angle_deg` about the page centre). The review-overlay
+code has to rotate those rectangles back (or the image forward) for a scan; the review
+image is deliberately the one thing that does not move. Writing it is off by default and
+changes no other output; a failure to encode is a warning.
+
+**One rasterisation per page.** `raster.py` rasterises each page once clean
+(`rasterise_page`); the annotated `pNN.png` and `_debug/pNN.png` are that pixmap with an
+overlay composited on (`draw_on`: the marks drawn on a blank page, rasterised with alpha at
+the same zoom, blended as MuPDF does). PyMuPDF cannot draw on a pixmap, hence the blank
+page; the page's own content is never rasterised twice. The result matches the old
+draw-then-rasterise output to within 1 level per channel (rounding at antialiased edges),
+not byte for byte. The `review_*` settings are left out of the manifest's `config`. The
+only WebP writer is `webp.py`.
+
 ## Layout
 
 `pipeline.py` runs the stages in order; its docstring names them. `locate_questions`
@@ -309,7 +332,9 @@ are drawn from these files (`render_saved`, `read_grid`), not from the in-memory
 | `figures.py` | Figure union and divider rules. |
 | `boundaries.py` | Anchors → `Band` per page → `Question` across pages. |
 | `trim.py` | Shrinks each rectangle onto its ink. |
-| `render.py` | `pNN.png` with red rectangles. |
+| `render.py` | `render_pages` / `render_outputs`: `pNN.png` with red rectangles, `_debug/`, `review/`. |
+| `raster.py` | `rasterise_page` and `draw_on`: one raster per page, marks composited on. |
+| `webp.py` | **The only module that writes WebP** (the review images). |
 | `debug.py` | The `--debug` overlay. |
 | `provenance.py` | `SourceProvenance`; read only by `manifest.py`. |
 | `warnscope.py` | The one warning collector (`collect_warnings`, `current_warnings`) shared with `ingester`. |
@@ -319,7 +344,7 @@ are drawn from these files (`render_saved`, `read_grid`), not from the in-memory
 | `ocr.py` | **The only module that runs Tesseract** (in its container): scanned question cells. |
 | `tables.py` | `--table`: rules → column pairs, row bands, labels, reading order. |
 | `tablequestions.py` | `--table`: rows → `Question`s, one `Band` per run of rows. |
-| `tablerender.py` | `--table --debug`: the row-level geometry on `_debug/pNN.png`. |
+| `tablerender.py` | `--table --debug`: the row-level geometry, as the `_debug/pNN.png` marks. |
 | `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json`, `tables.json` and `grid.json`); `extract_table_paper` runs them. |
 | `cli.py` / `__main__.py` | The command line. |
 

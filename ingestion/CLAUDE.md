@@ -39,7 +39,8 @@ samples/<paper>.segments.json  hand-written segmentation fixture, one per sample
 output/<paper name>/           manifest.json, segments.json, pNN.png, _split/, _debug/,
                                ingest.json, <label>/ (one extractor run per routed section),
                                tables.json (a --table run's row-level reading),
-                               detections.json / grid.json (the saved intermediates the --debug renders are drawn from)
+                               detections.json / grid.json (the saved intermediates the --debug renders are drawn from),
+                               review/pNN.webp (--review: clean pages, nothing drawn, for the admin review page)
 ```
 
 ## Verifying a change

@@ -46,7 +46,7 @@ from .geometry import PageGeometry, extract_document
 from .manifest import build_manifest, write_manifest
 from .pagekind import end_of_paper_y
 from .provenance import SourceProvenance, check_page_map
-from .render import render_pages
+from .render import debug_draws, render_pages
 from .trim import trim_bands
 from .warnscope import collect_warnings, current_warnings
 
@@ -298,38 +298,59 @@ def read_detections(path: Path) -> tuple[list[PageResult], Calibration | None]:
 
 
 def render_saved(
-    pdf_path: Path, out_dir: Path, config: ExtractConfig, debug: bool = False
+    pdf_path: Path,
+    out_dir: Path,
+    config: ExtractConfig,
+    segment_totals: dict[int, int] | None = None,
+    debug: bool = False,
+    review: bool = False,
 ) -> dict[int, str]:
     """Render the pages of a ``detections.json`` in ``out_dir``, with no detection run.
 
     The rectangles and every overlay come from the file, the pixels from the PDF.
-    A question's segment count is the number of its bands on the saved pages.
+    A question's segment count is, unless ``segment_totals`` gives it, the number
+    of its bands on the saved pages.
     """
     pages, calibration = read_detections(out_dir / DETECTIONS_NAME)
-    segment_totals: dict[int, int] = {}
-    for page in pages:
-        for band in page.bands:
-            segment_totals[band.number] = segment_totals.get(band.number, 0) + 1
-    return render_pages(pdf_path, out_dir, pages, segment_totals, calibration, config, debug=debug)
+    if segment_totals is None:
+        segment_totals = {}
+        for page in pages:
+            for band in page.bands:
+                segment_totals[band.number] = segment_totals.get(band.number, 0) + 1
+    return render_pages(
+        pdf_path,
+        out_dir,
+        pages,
+        segment_totals,
+        config,
+        debug_draws=debug_draws(pages, segment_totals, calibration, config) if debug else None,
+        review=review,
+    )
 
 
 def write_renders(
-    located: LocatedPaper, out_dir: Path, config: ExtractConfig, debug: bool = False
+    located: LocatedPaper,
+    out_dir: Path,
+    config: ExtractConfig,
+    debug: bool = False,
+    review: bool = False,
 ) -> dict[int, str]:
     """Draw each page whole with the question rectangles in red; ``{page: filename}``.
 
     Also saves ``detections.json`` (:func:`write_detections`). ``debug`` also
     writes the debug renders (calibration and anchors drawn in), and those are
-    drawn from that file (:func:`render_saved`), not from ``located``.
+    drawn from that file (:func:`render_saved`), not from ``located``. ``review``
+    also writes the clean ``review/pNN.webp`` images. Each page is rasterised once.
     """
-    segment_totals = {q.number: len(q.bands) for q in located.questions}
-    images = render_pages(
-        located.pdf_path, out_dir, located.pages, segment_totals, located.calibration, config
-    )
     write_detections(located, out_dir)
-    if debug:
-        render_saved(located.pdf_path, out_dir, config, debug=True)
-    return images
+    return render_saved(
+        located.pdf_path,
+        out_dir,
+        config,
+        segment_totals={q.number: len(q.bands) for q in located.questions},
+        debug=debug,
+        review=review,
+    )
 
 
 def write_question_manifest(
@@ -365,6 +386,7 @@ def extract_paper(
     start_page: int | None = None,
     debug: bool = False,
     provenance: SourceProvenance | None = None,
+    review: bool = False,
 ) -> PaperResult:
     """Process one PDF into annotated page renders plus a manifest.
 
@@ -378,7 +400,7 @@ def extract_paper(
     with collect_warnings():
         located = locate_questions(pdf_path, config, start_page, provenance)
         out_dir = output_root / located.paper
-        images = write_renders(located, out_dir, config, debug)
+        images = write_renders(located, out_dir, config, debug, review)
         manifest_path = write_question_manifest(
             located, out_dir, images, config, current_warnings(), provenance
         )

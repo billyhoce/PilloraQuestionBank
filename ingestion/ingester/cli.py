@@ -135,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write each section's _debug/ renders",
     )
     ingest.add_argument(
+        "--review",
+        action="store_true",
+        help="also write each section's clean review/pNN.webp page images",
+    )
+    ingest.add_argument(
         "--recursive",
         action="store_true",
         help="when the input is a folder, search it recursively",
@@ -268,6 +273,7 @@ def _ingest_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
                     ExtractConfig(),
                     force=args.force,
                     debug=args.debug,
+                    review=args.review,
                 )
             )
         except Exception as exc:  # pragma: no cover - keep a folder run alive

@@ -83,8 +83,13 @@ def _rect_entry(band: Band, provenance: SourceProvenance | None) -> dict:
 
 
 def config_snapshot(config: ExtractConfig) -> dict:
-    """The thresholds a run used, so its output can be reproduced or explained."""
-    return asdict(config)
+    """The thresholds a run used, so its output can be reproduced or explained.
+
+    The ``review_*`` settings are left out: they shape only the ``--review`` images,
+    not a rectangle, so they explain nothing in a manifest and would change every
+    one for a run that never asked for them.
+    """
+    return {k: v for k, v in asdict(config).items() if not k.startswith("review_")}
 
 
 def build_manifest(

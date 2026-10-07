@@ -169,6 +169,7 @@ def ingest_paper(
     *,
     force: bool = False,
     debug: bool = False,
+    review: bool = False,
 ) -> IngestResult:
     """Segment, split and route one PDF; write ``ingest.json`` either way."""
     extract_config = extract_config or ExtractConfig()
@@ -178,7 +179,7 @@ def ingest_paper(
 
     with collect_warnings() as warnings:
         sections = tuple(
-            route_section(section, paper_dir, extract_config, debug=debug)
+            route_section(section, paper_dir, extract_config, debug=debug, review=review)
             for section in split.sections
         )
 
@@ -198,7 +199,12 @@ def ingest_paper(
 
 
 def route_section(
-    section: Section, paper_dir: Path, config: ExtractConfig, *, debug: bool = False
+    section: Section,
+    paper_dir: Path,
+    config: ExtractConfig,
+    *,
+    debug: bool = False,
+    review: bool = False,
 ) -> SectionReport:
     """Send one section to its pipeline and record what came out; never raises."""
     segment = section.segment
@@ -258,12 +264,18 @@ def route_section(
                 paper_dir,
                 config,
                 debug=debug,
+                review=review,
                 provenance=section.provenance,
                 layout=_layout(segment),
             )
         else:
             result = extract_paper(
-                section.pdf, paper_dir, config, debug=debug, provenance=section.provenance
+                section.pdf,
+                paper_dir,
+                config,
+                debug=debug,
+                review=review,
+                provenance=section.provenance,
             )
     except Exception as exc:
         log.warning("%s: '%s' failed in %s (%s)", paper, segment.label, route.pipeline, exc)

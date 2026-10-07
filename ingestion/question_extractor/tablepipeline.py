@@ -57,7 +57,7 @@ from .provenance import SourceProvenance, check_page_map
 from .render import render_pages
 from .scanpage import read_scan_page
 from .tablequestions import build_table_questions
-from .tablerender import render_table_pages
+from .tablerender import table_debug_draws
 from .tables import TableLayout, TablePage, find_tables, label_table_page
 from .trim import _pixel_box
 
@@ -217,6 +217,7 @@ def group_questions(
     debug: bool = False,
     provenance: SourceProvenance | None = None,
     layout: TableLayout | None = None,
+    review: bool = False,
 ) -> TablePaperResult:
     """Stages 6-7: group the labelled rows into questions, and write the outputs.
 
@@ -227,21 +228,19 @@ def group_questions(
 
     out_dir = output_root / name
     straightened = {r.page: r.straightened_deg for r in results if r.straightened_deg}
+    # Always written, and what the debug view is drawn from: the saved reading,
+    # not the in-memory one, so the file is known to be enough to draw it.
+    grid_path = write_grid(grid, out_dir)
     images = render_pages(
         pdf_path,
         out_dir,
         page_results,
         {question.number: len(question.bands) for question in questions},
-        None,
         config,
+        debug_draws=table_debug_draws(read_grid(grid_path)["pages"]) if debug else None,
+        review=review,
         straightened=straightened,
     )
-    # Always written, and what the debug view is drawn from: the saved reading,
-    # not the in-memory one, so the file is known to be enough to draw it.
-    grid_path = write_grid(grid, out_dir)
-    if debug:
-        saved = read_grid(grid_path)
-        render_table_pages(pdf_path, out_dir, saved["pages"], config, debug=True)
 
     warnings = current_warnings()
     manifest = build_manifest(
@@ -332,6 +331,7 @@ def extract_table_paper(
     debug: bool = False,
     provenance: SourceProvenance | None = None,
     layout: TableLayout | None = None,
+    review: bool = False,
 ) -> TablePaperResult:
     """Read every page of a table-format answer PDF into column pairs and rows.
 
@@ -342,7 +342,9 @@ def extract_table_paper(
     with collect_warnings():
         grid = grid_pages(pdf_path, config, layout, provenance)
         read_labels(grid, config, layout)
-        return group_questions(grid, output_root, config, debug, provenance, layout)
+        return group_questions(
+            grid, output_root, config, debug, provenance, layout, review
+        )
 
 
 TABLE_OUTPUT_NOTE = (
