@@ -43,7 +43,10 @@ question count, warnings and review flag, plus the segment and split stages' war
 **Proposal**
 What the pipeline offers for a booklet: its sections, the questions found in each and their
 rectangles, with every flag raised along the way. A proposal is a suggestion for an admin to
-review and correct; nothing in it is a stored question until the admin confirms it.
+review and correct; nothing in it is a stored question until the admin confirms it. It is
+`proposal.json`, written by the `report` stage with the booklet-numbered review images in
+`pages/`: one paper per question section, paired with its answer section by segment index, with
+rectangles in PDF points on booklet pages (shape in `ingestion/README.md`).
 
 **Fingerprint**
 A hash of what a task's artefact was produced from (the content of the input artefacts, the

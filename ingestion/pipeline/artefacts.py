@@ -19,6 +19,7 @@ Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
     <label>/labelled.json, manifest.json, tables.json   questions
     <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render (table route)
     ingest.json                   report (every section's status, flags and warnings)
+    proposal.json, pages/pNN.webp report (the review page's document; pages at booklet numbering)
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ SPLIT_NAME = "split.json"
 CELLS_TIFF_NAME = "cells.tiff"
 OCR_NAME = "ocr.json"
 REPORT_NAME = "ingest.json"
+PROPOSAL_NAME = "proposal.json"
 
 
 def write_bytes(path: Path, data: bytes) -> Path:
