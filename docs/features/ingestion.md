@@ -26,8 +26,8 @@ The two AI-topics routes are documented in [ai-labelling.md](./ai-labelling.md).
 
 On `/admin/import` the admin picks **Auto-detect** or **Manual** (the wizard below, unchanged).
 Auto-detect is the start of automatic import: the admin drops PDF(s), each becomes an **ingest job**
-and shows up in the job list. **Nothing processes a job yet** — a later ticket adds the worker — so
-jobs sit `queued`. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
+and shows up in the job list. The [worker](#the-worker) takes it from `queued` to `review_ready` with
+a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
 
 ### Job routes (admin only; non-admins get `403`)
 
@@ -43,8 +43,7 @@ jobs sit `queued`. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
   `register` task, via `record_filename_metadata` in `app/services/ingest_jobs.py`, and stores the
   result in `report.filename_metadata` (merged into any existing report; empty metadata on error)
   so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
-  needs the DB reference data (`ingestion/` never imports `app`). The worker is not built yet, so
-  until it lands `report` stays empty.
+  needs the DB reference data (`ingestion/` never imports `app`).
 - `GET /api/import/jobs?status=` — **only jobs the requesting admin created**, newest first, as
   `{"data": [...]}`; an unknown `status` is `422`.
 - `GET /api/import/jobs/{id}` — the job plus `report` and its `tasks`. Another admin's job, or an
@@ -60,24 +59,82 @@ tests use the `fake_object_store` fixture.
 
 | Status | Meaning |
 | --- | --- |
-| `queued` | Created; waiting for the worker |
-| `running` | The worker is processing it |
-| `review_ready` | A proposal is ready for the admin to review |
-| `failed` | Processing failed (`error` says why) |
+| `queued` | Created; no task has started |
+| `running` | A task is running, or some have finished and others are still to run |
+| `review_ready` | `report` is done and `ingest_job.proposal` is stored: a proposal is ready for the admin to review |
+| `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
 | `confirmed` | The admin confirmed; papers created (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
 | `expired` | Abandoned and cleaned up |
 
-Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`. Only
-`queued` and `cancelled` are produced by the current code.
+Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
+
+The worker derives `queued` / `running` / `review_ready` / `failed` from the job's tasks after every
+task completion (`app.worker.store.derive_job_status`); the API never recomputes it. A job that has
+`report` done and a proposal is `review_ready` **even when some sections failed** (the proposal lists
+them as failed, flagged for the admin). It is `failed` when a job-level stage (`register`, `segment`,
+`split`) failed or was blocked — `report` still runs then, but describes a booklet nothing was
+extracted from — or when the pipeline ends with no proposal. A job in an API-owned state
+(`cancelled`, `confirmed`, `expired`) is never touched.
 
 ### UI
 
 `ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in
 progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
 compact drop zone (one job per dropped PDF) above the job list — filename, status, created time and
-a Cancel button for jobs that can still be cancelled — with a manual Refresh button (no polling
-until the worker exists).
+a Cancel button for jobs that can still be cancelled — with a manual Refresh button (no polling yet).
+
+### The worker
+
+`python -m app.worker` (`app/worker/`) is a separate process that runs queued jobs through the
+`ingestion/pipeline` stages (see [pipeline/README.md](../../ingestion/pipeline/README.md) and
+[ADR 0001](../adr/0001-stage-pipeline.md)). One process, one task at a time.
+
+- **Loop.** Each pass writes the `worker_heartbeat` row, then the pipeline `Runner` claims one ready
+  task through `SqlStore` (`app/worker/store.py`), runs it in the job's scratch folder, and records
+  status, duration, warnings, `needs_review` and reason/error. The claim is
+  `SELECT ... FOR UPDATE SKIP LOCKED` ordered by job (oldest first) then task (stage) order, followed by
+  an update guarded by `WHERE status = 'ready'` whose row count says whether this claimer won (that
+  guard is what the SQLite unit tests exercise; SKIP LOCKED itself is Postgres-only). Tasks of a job
+  that is not `queued`/`running` — a cancelled job — are never claimed. `SqlStore.complete` records
+  the outcome and the fan-out tasks (`split` creates each section's tasks) in one transaction and is
+  refused for a task whose lease was lost; `add_tasks` is idempotent on `(job, section, stage)`.
+  The API creates only the `register` task; `register`'s hook creates the rest of the job-level chain
+  (`segment`, `split`, `report`).
+- **Job status** is derived from the tasks on every completion (above), with `report` supplying the
+  proposal.
+- **Leases.** A claim sets `lease_until = now() + 10 min`. A liveness thread refreshes the running
+  task's lease and the heartbeat every 30 s (and the runner's own heartbeat thread does too), so a
+  long stage keeps its task. On start, tasks past their lease go back to `ready` (`failed` after 3
+  attempts; the runner also does this on every pass).
+- **Shutdown.** SIGTERM/SIGINT finish the current task and exit cleanly.
+- **Scratch and S3 edges** (`app/worker/edges.py`, composed around the stages — `ingestion/` knows
+  nothing of S3). The job's scratch folder is `$INGEST_SCRATCH_DIR/{job_id}/`
+  (default `/tmp/ingest/`). Resolving it fetches `tmp/ingest/{job_id}/source.pdf` from S3 into it when
+  missing, so `register` finds its input and a restart that lost the folder gets the booklet back
+  before any stage reads it. Artefacts lost with the folder are **not** re-downloaded: their tasks'
+  outputs are missing, so on start `Runner.revalidate` reopens them and they run again (slower, not
+  wrong); with the folder intact, fingerprints keep finished tasks as they are. After `register`
+  succeeds the filename metadata is extracted (`report["filename_metadata"]`). After `report`
+  succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
+  `tmp/ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
+  (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
+  `report` next to `filename_metadata`. The images go up from `report`, not `render`, because the
+  job-level `pages/` folder the proposal's image paths name is assembled by `report` (`render` writes
+  only each section's own `review/` folder). A job cancelled while `report` runs gets no upload.
+- **Memory.** PyMuPDF pages are rasterised one at a time and freed in the extractor (no list of
+  pixmaps), and the worker reads each review image from disk only as it uploads it.
+- **Config (env).** `INGEST_SCRATCH_DIR`, `INGEST_OCR_COMMAND` (the Tesseract command, split like a
+  shell line; `tesseract` in the container), `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` — each
+  defaulting to the ingestion config. `INGEST_FIXTURES_DIR` is for development only: a folder of
+  `<paper>.segments.json` plans (named after the uploaded filename) copied beside the scratch
+  `source.pdf` so the `segment` stage uses them instead of the Messages API.
+- **Token logging.** The segment stage's Messages API usage reaches `app.logger.log_tokens` through
+  `ingester.request.usage_listener` (set by the worker). Prices for `claude-haiku-4-5` and
+  `claude-opus-5` (the retry model) are in `_PRICES`.
+- **Testing seam.** `app.deps.get_pipeline_runner()` returns the factory the worker builds its runner
+  with; tests pass a factory whose stages write a canned proposal (`tests/test_worker.py`). Setting
+  `WORKER_TEST_DATABASE_URL` to a scratch Postgres database runs the worker tests there too.
 
 ## Server-side pipeline
 

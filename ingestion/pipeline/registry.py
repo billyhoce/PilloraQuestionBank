@@ -122,6 +122,10 @@ class Registry:
             if stage.scope == JOB and needed.scope == SECTION:
                 raise ValueError(f"job-scope stage {stage.name!r} cannot need a section stage")
 
+    def stages(self) -> list[Stage]:
+        """Every stage, in registration order (a host wrapping them builds a new Registry)."""
+        return list(self._stages.values())
+
     def get(self, name: str, route: str | None = None) -> Stage:
         """The stage ``name`` of ``route`` (a job stage when ``route`` is ``None``)."""
         return self._stages[(route, name)]
