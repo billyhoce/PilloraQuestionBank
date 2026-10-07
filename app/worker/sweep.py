@@ -102,11 +102,12 @@ def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: da
 
 
 def clean_cancelled_scratch(session_factory, scratch_root: Path, now: datetime) -> list[uuid.UUID]:
-    """Remove the scratch folders of jobs cancelled more than the grace period ago."""
+    """Remove the scratch folders of jobs cancelled or confirmed more than the grace period ago.
+    (Confirming deletes the job's S3 prefix itself; only the worker knows the scratch folder.)"""
     cutoff = now - CANCELLED_SCRATCH_GRACE
     with session_factory() as db:
         ids = db.execute(
-            select(IngestJob.id).where(IngestJob.status == "cancelled", IngestJob.updated_at < cutoff)
+            select(IngestJob.id).where(IngestJob.status.in_(("cancelled", "confirmed")), IngestJob.updated_at < cutoff)
         ).scalars().all()
     cleaned = [i for i in ids if (scratch_root / str(i)).exists()]
     for job_id in cleaned:

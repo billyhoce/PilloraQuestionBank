@@ -276,6 +276,17 @@ def test_retry_of_api_owned_job_conflicts(admin_client, db_session, fake_object_
     assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 409
 
 
+def test_retry_of_partially_decided_job_conflicts(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    job = db_session.get(IngestJob, uuid.UUID(job_id))
+    job.status = "review_ready"
+    job.report = {"review_outcome": {"q1": "skipped"}}
+    db_session.flush()
+    resp = admin_client.post(f"/api/import/jobs/{job_id}/retry")
+    assert resp.status_code == 409
+    assert "already confirmed or skipped" in resp.json()["detail"]
+
+
 def test_retry_non_admin_forbidden(public_client):
     assert public_client.post(f"/api/import/jobs/{uuid.uuid4()}/retry").status_code == 403
 

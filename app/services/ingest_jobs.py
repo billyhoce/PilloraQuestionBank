@@ -122,9 +122,10 @@ def cancel_job(job: IngestJob) -> str:
 
 
 class JobNotRetryableError(Exception):
-    def __init__(self, status: str):
+    def __init__(self, status: str, reason: str | None = None):
         super().__init__(status)
         self.status = status
+        self.reason = reason or f"A {status} job cannot be retried"
 
 
 def heartbeat_age_s(db: Session, now: datetime | None = None) -> float | None:
@@ -173,6 +174,11 @@ def retry_job(job: IngestJob, db: Session) -> int:
     status is re-derived so the worker picks it up. Returns how many tasks were reopened."""
     if job.status in _NOT_RETRYABLE:
         raise JobNotRetryableError(job.status)
+    if (job.report or {}).get("review_outcome"):
+        # A retry can regenerate the proposal, which would orphan the papers already decided.
+        raise JobNotRetryableError(
+            job.status, "Papers of this job are already confirmed or skipped; it cannot be retried"
+        )
     from pipeline.registry import default_registry
     from pipeline.runner import Runner
 

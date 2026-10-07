@@ -8,6 +8,9 @@ import {
   deleteRect, getRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 import { startManualImport } from './manualHandoff'
+import MetadataSidebar from './MetadataSidebar'
+import TopicReview from './TopicReview'
+import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
 
 function paperTitle(paper, i) {
   return paper.label ? `${paper.label}${paper.answer_label ? ` / ${paper.answer_label}` : ''}` : `Answers ${paper.answer_label ?? i + 1}`
@@ -146,11 +149,24 @@ export default function ReviewPage() {
   const timer = useRef(null)
   const latest = useRef(null)
   const [handoff, setHandoff] = useState(null)
+  const refs = useReferenceData()
+  const [metadata, setMetadata] = useState(emptyMetadata)
+  const [confirming, setConfirming] = useState(false)
+  const [confirmError, setConfirmError] = useState(null)
+  // After a confirm: the created paper's questions, awaiting the topic-review step.
+  const [topicStep, setTopicStep] = useState(null)
 
   useEffect(() => {
     let live = true
     api.import.review(jobId)
-      .then(r => { if (live) setReview(r) })
+      .then(r => {
+        if (!live) return
+        setReview(r)
+        setMetadata(m => mergeSuggested(m, r.filename_metadata ?? {}))
+        // Open on the first paper still undecided.
+        const first = r.proposal.papers.findIndex(p => !p.outcome)
+        if (first > 0) setPaperIdx(first)
+      })
       .catch(e => { if (live) setError(e.message) })
     return () => { live = false }
   }, [jobId])
@@ -222,6 +238,60 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  // Mark the current paper decided; carry on with the next undecided one, or leave when none is.
+  function decided(outcome, jobStatus) {
+    setReview(r => ({
+      ...r,
+      proposal: { ...r.proposal, papers: r.proposal.papers.map((p, i) => (i === paperIdx ? { ...p, outcome } : p)) },
+    }))
+    setTopicStep(null)
+    if (jobStatus === 'confirmed') {
+      navigate('/admin/import')
+      return
+    }
+    const next = papers.findIndex((p, i) => i !== paperIdx && !p.outcome)
+    if (next >= 0) choosePaper(next)
+  }
+
+  async function handleConfirmPaper() {
+    setConfirming(true)
+    setConfirmError(null)
+    try {
+      // The server crops the saved proposal, so a pending edit goes first.
+      if (timer.current) await flush()
+      const result = await api.import.confirmJobPaper(jobId, {
+        paper_label: paper.key,
+        subject_id: metadata.subject_id,
+        stream_id: metadata.stream_id,
+        level_id: metadata.level_id,
+        school_id: metadata.school_id,
+        exam_type_id: metadata.exam_type_id,
+        year: Number(metadata.year),
+        paper_number: metadata.paper_number,
+        is_premium: metadata.is_premium,
+      })
+      setTopicStep({ paperId: result.paper_id, questions: result.questions || [], jobStatus: result.job_status })
+    } catch (e) {
+      setConfirmError(e.message)
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  async function handleSkipPaper() {
+    if (!window.confirm(`Skip ${paperTitle(paper, paperIdx)}? It will not be imported.`)) return
+    setConfirming(true)
+    setConfirmError(null)
+    try {
+      const result = await api.import.skipJobPaper(jobId, paper.key)
+      decided('skipped', result.job_status)
+    } catch (e) {
+      setConfirmError(e.message)
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   async function handleManually(item) {
     setHandoff(item.label)
     setError(null)
@@ -244,6 +314,20 @@ export default function ReviewPage() {
     )
   }
   if (!review) return <Spinner />
+
+  if (topicStep) {
+    return (
+      <TopicReview
+        paperId={topicStep.paperId}
+        questions={topicStep.questions}
+        subjectId={metadata.subject_id}
+        streamId={metadata.stream_id}
+        onDone={() => decided('confirmed', topicStep.jobStatus)}
+        onCancel={() => decided('confirmed', topicStep.jobStatus)}
+        cancelLabel="Skip topics (set them later in Manage Papers)"
+      />
+    )
+  }
 
   const unrouted = review.proposal.unrouted ?? []
   const flaggedPage = p => p.needs_review
@@ -296,6 +380,7 @@ export default function ReviewPage() {
               className={`px-3 py-1.5 text-sm -mb-px border-b-2 ${i === paperIdx ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500'}`}
             >
               {paperTitle(p, i)}
+              {p.outcome && <span className="ml-1 text-xs text-gray-500">({p.outcome})</span>}
             </button>
           ))}
         </div>
@@ -411,9 +496,36 @@ export default function ReviewPage() {
             {paper.orphan_answers.length > 0 && (
               <p className="mt-2 text-xs text-gray-600">
                 {paper.orphan_answers.length} answer rectangle{paper.orphan_answers.length === 1 ? '' : 's'} not matched to a question (grey, dashed).
+                They are not imported.
               </p>
             )}
           </aside>
+
+          {paper.outcome ? (
+            <p role="status" className="w-52 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
+          ) : (
+            <div className="shrink-0">
+              {paper.questions.length === 0 && (
+                <p className="w-52 mb-2 text-xs text-amber-800">
+                  A paper without questions cannot be imported; skip it.
+                </p>
+              )}
+              <MetadataSidebar
+                metadata={metadata}
+                onChange={setMetadata}
+                refs={refs}
+                questionCount={paper.questions.length}
+                answerCount={paper.questions.filter(q => q.answer_rects.length > 0).length}
+                onNext={handleConfirmPaper}
+                onCancel={handleSkipPaper}
+                loading={confirming}
+                error={confirmError}
+                confirmLabel="Confirm paper →"
+                cancelLabel="Skip this paper"
+                canConfirm={paper.questions.length > 0}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

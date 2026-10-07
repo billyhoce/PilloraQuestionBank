@@ -8,6 +8,7 @@ import fitz  # PyMuPDF
 from question_extractor.config import ExtractConfig
 
 from app.models.orm import IngestJob
+from app.services.ingest_confirm import paper_key
 from app.services.ingest_jobs import InvalidPdfError, job_prefix
 from app.storage.object_store import ObjectStore
 
@@ -41,7 +42,8 @@ def build_review(job: IngestJob, store: ObjectStore) -> dict[str, Any]:
         raise NoProposalError()
     prefix = job_prefix(job.id)
     papers = []
-    for paper in proposal.get("papers", []):
+    done = (job.report or {}).get("review_outcome") or {}
+    for index, paper in enumerate(proposal.get("papers", [])):
         pages = []
         for page in paper.get("pages", []):
             width_px, height_px = pixel_size(page["width_pt"], page["height_pt"])
@@ -54,7 +56,9 @@ def build_review(job: IngestJob, store: ObjectStore) -> dict[str, Any]:
                     "height_px": height_px,
                 }
             )
-        papers.append({**paper, "pages": pages})
+        # ``key`` is what confirm/skip take as paper_label; ``outcome`` is null until decided.
+        key = paper_key(paper, index)
+        papers.append({**paper, "pages": pages, "key": key, "outcome": done.get(key)})
     return {
         "job_id": str(job.id),
         "filename": job.filename,
@@ -62,6 +66,8 @@ def build_review(job: IngestJob, store: ObjectStore) -> dict[str, Any]:
         "edited": job.proposal_edited is not None,
         "page_count": job.page_count,
         "review_zoom": REVIEW_ZOOM,
+        # What the register task read from the filename; pre-fills the metadata sidebar.
+        "filename_metadata": (job.report or {}).get("filename_metadata") or {},
         "proposal": {**proposal, "papers": papers},
     }
 
