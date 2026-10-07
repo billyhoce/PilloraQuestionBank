@@ -1,52 +1,138 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
-import { firstPageOf, rectToPx, rectsOnPage } from './reviewGeometry'
+import { clientToPt, firstPageOf, rectToPx } from './reviewGeometry'
+import {
+  deleteRect, getRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
+} from './proposalReducer'
 import { startManualImport } from './manualHandoff'
 
 function paperTitle(paper, i) {
   return paper.label ? `${paper.label}${paper.answer_label ? ` / ${paper.answer_label}` : ''}` : `Answers ${paper.answer_label ?? i + 1}`
 }
 
-function Overlay({ page, paper, selected }) {
+const SAVE_DELAY_MS = 800
+const HANDLE_PX = 14
+const COLOUR = { question: '#2563eb', answer: '#16a34a', orphan: '#6b7280' }
+
+// Edge handles of the selected rectangle: which coordinate each one drags, and where it sits.
+const HANDLES = [
+  { edge: 'x0', cursor: 'ew-resize', at: b => ({ x: b.x - HANDLE_PX / 2, y: b.y, width: HANDLE_PX, height: b.height }) },
+  { edge: 'x1', cursor: 'ew-resize', at: b => ({ x: b.x + b.width - HANDLE_PX / 2, y: b.y, width: HANDLE_PX, height: b.height }) },
+  { edge: 'y0', cursor: 'ns-resize', at: b => ({ x: b.x, y: b.y - HANDLE_PX / 2, width: b.width, height: HANDLE_PX }) },
+  { edge: 'y1', cursor: 'ns-resize', at: b => ({ x: b.x, y: b.y + b.height - HANDLE_PX / 2, width: b.width, height: HANDLE_PX }) },
+]
+
+const sameSel = (a, b) => a && b && a.list === b.list && a.i === b.i && (a.list === 'orphan' || a.q === b.q)
+
+function Overlay({ page, paper, sel, onSelect, onResize }) {
+  const svgRef = useRef(null)
+  const drag = useRef(null)
   const boxes = []
-  paper.questions.forEach(q => {
-    rectsOnPage(q.question_rects, page.page).forEach((r, i) =>
-      boxes.push({ key: `q${q.number}-${i}`, kind: 'question', number: q.number, box: rectToPx(r, page), on: q.number === selected }))
-    rectsOnPage(q.answer_rects, page.page).forEach((r, i) =>
-      boxes.push({ key: `a${q.number}-${i}`, kind: 'answer', number: q.number, box: rectToPx(r, page), on: q.number === selected }))
+  const add = (list, q, rects, label) =>
+    rects.forEach((r, i) => {
+      if (r.page === page.page) boxes.push({ list, q, i, label, box: rectToPx(r, page) })
+    })
+  paper.questions.forEach((q, k) => {
+    add('question', k, q.question_rects, `Q${q.number}`)
+    add('answer', k, q.answer_rects, `A${q.number}`)
   })
-  rectsOnPage(paper.orphan_answers, page.page).forEach((r, i) =>
-    boxes.push({ key: `o-${i}`, kind: 'orphan', number: null, box: rectToPx(r, page), on: false }))
-  const colour = { question: '#2563eb', answer: '#16a34a', orphan: '#6b7280' }
+  add('orphan', null, paper.orphan_answers, null)
+
+  function move(e) {
+    if (!drag.current) return
+    const pt = clientToPt(e.clientX, e.clientY, svgRef.current.getBoundingClientRect(), page)
+    onResize(drag.current.sel, { [drag.current.edge]: drag.current.edge[0] === 'x' ? pt.x : pt.y })
+  }
+
   return (
     <svg
+      ref={svgRef}
       data-testid="overlay"
       viewBox={`0 0 ${page.width_px} ${page.height_px}`}
       className="absolute inset-0 w-full h-full"
+      onClick={() => onSelect(null)}
     >
-      {boxes.map(b => (
-        <g key={b.key} data-kind={b.kind}>
-          <rect
-            {...b.box}
-            fill={colour[b.kind]}
-            fillOpacity={b.on ? 0.25 : 0.1}
-            stroke={colour[b.kind]}
-            strokeWidth={b.on ? 4 : 2}
-            strokeDasharray={b.kind === 'orphan' ? '8 4' : undefined}
-          />
-          {b.number != null && (
-            <text x={b.box.x + 6} y={b.box.y + 22} fontSize="20" fill={colour[b.kind]}>
-              {b.kind === 'answer' ? `A${b.number}` : `Q${b.number}`}
-            </text>
-          )}
-        </g>
-      ))}
+      {boxes.map(b => {
+        const s = { list: b.list, q: b.q, i: b.i }
+        const on = sameSel(sel, s)
+        const inQuestion = sel && sel.list !== 'orphan' && b.q === sel.q
+        return (
+          <g key={`${b.list}-${b.q}-${b.i}`} data-kind={b.list} data-selected={on || undefined}>
+            <rect
+              {...b.box}
+              fill={COLOUR[b.list]}
+              fillOpacity={on ? 0.3 : inQuestion ? 0.2 : 0.1}
+              stroke={COLOUR[b.list]}
+              strokeWidth={on || inQuestion ? 4 : 2}
+              strokeDasharray={b.list === 'orphan' ? '8 4' : undefined}
+              style={{ cursor: 'pointer' }}
+              onClick={e => { e.stopPropagation(); onSelect(s) }}
+            />
+            {b.label && (
+              <text x={b.box.x + 6} y={b.box.y + 22} fontSize="20" fill={COLOUR[b.list]} pointerEvents="none">
+                {b.label}
+              </text>
+            )}
+            {on && HANDLES.map(h => (
+              <rect
+                key={h.edge}
+                data-testid={`handle-${h.edge}`}
+                {...h.at(b.box)}
+                fill={COLOUR[b.list]}
+                fillOpacity={0.6}
+                style={{ cursor: h.cursor, touchAction: 'none' }}
+                onClick={e => e.stopPropagation()}
+                onPointerDown={e => {
+                  e.stopPropagation()
+                  e.currentTarget.setPointerCapture?.(e.pointerId)
+                  drag.current = { sel: s, edge: h.edge }
+                }}
+                onPointerMove={move}
+                onPointerUp={() => { drag.current = null }}
+                onPointerCancel={() => { drag.current = null }}
+              />
+            ))}
+          </g>
+        )
+      })}
     </svg>
   )
 }
+
+// A question's number; committed on blur or Enter, refused (with the reason) if it clashes.
+function NumberField({ paper, q, onCommit }) {
+  const number = paper.questions[q].number
+  const [text, setText] = useState(String(number))
+  const [error, setError] = useState(null)
+  useEffect(() => { setText(String(number)); setError(null) }, [number])
+  function commit() {
+    const n = Number(text)
+    const err = text.trim() === '' ? 'A question number must be a positive whole number' : renumberError(paper, q, n)
+    setError(err)
+    if (!err) onCommit(n)
+  }
+  return (
+    <span className="inline-flex flex-col">
+      <input
+        type="number"
+        min="1"
+        aria-label={`Number of question ${number}`}
+        aria-invalid={error ? 'true' : undefined}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') commit() }}
+        className="w-14 border border-gray-300 rounded px-1 text-sm"
+      />
+      {error && <span role="alert" className="text-xs text-red-600">{error}</span>}
+    </span>
+  )
+}
+
+const SAVE_LABEL = { saving: 'Saving…', saved: 'Saved', error: 'Not saved' }
 
 export default function ReviewPage() {
   const { jobId } = useParams()
@@ -55,7 +141,10 @@ export default function ReviewPage() {
   const [error, setError] = useState(null)
   const [paperIdx, setPaperIdx] = useState(0)
   const [pageNo, setPageNo] = useState(null)
-  const [selected, setSelected] = useState(null)
+  const [sel, setSel] = useState(null)
+  const [saveState, setSaveState] = useState('idle')
+  const timer = useRef(null)
+  const latest = useRef(null)
   const [handoff, setHandoff] = useState(null)
 
   useEffect(() => {
@@ -66,6 +155,26 @@ export default function ReviewPage() {
     return () => { live = false }
   }, [jobId])
 
+  latest.current = review
+
+  const flush = useCallback(async () => {
+    clearTimeout(timer.current)
+    timer.current = null
+    setSaveState('saving')
+    try {
+      await api.import.saveProposal(jobId, toEditPayload(latest.current.proposal.papers))
+      // A newer edit may have been queued while this one was in flight; it keeps "saving".
+      if (!timer.current) setSaveState('saved')
+      setError(null)
+    } catch (e) {
+      setSaveState('error')
+      setError(e.message)
+    }
+  }, [jobId])
+
+  // Leaving the page with an edit still waiting for its debounce saves it now.
+  useEffect(() => () => { if (timer.current) flush() }, [flush])
+
   const papers = review?.proposal.papers ?? []
   const paper = papers[paperIdx]
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
@@ -73,14 +182,45 @@ export default function ReviewPage() {
   function choosePaper(i) {
     setPaperIdx(i)
     setPageNo(null)
-    setSelected(null)
+    setSel(null)
   }
 
-  function chooseQuestion(q) {
-    setSelected(q.number)
-    const p = firstPageOf(q)
+  function chooseQuestion(k) {
+    setSel({ list: 'question', q: k, i: 0 })
+    const p = firstPageOf(paper.questions[k])
     if (p != null) setPageNo(p)
   }
+
+  // Apply a pure edit to the current paper and queue a debounced save. `nextSel` is the
+  // selection afterwards (default: cleared, since indexes may have shifted).
+  function edit(fn, nextSel = null) {
+    const next = fn(paper)
+    if (next === paper) return
+    setReview(r => ({
+      ...r,
+      edited: true,
+      proposal: { ...r.proposal, papers: r.proposal.papers.map((p, i) => (i === paperIdx ? next : p)) },
+    }))
+    setSel(nextSel)
+    setSaveState('saving')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(flush, SAVE_DELAY_MS)
+  }
+
+  const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s)
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const t = e.target
+      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
+      if (!sel) return
+      e.preventDefault()
+      edit(p => deleteRect(p, sel))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   async function handleManually(item) {
     setHandoff(item.label)
@@ -114,6 +254,11 @@ export default function ReviewPage() {
         <Link to="/admin/import" className="text-sm text-blue-600 hover:underline">Back to import</Link>
         <h1 className="text-lg font-semibold text-gray-800 break-all">{review.filename}</h1>
         {review.edited && <span className="text-xs text-gray-500">edited</span>}
+        {saveState !== 'idle' && (
+          <span role="status" data-state={saveState} className={`text-xs ${saveState === 'error' ? 'text-red-600' : 'text-gray-500'}`}>
+            {SAVE_LABEL[saveState]}
+          </span>
+        )}
       </div>
       <ErrorBanner message={error} />
 
@@ -196,7 +341,7 @@ export default function ReviewPage() {
                   ) : (
                     <p className="p-4 text-sm text-gray-500">The image for this page is missing.</p>
                   )}
-                  <Overlay page={page} paper={paper} selected={selected} />
+                  <Overlay page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} />
                 </div>
               </>
             ) : (
@@ -212,25 +357,55 @@ export default function ReviewPage() {
               <p className="text-sm text-gray-500">No questions were found for this paper.</p>
             ) : (
               <ul className="space-y-1">
-                {paper.questions.map(q => (
-                  <li key={q.number}>
-                    <button
-                      type="button"
-                      data-flagged={q.flags.length > 0 || undefined}
-                      aria-pressed={selected === q.number}
-                      onClick={() => chooseQuestion(q)}
-                      className={`w-full text-left text-sm rounded border px-2 py-1 ${
-                        selected === q.number ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
-                      }`}
-                    >
-                      <span className="font-medium">Question {q.number}</span>
-                      {q.answer_rects.length === 0 && <span className="text-xs text-gray-500"> (no answer)</span>}
-                      {q.flags.map(f => (
-                        <span key={f} className="block text-xs text-amber-800">{f}</span>
-                      ))}
-                    </button>
-                  </li>
-                ))}
+                {paper.questions.map((q, k) => {
+                  const active = sel != null && sel.list !== 'orphan' && sel.q === k
+                  const onQuestionRect = active && sel.list === 'question'
+                  const rect = onQuestionRect ? getRect(paper, sel) : null
+                  return (
+                    <li key={k} className={`rounded border px-2 py-1 ${
+                      active ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          data-flagged={q.flags.length > 0 || undefined}
+                          aria-pressed={active}
+                          onClick={() => chooseQuestion(k)}
+                          className="flex-1 text-left text-sm"
+                        >
+                          <span className="font-medium">Question {q.number}</span>
+                          {q.answer_rects.length === 0 && <span className="text-xs text-gray-500"> (no answer)</span>}
+                          {q.flags.map(f => (
+                            <span key={f} className="block text-xs text-amber-800">{f}</span>
+                          ))}
+                        </button>
+                        <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), sel)} />
+                      </div>
+                      {active && (
+                        <div className="mt-1 flex flex-wrap gap-1 text-xs">
+                          {k > 0 && (
+                            <button type="button" className="text-blue-700 hover:underline"
+                              onClick={() => edit(p => mergeWithPrevious(p, k))}>
+                              Merge with previous
+                            </button>
+                          )}
+                          {rect && sel.i > 0 && (
+                            <button type="button" className="text-blue-700 hover:underline"
+                              onClick={() => edit(p => splitBetween(p, k, sel.i))}>
+                              Split before selected rectangle
+                            </button>
+                          )}
+                          {rect && (
+                            <button type="button" className="text-blue-700 hover:underline"
+                              onClick={() => edit(p => splitThrough(p, k, sel.i, (rect.y0 + rect.y1) / 2))}>
+                              Split selected rectangle in half
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
             {paper.orphan_answers.length > 0 && (

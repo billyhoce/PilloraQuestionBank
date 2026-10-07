@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import ReviewPage from './ReviewPage'
 import { api } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
-  api: { import: { review: vi.fn(), manualPages: vi.fn() } },
+  api: { import: { review: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn() } },
 }))
 
 const page = (n, extra = {}) => ({
@@ -107,5 +107,82 @@ describe('ReviewPage', () => {
     api.import.review.mockRejectedValue({ message: 'This job has no proposal to review yet' })
     renderPage()
     expect(await screen.findByText('This job has no proposal to review yet')).toBeInTheDocument()
+  })
+
+  describe('editing', () => {
+    beforeEach(() => {
+      api.import.saveProposal.mockResolvedValue({ saved: true })
+    })
+
+    it('deletes the selected rectangle with the keyboard and saves once, debounced', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const rect = document.querySelector('g[data-kind="question"] rect')
+      await userEvent.click(rect)
+      await userEvent.keyboard('{Delete}')
+      // Question 1 lost its only rectangle, so it is gone and its answer is unmatched.
+      expect(screen.queryByText('Question 1')).toBeNull()
+      expect(screen.getByRole('status')).toHaveTextContent('Saving')
+      expect(api.import.saveProposal).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved'), { timeout: 3000 })
+      expect(api.import.saveProposal).toHaveBeenCalledTimes(1)
+      const [id, body] = api.import.saveProposal.mock.calls[0]
+      expect(id).toBe('j1')
+      expect(body.papers[0].questions.map(q => q.number)).toEqual([2])
+      expect(body.papers[0].orphan_answers).toHaveLength(1)
+      expect(body.papers[0]).not.toHaveProperty('pages')
+    })
+
+    it('does not delete while typing in a number field', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(document.querySelector('g[data-kind="question"] rect'))
+      await userEvent.click(screen.getByLabelText('Number of question 2'))
+      await userEvent.keyboard('{Backspace}')
+      expect(screen.getByText('Question 1')).toBeInTheDocument()
+    })
+
+    it('renumbers a question and refuses a duplicate number', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const field = screen.getByLabelText('Number of question 2')
+      fireEvent.change(field, { target: { value: '1' } })
+      await userEvent.type(field, '{Enter}')
+      expect(screen.getByRole('alert')).toHaveTextContent('Question 1 already exists')
+      fireEvent.change(field, { target: { value: '5' } })
+      await userEvent.type(field, '{Enter}')
+      expect(screen.getByText('Question 5')).toBeInTheDocument()
+      await waitFor(() => expect(api.import.saveProposal).toHaveBeenCalled(), { timeout: 3000 })
+      expect(api.import.saveProposal.mock.calls[0][1].papers[0].questions[1].number).toBe(5)
+    })
+
+    it('merges a question with the previous one', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: /Question 2/ }))
+      await userEvent.click(screen.getByRole('button', { name: 'Merge with previous' }))
+      expect(screen.queryByText('Question 2')).toBeNull()
+      await waitFor(() => expect(api.import.saveProposal).toHaveBeenCalled(), { timeout: 3000 })
+      expect(api.import.saveProposal.mock.calls[0][1].papers[0].questions[0].question_rects).toHaveLength(2)
+    })
+
+    it('splits a question through its rectangle', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: /Question 1/ }))
+      await userEvent.click(screen.getByRole('button', { name: 'Split selected rectangle in half' }))
+      expect(screen.getAllByText(/^Question \d$/)).toHaveLength(3)
+    })
+
+    it('shows the server message when a save is rejected', async () => {
+      api.import.saveProposal.mockRejectedValue({ message: 'a rectangle lies outside page 2' })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: /Page 3 thumbnail/ }))
+      await userEvent.click(document.querySelector('g[data-kind="answer"] rect'))
+      await userEvent.keyboard('{Delete}')
+      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not saved'), { timeout: 3000 })
+      expect(screen.getByText('a rectangle lies outside page 2')).toBeInTheDocument()
+    })
   })
 })
