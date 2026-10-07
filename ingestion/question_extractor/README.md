@@ -276,7 +276,14 @@ removed.
 
 ## Layout
 
-`pipeline.py` runs the stages in order; its docstring names them.
+`pipeline.py` runs the stages in order; its docstring names them. `locate_questions`
+(stages 1-6) writes nothing and returns a `LocatedPaper`; `write_renders` and
+`write_question_manifest` take it and write the page images and `manifest.json`;
+`extract_paper` is the three in sequence. For `--table`, `tablepipeline.py` splits the same
+way: `grid_pages` (column pairs and row bands; for a scan, the straightened pages' question
+cells cropped for OCR), `read_labels` (question labels from the text layer or from OCR; an
+OCR failure comes back as flagged pages) and `group_questions` (rows → questions, renders,
+`manifest.json`, `tables.json`); `extract_table_paper` is the three in sequence.
 
 | Module | Stage |
 | --- | --- |
@@ -301,12 +308,12 @@ removed.
 | `tables.py` | `--table`: rules → column pairs, row bands, labels, reading order. |
 | `tablequestions.py` | `--table`: rows → `Question`s, one `Band` per run of rows. |
 | `tablerender.py` | `--table --debug`: the row-level geometry on `_debug/pNN.png`. |
-| `tablepipeline.py` | `--table`: runs the stages, writes `manifest.json` and `tables.json`. |
+| `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json` and `tables.json`); `extract_table_paper` runs them. |
 | `cli.py` / `__main__.py` | The command line. |
 
-Public surface: `ExtractConfig`, `extract_paper`, `Band`, `Question`, `PageResult`,
+Public surface: `ExtractConfig`, `extract_paper`, `locate_questions`, `LocatedPaper`, `Band`, `Question`, `PageResult`,
 `Calibration`, `PaperResult`, `SourceProvenance`, `ExtractionError`; for `--table`,
-`extract_table_paper`, `TableLayout`, `TablePaperResult`, `TablePage`, `ColumnPair`,
+`extract_table_paper`, `grid_pages`, `read_labels`, `group_questions`, `GridPages`, `TableLayout`, `TablePaperResult`, `TablePage`, `ColumnPair`,
 `RowBand`.
 
 ## Verifying a change
