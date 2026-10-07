@@ -28,65 +28,95 @@ output/<paper>/<label>/manifest.json, pNN.png   # one question_extractor run per
 output/<paper>/ingest.json                      # the paper-level report
 ```
 
-The three stages, each step described below:
+The three stages at a glance, then one diagram per stage:
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
+flowchart LR
+    pdf[/"booklet PDF"/]
+    SEG["<b>1. segment</b><br/>which pages are which?"]
+    SPL["<b>2. split</b><br/>one PDF per section"]
+    RTE["<b>3. route</b><br/>crop each section"]
+    rep[("ingest.json<br/>paper-level report")]
+
+    pdf --> SEG
+    SEG -- "segments.json" --> SPL
+    SPL -- "_split/label.pdf<br/>+ split.json" --> RTE
+    RTE -- "label/manifest.json, pNN.png" --> rep
+```
+
+### 1. Segment
+
+Reuse a plan if one exists, otherwise ask a model, validate, and escalate once. `segments.json`
+is written whatever happens.
+
+```mermaid
 flowchart TD
     pdf[/"booklet PDF"/]
-
-    subgraph SEG["segment"]
-        reuse{"plan on disk?"}
-        size{"past 100 pages<br/>or 32MB?"}
-        ask1["ask claude-haiku-4-5"]
-        val1{"validate"}
-        ask2["ask claude-opus-5, once"]
-        val2{"validate"}
-        anom["accept<br/>warn anomalies"]
-        empty["no sections<br/>warned"]
-        plan[("segments.json<br/>always written")]
-        reuse -->|"no, or --force"| size
-        size -->|"yes"| empty
-        size -->|"no"| ask1 --> val1
-        val1 -->|"passes"| anom
-        val1 -->|"fails, or the request failed"| ask2 --> val2
-        val2 -->|"passes"| anom
-        val2 -->|"fails"| empty
-        reuse -->|"segments.json in the output folder,<br/>else the committed fixture"| plan
-        anom --> plan
-        empty --> plan
-    end
-
-    subgraph SPL["split"]
-        cut["each section's pages, whole<br/>→ _split/label.pdf<br/>a bad section is warned and skipped"]
-        sj[("_split/split.json<br/>page maps, skipped labels")]
-        cut --> sj
-    end
-
-    subgraph RTE["route, per section"]
-        kind{"kind and template"}
-        hastext{"any page with<br/>extractable text?"}
-        qp["question_extractor<br/>provenance: the page map"]
-        tp["question_extractor --table<br/>provenance: the page map<br/>layout: question_columns, reading_order"]
-        nr["not_routed<br/>flagged"]
-        res["label/manifest.json, pNN.png<br/>+ tables.json for a table"]
-        fail["failed<br/>the rest still run"]
-        kind -->|"question"| hastext
-        kind -->|"answer, annotated_booklet"| hastext
-        kind -->|"answer, table<br/>digital or scanned"| tp
-        kind -->|"answer, no template"| nr
-        hastext -->|"yes"| qp
-        hastext -->|"no: a scan"| nr
-        qp --> res
-        tp --> res
-        qp -. "error" .-> fail
-        tp -. "error" .-> fail
-    end
+    reuse{"plan on disk?"}
+    size{"past 100 pages<br/>or 32MB?"}
+    ask1["ask claude-haiku-4-5"]
+    val1{"validate"}
+    ask2["ask claude-opus-5, once"]
+    val2{"validate"}
+    anom["accept<br/>warn anomalies"]
+    empty["no sections<br/>warned"]
+    plan[("segments.json<br/>always written")]
 
     pdf --> reuse
-    plan --> cut
-    cut --> kind
-    res --> rep[("ingest.json")]
+    reuse -->|"segments.json in the output folder,<br/>else the committed fixture"| plan
+    reuse -->|"no, or --force"| size
+    size -->|"yes"| empty
+    size -->|"no"| ask1 --> val1
+    val1 -->|"passes"| anom
+    val1 -->|"fails, or the request failed"| ask2 --> val2
+    val2 -->|"passes"| anom
+    val2 -->|"fails"| empty
+    anom --> plan
+    empty --> plan
+```
+
+### 2. Split
+
+Reads the plan the same way (never asks a model) and cuts the PDF along it.
+
+```mermaid
+flowchart TD
+    plan[("segments.json")]
+    cut["each section's pages, whole<br/>→ _split/label.pdf<br/>a bad section is warned and skipped"]
+    sj[("_split/split.json<br/>page maps, skipped labels")]
+
+    plan --> cut --> sj
+```
+
+### 3. Route
+
+Each split section goes to the pipeline that can crop its shape. Failures are recorded and the
+remaining sections still run.
+
+```mermaid
+flowchart TD
+    sec[/"split section"/]
+    kind{"kind and template"}
+    hastext{"any page with<br/>extractable text?"}
+    qp["question_extractor<br/>provenance: the page map"]
+    tp["question_extractor --table<br/>provenance: the page map<br/>layout: question_columns, reading_order"]
+    nr["not_routed<br/>flagged"]
+    res["label/manifest.json, pNN.png<br/>+ tables.json for a table"]
+    fail["failed<br/>the rest still run"]
+    rep[("ingest.json")]
+
+    sec --> kind
+    kind -->|"question"| hastext
+    kind -->|"answer, annotated_booklet"| hastext
+    kind -->|"answer, table<br/>digital or scanned"| tp
+    kind -->|"answer, no template"| nr
+    hastext -->|"yes"| qp
+    hastext -->|"no: a scan"| nr
+    qp --> res
+    tp --> res
+    qp -. "error" .-> fail
+    tp -. "error" .-> fail
+    res --> rep
     nr --> rep
     fail --> rep
 ```
