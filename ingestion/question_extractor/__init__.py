@@ -36,9 +36,16 @@ from __future__ import annotations
 from .boundaries import Band, PageResult, Question
 from .calibration import Calibration
 from .config import ExtractConfig
-from .pipeline import ExtractionError, PaperResult, extract_paper
+from .pipeline import ExtractionError, LocatedPaper, PaperResult, extract_paper, locate_questions
 from .provenance import SourceProvenance
-from .tablepipeline import TablePaperResult, extract_table_paper
+from .tablepipeline import (
+    GridPages,
+    TablePaperResult,
+    extract_table_paper,
+    grid_pages,
+    group_questions,
+    read_labels,
+)
 from .tables import ColumnPair, RowBand, TableLayout, TablePage
 
 __all__ = [
@@ -47,6 +54,8 @@ __all__ = [
     "ColumnPair",
     "ExtractConfig",
     "ExtractionError",
+    "GridPages",
+    "LocatedPaper",
     "PageResult",
     "PaperResult",
     "Question",
@@ -57,6 +66,10 @@ __all__ = [
     "TablePaperResult",
     "extract_paper",
     "extract_table_paper",
+    "grid_pages",
+    "group_questions",
+    "locate_questions",
+    "read_labels",
 ]
 
 __version__ = "0.1.0"

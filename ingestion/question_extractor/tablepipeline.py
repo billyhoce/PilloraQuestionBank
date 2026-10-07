@@ -25,6 +25,12 @@ none of its question-paper ones:
    rectangles are in. ``tables.json`` records the row-level reading behind them,
    and ``--debug`` draws it (:mod:`.tablerender`).
 
+Stages 1-3 are :func:`grid_pages` (which also crops the scanned pages' question
+cells), 4-5 are :func:`read_labels` and 6-7 are :func:`group_questions`;
+:func:`extract_table_paper` is the three in sequence. Only :func:`group_questions`
+writes files, and an OCR failure never raises out of :func:`read_labels`: the
+scanned pages come back flagged.
+
 Provenance works as in :mod:`.pipeline`: it takes part in no detection and only
 adds ``original_page`` beside each page number in the output.
 """
@@ -83,31 +89,33 @@ class TablePaperResult:
         return sum(len(pair.rows) for page in self.pages for pair in page.pairs)
 
 
-def extract_table_paper(
+@dataclass
+class GridPages:
+    """What :func:`grid_pages` found: every page's grid, before any label is read."""
+
+    paper: str
+    pdf_path: Path
+    page_count: int
+    geoms: list[PageGeometry]
+    furniture: Furniture
+    pages: list[TablePage]
+    cells: list[OcrCell]
+    """The question cells of every scanned page, cropped from its straightened
+    image and waiting to be OCR'd; empty for a born-digital section."""
+
+
+def grid_pages(
     pdf_path: Path,
-    output_root: Path,
     config: ExtractConfig,
-    debug: bool = False,
-    provenance: SourceProvenance | None = None,
     layout: TableLayout | None = None,
-) -> TablePaperResult:
-    """Read every page of a table-format answer PDF into column pairs and rows.
+    provenance: SourceProvenance | None = None,
+) -> GridPages:
+    """Stages 1-3, and the crops for stage 4: each page's column pairs and row bands.
 
-    ``layout`` is the segmenter's word on which columns hold the question numbers
-    and which way the answers read; without it both are measured.
+    Writes nothing. A scanned page is straightened and read off its pixels; its
+    question-cell crops are collected in :attr:`GridPages.cells`. Every row's label
+    is still unread (:func:`read_labels`).
     """
-    with collect_warnings():
-        return _extract(pdf_path, output_root, config, debug, provenance, layout)
-
-
-def _extract(
-    pdf_path: Path,
-    output_root: Path,
-    config: ExtractConfig,
-    debug: bool,
-    provenance: SourceProvenance | None,
-    layout: TableLayout | None,
-) -> TablePaperResult:
     name = paper_name(pdf_path)
     log.info("processing %s as an answer table", pdf_path.name)
     scan_config = replace(config, table_rule_pos_tol=config.scan_rule_pos_tol)
@@ -119,22 +127,35 @@ def _extract(
     with doc:
         page_count = doc.page_count
         try:
-            pages = extract_document(doc)
+            geoms = extract_document(doc)
         except Exception as exc:
             raise ExtractionError(f"could not read {pdf_path.name}: {exc}") from exc
-        if not pages:
+        if not geoms:
             raise ExtractionError(f"{pdf_path.name} has no pages")
         check_page_map(provenance, page_count, pdf_path.name)
-        furniture = detect_furniture(pages, config)
+        furniture = detect_furniture(geoms, config)
 
         cells: list[OcrCell] = []
-        results = [
+        pages = [
             _find_page(doc[geom.number - 1], geom, furniture, config, scan_config, layout, cells)
-            for geom in pages
+            for geom in geoms
         ]
+    return GridPages(name, pdf_path, page_count, geoms, furniture, pages, cells)
 
-    ocr_lines = _read_scanned_labels(name, cells, results, config)
-    for geom, result in zip(pages, results):
+
+def read_labels(
+    grid: GridPages, config: ExtractConfig, layout: TableLayout | None = None
+) -> list[TablePage]:
+    """Stages 4-5: each row's question label, from the text layer or from OCR.
+
+    OCRs every scanned page's question cells in one container run. When that
+    cannot run the scanned pages come back flagged (their grid is as good as
+    ever), not as an exception. Fills the rows of ``grid.pages`` in place and
+    returns them; writes nothing.
+    """
+    scan_config = replace(config, table_rule_pos_tol=config.scan_rule_pos_tol)
+    ocr_lines = _read_scanned_labels(grid.paper, grid.cells, grid.pages, config)
+    for geom, result in zip(grid.geoms, grid.pages):
         if result.scanned:
             label_table_page(
                 result,
@@ -144,10 +165,26 @@ def _extract(
                 labels_read=ocr_lines is not None,
             )
         else:
-            label_table_page(result, furniture.body_lines(geom), config, layout)
-    for result in results:
+            label_table_page(result, grid.furniture.body_lines(geom), config, layout)
+    for result in grid.pages:
         if result.needs_review:
-            log.warning("%s p%d: %s", name, result.page, result.review_reason)
+            log.warning("%s p%d: %s", grid.paper, result.page, result.review_reason)
+    return grid.pages
+
+
+def group_questions(
+    grid: GridPages,
+    output_root: Path,
+    config: ExtractConfig,
+    debug: bool = False,
+    provenance: SourceProvenance | None = None,
+    layout: TableLayout | None = None,
+) -> TablePaperResult:
+    """Stages 6-7: group the labelled rows into questions, and write the outputs.
+
+    Renders the pages, then writes ``manifest.json`` and ``tables.json``.
+    """
+    name, pdf_path, results = grid.paper, grid.pdf_path, grid.pages
     questions, page_results = build_table_questions(results, config)
 
     out_dir = output_root / name
@@ -168,7 +205,7 @@ def _extract(
     manifest = build_manifest(
         paper=name,
         source_pdf=pdf_path,
-        page_count=page_count,
+        page_count=grid.page_count,
         start_page=1,
         end_page=None,
         questions=questions,
@@ -185,7 +222,7 @@ def _extract(
     record = build_tables_record(
         paper=name,
         source_pdf=pdf_path,
-        page_count=page_count,
+        page_count=grid.page_count,
         results=results,
         images=images,
         config=config,
@@ -216,6 +253,26 @@ def _extract(
         " - some pages need review" if result.needs_review else "",
     )
     return result
+
+
+def extract_table_paper(
+    pdf_path: Path,
+    output_root: Path,
+    config: ExtractConfig,
+    debug: bool = False,
+    provenance: SourceProvenance | None = None,
+    layout: TableLayout | None = None,
+) -> TablePaperResult:
+    """Read every page of a table-format answer PDF into column pairs and rows.
+
+    ``layout`` is the segmenter's word on which columns hold the question numbers
+    and which way the answers read; without it both are measured. A sequence of
+    :func:`grid_pages`, :func:`read_labels` and :func:`group_questions`.
+    """
+    with collect_warnings():
+        grid = grid_pages(pdf_path, config, layout, provenance)
+        read_labels(grid, config, layout)
+        return group_questions(grid, output_root, config, debug, provenance, layout)
 
 
 TABLE_OUTPUT_NOTE = (

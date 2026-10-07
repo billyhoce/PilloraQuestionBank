@@ -15,6 +15,11 @@ Order matters and each stage depends only on the ones above it:
    which question, and turning it off reproduces stage 5's output exactly.
 7. **render + manifest** — annotated pages and the record of the rectangles.
 
+Stages 1-6 are :func:`locate_questions`, which writes nothing and returns a
+:class:`LocatedPaper`; stage 7 is :func:`write_renders` and
+:func:`write_question_manifest`, each taking that result. :func:`extract_paper`
+is the three in sequence.
+
 A caller may also hand in provenance: the document this PDF was carved out of
 and the page map back into it (:mod:`question_extractor.provenance`). It takes
 part in no stage above — detection reads only the PDF it was given — and is
@@ -148,32 +153,33 @@ def _unparsed_results(pages: list[PageGeometry], furniture) -> list[PageResult]:
     ]
 
 
-def extract_paper(
+@dataclass
+class LocatedPaper:
+    """What :func:`locate_questions` found in one paper; nothing of it is on disk yet."""
+
+    paper: str
+    pdf_path: Path
+    page_count: int
+    questions: list[Question]
+    pages: list[PageResult]
+    calibration: Calibration | None
+    start_page: int
+    end_page: int | None
+
+
+def locate_questions(
     pdf_path: Path,
-    output_root: Path,
     config: ExtractConfig,
     start_page: int | None = None,
-    debug: bool = False,
     provenance: SourceProvenance | None = None,
-) -> PaperResult:
-    """Process one PDF into annotated page renders plus a manifest.
+) -> LocatedPaper:
+    """Stages 1-6: find every question's rectangles. Writes nothing.
 
-    ``provenance`` is optional: give it when ``pdf_path`` was carved out of a
-    larger document and the manifest's page numbers should also be addressable
-    there. It changes no detection and, when omitted, no manifest field.
+    The result is all the writers need: :func:`write_renders` draws the pages,
+    :func:`write_question_manifest` records the rectangles. ``provenance`` is
+    only checked here (one warning for a bad page map); it changes no detection.
+    Warnings go to the innermost open :func:`collect_warnings` scope.
     """
-    with collect_warnings():
-        return _extract_paper(pdf_path, output_root, config, start_page, debug, provenance)
-
-
-def _extract_paper(
-    pdf_path: Path,
-    output_root: Path,
-    config: ExtractConfig,
-    start_page: int | None,
-    debug: bool,
-    provenance: SourceProvenance | None,
-) -> PaperResult:
     name = paper_name(pdf_path)
     log.info("processing %s", pdf_path.name)
 
@@ -243,46 +249,99 @@ def _extract_paper(
         if config.trim_crops:
             trim_bands(pdf_path, pages, furniture, calibration, results, config)
 
-    out_dir = output_root / name
-    segment_totals = {q.number: len(q.bands) for q in questions}
-    images = render_pages(
-        pdf_path, out_dir, results, segment_totals, calibration, config, debug=False
-    )
-    if debug:
-        render_pages(
-            pdf_path, out_dir, results, segment_totals, calibration, config, debug=True
-        )
-
-    manifest = build_manifest(
+    return LocatedPaper(
         paper=name,
-        source_pdf=pdf_path,
+        pdf_path=pdf_path,
         page_count=page_count,
-        start_page=resolved_start,
-        end_page=end_page,
-        questions=questions,
-        results=results,
-        images=images,
-        calibration=calibration,
-        config=config,
-        warnings=current_warnings(),
-        provenance=provenance,
-    )
-    manifest_path = write_manifest(manifest, out_dir)
-
-    log.info(
-        "%s: %d question(s) across %d page(s)%s",
-        name,
-        len(questions),
-        len(results),
-        " - some pages need review" if any(r.needs_review for r in results) else "",
-    )
-    return PaperResult(
-        paper=name,
-        out_dir=out_dir,
         questions=questions,
         pages=results,
+        calibration=calibration,
+        start_page=resolved_start,
+        end_page=end_page,
+    )
+
+
+def write_renders(
+    located: LocatedPaper, out_dir: Path, config: ExtractConfig, debug: bool = False
+) -> dict[int, str]:
+    """Draw each page whole with the question rectangles in red; ``{page: filename}``.
+
+    ``debug`` also writes the debug renders (calibration and anchors drawn in).
+    """
+    segment_totals = {q.number: len(q.bands) for q in located.questions}
+    args = (
+        located.pdf_path, out_dir, located.pages, segment_totals, located.calibration, config
+    )
+    images = render_pages(*args, debug=False)
+    if debug:
+        render_pages(*args, debug=True)
+    return images
+
+
+def write_question_manifest(
+    located: LocatedPaper,
+    out_dir: Path,
+    images: dict[int, str],
+    config: ExtractConfig,
+    warnings: list[str],
+    provenance: SourceProvenance | None = None,
+) -> Path:
+    """Write ``manifest.json`` for a located paper; returns its path."""
+    manifest = build_manifest(
+        paper=located.paper,
+        source_pdf=located.pdf_path,
+        page_count=located.page_count,
+        start_page=located.start_page,
+        end_page=located.end_page,
+        questions=located.questions,
+        results=located.pages,
         images=images,
-        manifest_path=manifest_path,
-        warnings=current_warnings(),
+        calibration=located.calibration,
+        config=config,
+        warnings=warnings,
         provenance=provenance,
     )
+    return write_manifest(manifest, out_dir)
+
+
+def extract_paper(
+    pdf_path: Path,
+    output_root: Path,
+    config: ExtractConfig,
+    start_page: int | None = None,
+    debug: bool = False,
+    provenance: SourceProvenance | None = None,
+) -> PaperResult:
+    """Process one PDF into annotated page renders plus a manifest.
+
+    ``provenance`` is optional: give it when ``pdf_path`` was carved out of a
+    larger document and the manifest's page numbers should also be addressable
+    there. It changes no detection and, when omitted, no manifest field.
+
+    A sequence of :func:`locate_questions`, :func:`write_renders` and
+    :func:`write_question_manifest`.
+    """
+    with collect_warnings():
+        located = locate_questions(pdf_path, config, start_page, provenance)
+        out_dir = output_root / located.paper
+        images = write_renders(located, out_dir, config, debug)
+        manifest_path = write_question_manifest(
+            located, out_dir, images, config, current_warnings(), provenance
+        )
+        log.info(
+            "%s: %d question(s) across %d page(s)%s",
+            located.paper,
+            len(located.questions),
+            len(located.pages),
+            " - some pages need review" if any(r.needs_review for r in located.pages) else "",
+        )
+        return PaperResult(
+            paper=located.paper,
+            out_dir=out_dir,
+            questions=located.questions,
+            pages=located.pages,
+            images=images,
+            manifest_path=manifest_path,
+            warnings=current_warnings(),
+            provenance=provenance,
+        )
