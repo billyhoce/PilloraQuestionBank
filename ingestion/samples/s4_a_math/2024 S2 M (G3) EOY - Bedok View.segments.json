@@ -1,0 +1,69 @@
+{
+  "pdf": "samples/s4_a_math/2024 S2 M (G3) EOY - Bedok View.pdf",
+  "paper": "2024 S2 M (G3) EOY - Bedok View",
+  "page_count": 36,
+  "generated_at": "2026-10-06T10:46:14+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 2,
+      "last_page": 10,
+      "note": "Paper 1 question paper, ending on END OF PAPER; p1 cover. Whole PDF is a scan with no text layer",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "q2",
+      "kind": "question",
+      "index": 2,
+      "first_page": 12,
+      "last_page": 21,
+      "note": "Paper 2 question paper, ending on END OF PAPER; p11 its own cover, p22 blank",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 23,
+      "last_page": 30,
+      "note": "Paper 1 marking scheme, scanned: No. | Working | Remarks",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    },
+    {
+      "label": "a2",
+      "kind": "answer",
+      "index": 2,
+      "first_page": 31,
+      "last_page": 36,
+      "note": "Paper 2 marking scheme, scanned, to the last page of the PDF",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    }
+  ],
+  "attempts": [],
+  "warnings": [
+    "2 page(s) between sections belong to none of them (11, 22); front matter for the section that follows reads this way, and so does a section left out altogether"
+  ],
+  "config": null
+}

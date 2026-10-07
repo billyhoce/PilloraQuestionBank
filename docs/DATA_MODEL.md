@@ -36,7 +36,8 @@ Paper: {
   paper_number (string),       -- "1", "2", "a", "b" etc.
   is_premium (bool),           -- default false; premium papers are gated to premium/admin users
   created_by (FK -> User),
-  created_at
+  created_at,
+  source_job_id (uuid, nullable FK -> IngestJob, ON DELETE SET NULL)  -- provenance: the auto-import job that produced it (set when the review page confirms it); NULL for manual imports
 }
 
 Question: {
@@ -194,6 +195,56 @@ a name the user typed is never overwritten. `password_hash` is nullable purely t
 second row; `verify_password` rejects a NULL/empty hash, so a Google-only account cannot be
 password-logged-in. See [features/auth.md](./features/auth.md).
 
+## Auto-import jobs
+
+Tables behind the Auto-detect import ([features/ingestion.md](./features/ingestion.md#auto-detect-import)).
+Postgres types (`ENUM`, `JSONB`, `INT[]`) have portable variants in the ORM so the SQLite unit-test
+schema still builds (`JSON().with_variant(JSONB, "postgresql")`).
+
+```
+IngestJob: {
+  id (uuid, PK),
+  created_by (FK -> User, ON DELETE RESTRICT),
+  filename, source_key,          -- source_key = tmp/ingest/{id}/source.pdf
+  sha256, page_count,            -- computed at upload from the bytes (no rendering)
+  status ENUM(queued, running, review_ready, failed, confirmed, cancelled, expired),  -- default queued
+  proposal (JSONB, nullable),    -- the pipeline's proposed split
+  proposal_edited (JSONB, nullable),  -- the admin's edits to it
+  report (JSONB, nullable),      -- run report; `filename_metadata` holds the filename-extraction
+                                 -- result, written by the worker's `register` task (pre-fills the metadata sidebar);
+                                 -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped"
+                                 -- (written by the confirm/skip endpoints; the job is `confirmed` once all are set)
+  error (text, nullable),
+  created_at, updated_at,
+  confirmed_paper_ids (int[], nullable)   -- papers created by confirming proposal papers, in order
+}
+
+IngestTask: {
+  id,
+  job_id (FK -> IngestJob, ON DELETE CASCADE),
+  section (string(8), nullable), -- NULL for job-level stages
+  stage (string(16)),
+  status ENUM(pending, ready, running, done, skipped, failed, blocked),  -- default pending
+  attempts (int), reason, error (text), warnings (JSONB, default []),
+  needs_review (bool), fingerprint (string(64), nullable),
+  lease_until, started_at, finished_at (timestamptz, nullable), duration_ms (int, nullable),
+  UNIQUE (job_id, section, stage),
+  UNIQUE (job_id, stage) WHERE section IS NULL   -- partial index, see below
+}
+
+WorkerHeartbeat: {             -- singleton
+  id (int, CHECK id = 1),
+  seen_at, version, current_job_id (nullable FK -> IngestJob, ON DELETE SET NULL),
+  last_sweep_at (timestamptz, nullable)   -- when the daily expiry sweep last ran
+}
+```
+
+A plain `UNIQUE (job_id, section, stage)` does not constrain rows whose `section` is NULL in Postgres
+(NULLs are distinct), so job-level tasks get the extra **partial unique index**
+`uq_ingest_task_job_stage_jobwide`. It was chosen over `NULLS NOT DISTINCT` because that needs
+PG15+, whereas a partial index works on every Postgres and on SQLite (the test DB). A job's first
+task is `(section NULL, stage 'register', status 'ready')`.
+
 ## Image Storage Conventions
 
 - **Format:** WebP at quality 85 (best size/quality ratio for web; ~30–50% smaller than JPEG at same quality). Fall back to JPEG if WebP encoding is problematic.
@@ -203,6 +254,8 @@ password-logged-in. See [features/auth.md](./features/auth.md).
   papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp
   ```
   Groups all assets for a single question together.
+- **Auto-import source PDFs** live under `tmp/ingest/{job_id}/` (`source.pdf`); the whole prefix is
+  deleted when the job is cancelled.
 
 ## Image Dimension Standards
 

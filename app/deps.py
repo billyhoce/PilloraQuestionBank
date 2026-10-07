@@ -17,7 +17,9 @@ parameter; these providers extend the same idea to the route layer.
 
 from typing import Callable
 
+from app.ai.filename_extractor import extract_metadata
 from app.ai.topic_labeler import label_question
+from app.storage.object_store import ObjectStore, S3ObjectStore
 from app.storage.s3_client import get_image_bytes, get_presigned_url
 
 Presigner = Callable[[str], str]
@@ -37,3 +39,29 @@ def get_image_fetcher() -> ImageFetcher:
 def get_question_labeller():
     """The Claude call that splits a question into parts and labels them."""
     return label_question
+
+
+def get_object_store() -> ObjectStore:
+    """put / get / presign / delete-prefix over the bucket, for auto-import jobs."""
+    return S3ObjectStore()
+
+
+def get_metadata_extractor():
+    """The Claude call that reads paper metadata out of a filename."""
+    return extract_metadata
+
+
+def get_pipeline_runner():
+    """The factory the ingest worker builds its pipeline runner with.
+
+    Returns ``factory(store, job_dir, config, wrap) -> runner``; the runner needs
+    ``run_one()`` and ``revalidate(job_id)``. ``wrap`` adds the worker's S3 and database edges
+    to a registry. Tests override it with a factory whose stages write a canned proposal
+    (``tests/test_worker.py``) so no PDF, OCR or Claude call is needed."""
+    from pipeline.registry import default_registry
+    from pipeline.runner import Runner
+
+    def factory(store, job_dir, config, wrap):
+        return Runner(store, wrap(default_registry()), job_dir, config)
+
+    return factory

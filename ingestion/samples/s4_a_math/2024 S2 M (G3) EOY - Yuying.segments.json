@@ -1,0 +1,69 @@
+{
+  "pdf": "samples/s4_a_math/2024 S2 M (G3) EOY - Yuying.pdf",
+  "paper": "2024 S2 M (G3) EOY - Yuying",
+  "page_count": 32,
+  "generated_at": "2026-10-06T10:46:14+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 2,
+      "last_page": 12,
+      "note": "Section A, ending on End of Section A; p1 cover. Whole PDF is a scan with no text layer",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "q2",
+      "kind": "question",
+      "index": 2,
+      "first_page": 14,
+      "last_page": 23,
+      "note": "Section B, ending on End of Section B; p13 its own cover, p24 blank. Numbering continues from Section A (12-18)",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 25,
+      "last_page": 27,
+      "note": "Marking scheme for Section A, scanned: Qn | Solution | Marks; p27 ends with the Section B heading",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    },
+    {
+      "label": "a2",
+      "kind": "answer",
+      "index": 2,
+      "first_page": 28,
+      "last_page": 31,
+      "note": "Marking scheme for Section B, scanned; p32 blank padding",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    }
+  ],
+  "attempts": [],
+  "warnings": [
+    "2 page(s) between sections belong to none of them (13, 24); front matter for the section that follows reads this way, and so does a section left out altogether"
+  ],
+  "config": null
+}

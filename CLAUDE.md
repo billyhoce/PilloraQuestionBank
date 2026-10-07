@@ -45,7 +45,8 @@ role. Either way the session is a JWT in an httpOnly cookie.
 | Backend API | Python 3.11+ / FastAPI |
 | Database | PostgreSQL on Supabase (managed, free tier) |
 | Object Store | AWS S3 |
-| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 1 OCPU / 6 GB RAM |
+| Ingest worker | `python -m app.worker` — a second container from the same image, draining the ingest-job queue through the `ingestion/` package (installed in the image); OCR via Tesseract 5.3 (`apt`) |
+| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 2 OCPU / 12 GB RAM (API + worker; the worker is capped at 1 CPU / 6 GB) |
 | AI | Anthropic Claude API — Haiku 4.5 for both the vision and text calls |
 
 Full rationale and alternatives are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
@@ -63,6 +64,12 @@ FastAPI                                              │
     ├──► PostgreSQL (Supabase)        — metadata    │
     ├──► AWS S3                       — images      │
     └──► Anthropic Claude API         — AI labeling │
+                                                     │
+Ingest worker (same image, 2nd container)            │
+    ├──► PostgreSQL — job/task queue                 │
+    ├──► AWS S3     — source PDFs, review images     │
+    ├──► Tesseract  — OCR of scanned answer tables   │
+    └──► Anthropic Claude API — segmentation         │
 ─────────────────────────────────────────────────────┘
 ```
 
@@ -86,6 +93,7 @@ usually means opening one file. [docs/README.md](./docs/README.md) is the full i
 | [docs/features/generation-config.md](./docs/features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
 | [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
 | [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
+| [ingestion/README.md](./ingestion/README.md) | The PDF ingester (`question_extractor`, `ingester`): segments a booklet, splits it, locates each question's rectangle, reads answer tables (OCR via the Tesseract image). Has its own [CLAUDE.md](./ingestion/CLAUDE.md) and per-package READMEs |
 | [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
 
 ## Contribution Requirements
@@ -109,6 +117,20 @@ Every new feature or behavior change must, **in the same change**:
   behavior. Both suites run in CI's `frontend-build` job. Pure-config / asset-only changes with no
   testable behavior are exempt.
 
+## Ingestion package
+
+`ingestion/` is the PDF ingester, moved in from the former `PilloraQuestionBankIngester` repo
+(history stays in that archived repo). It holds three packages — `question_extractor` (inside one paper),
+`ingester` (the booklet) and `pipeline` (runs the booklet-level stages as tasks in a store; see
+[docs/adr/0001-stage-pipeline.md](./docs/adr/0001-stage-pipeline.md) and [CONTEXT.md](./CONTEXT.md)). It is a separate installable library
+(`pip install -e ./ingestion`; its own `pyproject.toml`) that must never import `app` — a pytest
+(`tests/test_ingestion_independence.py`) enforces it. It keeps its own conventions
+([ingestion/CLAUDE.md](./ingestion/CLAUDE.md)) and **its own verification rule**: it has no unit-test
+suite and is verified by running its commands over `ingestion/samples/` before and after a change and
+diffing the output — **not** by the "write tests" rule below. The webapp's `samples/` folder is
+unrelated to `ingestion/samples/`. The Tesseract image is built with
+`docker compose build tesseract` from the repo root.
+
 ## Out of Scope (v1)
 
 - OCR for full-text search within questions
@@ -117,3 +139,19 @@ Every new feature or behavior change must, **in the same change**:
 - Social login beyond Google (Facebook, Apple, …)
 - Self-service profile editing / password reset
 - CDN for image delivery
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `billyhoce/PilloraQuestionBank`, driven by the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

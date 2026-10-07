@@ -1,5 +1,7 @@
 """Tests for the import pipeline: image processing, confirm service, and routes."""
+import gc
 import io
+import weakref
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +14,8 @@ from sqlalchemy.orm import Session
 from app.ai.topic_labeler import TruncatedResponseError
 from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
 from app.pdf.image_processing import standardize, to_webp_bytes
-from app.services.ingest import confirm_import, pdf_to_images
+from app.services import ingest as ingest_module
+from app.services.ingest import confirm_import, iter_pdf_pages, upload_pages
 
 
 # ---------------------------------------------------------------------------
@@ -66,14 +69,92 @@ def _make_fitz_doc(num_pages=1, width=200, height=300):
     return mock_doc
 
 
-def test_pdf_to_images_calls_fitz_open(minimal_pdf_bytes):
+def test_iter_pdf_pages_calls_fitz_open(minimal_pdf_bytes):
     mock_doc = _make_fitz_doc(num_pages=1)
 
     with patch("app.services.ingest.fitz.open", return_value=mock_doc) as mock_open:
-        result = pdf_to_images(minimal_pdf_bytes)
+        result = list(iter_pdf_pages(minimal_pdf_bytes))
         mock_open.assert_called_once()
     assert len(result) == 1
     assert isinstance(result[0], Image.Image)
+
+
+def test_iter_pdf_pages_is_lazy(minimal_pdf_bytes):
+    mock_doc = _make_fitz_doc(num_pages=3)
+    mock_doc.__iter__ = MagicMock(return_value=iter(_counting_pages(3)))
+
+    with patch("app.services.ingest.fitz.open", return_value=mock_doc):
+        gen = iter_pdf_pages(minimal_pdf_bytes)
+        assert _RENDERED == []  # nothing rendered until the first page is requested
+        next(gen)
+        assert _RENDERED == [0]
+        next(gen)
+        assert _RENDERED == [0, 1]
+
+
+_RENDERED: list[int] = []
+
+
+def _counting_pages(n, width=200, height=300):
+    """Pages whose get_pixmap records the order in which they are rendered."""
+    _RENDERED.clear()
+    pages = []
+    for idx in range(n):
+        pix = MagicMock(width=width, height=height, samples=bytes([255] * (width * height * 3)))
+        page = MagicMock()
+
+        def render(dpi, idx=idx, pix=pix):
+            _RENDERED.append(idx)
+            return pix
+
+        page.get_pixmap.side_effect = render
+        pages.append(page)
+    return pages
+
+
+def test_upload_pages_processes_one_page_at_a_time(minimal_pdf_bytes):
+    """Page n+1 is not rendered until page n has been uploaded and released."""
+    events: list[str] = []
+    live: list[weakref.ref] = []
+    mock_doc = _make_fitz_doc(num_pages=3)
+    pages = _counting_pages(3)
+    for idx, page in enumerate(pages):
+        inner = page.get_pixmap.side_effect
+
+        def render(dpi, idx=idx, inner=inner):
+            events.append(f"render{idx}")
+            # Every earlier page's PIL image must already be garbage collected.
+            gc.collect()
+            assert all(r() is None for r in live), "an earlier page is still alive"
+            return inner(dpi)
+
+        page.get_pixmap.side_effect = render
+    mock_doc.__iter__ = MagicMock(return_value=iter(pages))
+
+    real_standardize = ingest_module.standardize
+
+    def spy_standardize(img):
+        out = real_standardize(img)
+        live.append(weakref.ref(img))
+        live.append(weakref.ref(out))
+        return out
+
+    def spy_put(key, data):
+        events.append(f"put{key[-6:-5]}")
+
+    with (
+        patch("app.services.ingest.fitz.open", return_value=mock_doc),
+        patch("app.services.ingest.standardize", new=spy_standardize),
+        patch("app.services.ingest.put_image", side_effect=spy_put),
+        patch("app.services.ingest.get_presigned_url", return_value="http://u"),
+        patch("app.services.ingest.extract_metadata", return_value={}),
+    ):
+        result = upload_pages(minimal_pdf_bytes, "x.pdf", db=None)
+
+    assert events == ["render0", "put0", "render1", "put1", "render2", "put2"]
+    assert [p["temp_key"].rsplit("/", 1)[1] for p in result["pages"]] == [
+        "page_0.webp", "page_1.webp", "page_2.webp",
+    ]
 
 
 # ---------------------------------------------------------------------------

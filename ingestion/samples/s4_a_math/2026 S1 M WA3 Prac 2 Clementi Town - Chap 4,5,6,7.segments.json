@@ -1,0 +1,41 @@
+{
+  "pdf": "samples/s4_a_math/2026 S1 M WA3 Prac 2 Clementi Town - Chap 4,5,6,7.pdf",
+  "paper": "2026 S1 M WA3 Prac 2 Clementi Town - Chap 4,5,6,7",
+  "page_count": 9,
+  "generated_at": "2026-10-06T10:46:14+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 1,
+      "last_page": 7,
+      "note": "Revision set, no end marker; p1 carries the title block above question 1",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 8,
+      "last_page": 9,
+      "note": "ANSWER - Set 2: one column pair across two pages, a graph in the 3(b) cell",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    }
+  ],
+  "attempts": [],
+  "warnings": [],
+  "config": null
+}
