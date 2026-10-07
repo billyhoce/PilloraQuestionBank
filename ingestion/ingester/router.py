@@ -48,9 +48,10 @@ import pymupdf
 from question_extractor import ExtractConfig, TableLayout, extract_paper, extract_table_paper
 from question_extractor.geometry import extract_document
 from question_extractor.pipeline import paper_name
+from question_extractor.warnscope import collect_warnings
 
 from .config import IngestConfig
-from .segmenter import _WarningCollector, segment_paper
+from .segmenter import segment_paper
 from .segments import Segment, SegmentPlan
 from .splitter import Section, SplitResult, split_paper
 
@@ -175,16 +176,11 @@ def ingest_paper(
     split = split_paper(pdf, output_dir)
     paper_dir = output_dir / paper_name(pdf)
 
-    collector = _WarningCollector()
-    package_log = logging.getLogger(__package__)
-    package_log.addHandler(collector)
-    try:
+    with collect_warnings() as warnings:
         sections = tuple(
             route_section(section, paper_dir, extract_config, debug=debug)
             for section in split.sections
         )
-    finally:
-        package_log.removeHandler(collector)
 
     result = IngestResult(
         pdf=pdf,
@@ -192,7 +188,7 @@ def ingest_paper(
         plan=plan,
         split=split,
         sections=sections,
-        warnings=tuple(collector.messages),
+        warnings=tuple(warnings),
     )
     paper_dir.mkdir(parents=True, exist_ok=True)
     path = paper_dir / REPORT_NAME

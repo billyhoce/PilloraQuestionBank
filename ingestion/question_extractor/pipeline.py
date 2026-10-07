@@ -41,6 +41,7 @@ from .pagekind import end_of_paper_y
 from .provenance import SourceProvenance, check_page_map
 from .render import render_pages
 from .trim import trim_bands
+from .warnscope import collect_warnings, current_warnings
 
 log = logging.getLogger(__name__)
 
@@ -68,21 +69,6 @@ class PaperResult:
     @property
     def needs_review(self) -> bool:
         return any(page.needs_review for page in self.pages)
-
-
-class _WarningCollector(logging.Handler):
-    """Captures WARNING-and-above records so they can go into the manifest.
-
-    Attached to the package logger for the duration of one paper, which keeps
-    every module free of warning-plumbing arguments.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
 
 
 def paper_name(pdf_path: Path) -> str:
@@ -176,15 +162,8 @@ def extract_paper(
     larger document and the manifest's page numbers should also be addressable
     there. It changes no detection and, when omitted, no manifest field.
     """
-    collector = _WarningCollector()
-    package_logger = logging.getLogger(__package__)
-    package_logger.addHandler(collector)
-    try:
-        return _extract_paper(
-            pdf_path, output_root, config, start_page, debug, collector, provenance
-        )
-    finally:
-        package_logger.removeHandler(collector)
+    with collect_warnings():
+        return _extract_paper(pdf_path, output_root, config, start_page, debug, provenance)
 
 
 def _extract_paper(
@@ -193,7 +172,6 @@ def _extract_paper(
     config: ExtractConfig,
     start_page: int | None,
     debug: bool,
-    collector: _WarningCollector,
     provenance: SourceProvenance | None,
 ) -> PaperResult:
     name = paper_name(pdf_path)
@@ -286,7 +264,7 @@ def _extract_paper(
         images=images,
         calibration=calibration,
         config=config,
-        warnings=list(collector.messages),
+        warnings=current_warnings(),
         provenance=provenance,
     )
     manifest_path = write_manifest(manifest, out_dir)
@@ -305,6 +283,6 @@ def _extract_paper(
         pages=results,
         images=images,
         manifest_path=manifest_path,
-        warnings=list(collector.messages),
+        warnings=current_warnings(),
         provenance=provenance,
     )

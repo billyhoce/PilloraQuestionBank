@@ -19,8 +19,9 @@ import pymupdf
 
 from question_extractor import SourceProvenance
 from question_extractor.pipeline import paper_name
+from question_extractor.warnscope import collect_warnings
 
-from .segmenter import _WarningCollector, find_plan
+from .segmenter import find_plan
 from .segments import Segment
 
 log = logging.getLogger(__name__)
@@ -76,13 +77,8 @@ class SplitResult:
 
 def split_paper(pdf: Path, output_dir: Path) -> SplitResult:
     work_dir = output_dir / paper_name(pdf) / SPLIT_DIR
-    collector = _WarningCollector()
-    package_log = logging.getLogger(__package__)
-    package_log.addHandler(collector)
-    try:
+    with collect_warnings() as warnings:
         sections, skipped, replaced = _split(pdf, output_dir, work_dir)
-    finally:
-        package_log.removeHandler(collector)
 
     result = SplitResult(
         pdf=pdf,
@@ -90,7 +86,7 @@ def split_paper(pdf: Path, output_dir: Path) -> SplitResult:
         work_dir=work_dir,
         sections=tuple(sections),
         skipped=tuple(skipped),
-        warnings=tuple(collector.messages),
+        warnings=tuple(warnings),
     )
     if replaced:
         path = work_dir / SPLIT_NAME
