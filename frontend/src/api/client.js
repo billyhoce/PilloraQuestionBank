@@ -96,6 +96,10 @@ export const api = {
     // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
     manualPages: (id, first_page, last_page) =>
       request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),
+    // Confirm / skip one proposed paper (paper_label = the paper's `key` from the review).
+    // Confirm resolves like `confirm` plus job_status; skip to { job_status }.
+    confirmJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/confirm`, payload),
+    skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),

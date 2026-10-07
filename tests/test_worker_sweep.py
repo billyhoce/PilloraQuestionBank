@@ -132,6 +132,14 @@ def test_cancelled_scratch_removed_after_grace(env):
     assert status_of(factory, old) == "cancelled"
 
 
+def test_confirmed_scratch_removed_after_grace(env):
+    factory, _user, scratch, objects, clock = env
+    old = aged_job(env, "confirmed", timedelta(days=2), with_files=True)
+    run_sweep(factory, objects, scratch, clock)
+    assert not (scratch / str(old)).exists()
+    assert status_of(factory, old) == "confirmed"
+
+
 def test_worker_sweeps_from_its_loop_once(env):
     factory, _user, scratch, objects, clock = env
     stale = aged_job(env, "review_ready", EXPIRE_AFTER + timedelta(days=1))

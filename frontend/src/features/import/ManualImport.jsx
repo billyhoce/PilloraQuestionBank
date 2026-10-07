@@ -4,6 +4,7 @@ import UploadDropZone from './UploadDropZone'
 import PageGrid from './PageGrid'
 import MetadataSidebar from './MetadataSidebar'
 import TopicReview from './TopicReview'
+import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
 
 const STORAGE_KEY = 'pillora_import_session'
 
@@ -60,12 +61,6 @@ function countGroups(arr) {
   return arr.reduce((count, p, i) => (i === 0 || !p.mergeWithPrev ? count + 1 : count), 0)
 }
 
-const emptyMetadata = {
-  subject_id: null, stream_id: null, level_id: null,
-  school_id: null, exam_type_id: null, year: '', paper_number: '',
-  is_premium: true,  // imported papers are premium by default
-}
-
 export default function ManualImport() {
   const [step, setStep] = useState(() => loadSession()?.step ?? 'upload')
   const [pages, setPages] = useState(() => loadSession()?.pages ?? [])
@@ -73,7 +68,7 @@ export default function ManualImport() {
   const [metadata, setMetadata] = useState(() => loadSession()?.metadata ?? emptyMetadata)
   const [paperId, setPaperId] = useState(() => loadSession()?.paperId ?? null)
   const [confirmedQuestions, setConfirmedQuestions] = useState(() => loadSession()?.confirmedQuestions ?? [])
-  const [refs, setRefs] = useState(null)
+  const refs = useReferenceData()
 
   const appendInputRef = useRef(null)
 
@@ -94,24 +89,6 @@ export default function ManualImport() {
     }
   }, [step, pages, dividerIdx, metadata, paperId, confirmedQuestions])
 
-  useEffect(() => {
-    Promise.all([
-      api.subjects.list(),
-      api.streams.list(),
-      api.levels.list(),
-      api.schools.list(),
-      api.examTypes.list(),
-      api.schoolLevels.list(),
-    ]).then(([subjects, streams, levels, schools, examTypes, schoolLevels]) => {
-      const slMap = Object.fromEntries(schoolLevels.map(sl => [sl.id, sl.name]))
-      const namedLevels = levels.map(l => ({
-        ...l,
-        name: slMap[l.school_level_id] ? `${slMap[l.school_level_id]} ${l.name}` : l.name,
-      }))
-      setRefs({ subjects, streams, levels: namedLevels, schools, examTypes })
-    })
-  }, [])
-
   async function handleUpload(files) {
     setUploadLoading(true)
     setUploadError(null)
@@ -126,19 +103,7 @@ export default function ManualImport() {
       }
       setPages(allPages)
       setDividerIdx(null)
-      if (firstMeta) {
-        const s = firstMeta
-        setMetadata((prev) => ({
-          ...prev,
-          ...(s.subject_id != null && { subject_id: s.subject_id }),
-          ...(s.stream_id != null && { stream_id: s.stream_id }),
-          ...(s.level_id != null && { level_id: s.level_id }),
-          ...(s.school_id != null && { school_id: s.school_id }),
-          ...(s.exam_type_id != null && { exam_type_id: s.exam_type_id }),
-          ...(s.year != null && { year: String(s.year) }),
-          ...(s.paper_number != null && { paper_number: String(s.paper_number) }),
-        }))
-      }
+      if (firstMeta) setMetadata((prev) => mergeSuggested(prev, firstMeta))
       setStep('review')
     } catch (e) {
       setUploadError(e.message)

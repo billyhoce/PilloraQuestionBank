@@ -6,7 +6,15 @@ import ReviewPage from './ReviewPage'
 import { api } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
-  api: { import: { review: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn() } },
+  api: {
+    import: {
+      review: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
+      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+    },
+    subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
+    schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
+    topics: { list: vi.fn() },
+  },
 }))
 
 const page = (n, extra = {}) => ({
@@ -52,6 +60,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   sessionStorage.clear()
   api.import.review.mockResolvedValue(REVIEW)
+  api.subjects.list.mockResolvedValue([{ id: 1, name: 'Math' }])
+  api.streams.list.mockResolvedValue([{ id: 2, name: 'G3' }])
+  api.levels.list.mockResolvedValue([{ id: 3, name: 'Sec 3', school_level_id: 9 }])
+  api.schools.list.mockResolvedValue([{ id: 4, name: 'RI' }])
+  api.examTypes.list.mockResolvedValue([{ id: 5, name: 'EOY' }])
+  api.schoolLevels.list.mockResolvedValue([{ id: 9, name: 'Secondary' }])
+  api.topics.list.mockResolvedValue([])
 })
 
 describe('ReviewPage', () => {
@@ -183,6 +198,66 @@ describe('ReviewPage', () => {
       await userEvent.keyboard('{Delete}')
       await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not saved'), { timeout: 3000 })
       expect(screen.getByText('a rectangle lies outside page 2')).toBeInTheDocument()
+    })
+  })
+
+  describe('confirming', () => {
+    const FILLED = { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' }
+    const TWO = {
+      ...REVIEW,
+      filename_metadata: FILLED,
+      proposal: {
+        ...REVIEW.proposal,
+        papers: [
+          { ...REVIEW.proposal.papers[0], key: 'q1', outcome: null },
+          { ...REVIEW.proposal.papers[0], label: 'q2', answer_label: 'a2', key: 'q2', outcome: null },
+        ],
+      },
+    }
+
+    it('pre-fills the sidebar from the filename and confirms the paper, then shows topic review', async () => {
+      api.import.review.mockResolvedValue(TWO)
+      api.import.confirmJobPaper.mockResolvedValue({
+        paper_id: 7, job_status: 'review_ready',
+        questions: [{ id: 70, question_number: 1, pages: [] }],
+      })
+      api.import.aiTopicsForQuestion.mockResolvedValue({ parts: [] })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(api.import.confirmJobPaper).toHaveBeenCalledWith('j1', {
+        paper_label: 'q1', ...FILLED, year: 2024, paper_number: '1', is_premium: true,
+      })
+      expect(await screen.findByRole('button', { name: /Confirm & Save Topics/ })).toBeInTheDocument()
+    })
+
+    it('skipping the last undecided paper leaves for the import page', async () => {
+      api.import.review.mockResolvedValue({
+        ...TWO,
+        proposal: { ...TWO.proposal, papers: [{ ...TWO.proposal.papers[0], outcome: 'confirmed' }, TWO.proposal.papers[1]] },
+      })
+      api.import.skipJobPaper.mockResolvedValue({ job_status: 'confirmed' })
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      renderPage()
+      // Opens on the first undecided paper, q2 / a2.
+      await screen.findByAltText('Page 2')
+      expect(screen.getByRole('tab', { name: /q1 \/ a1/ })).toHaveTextContent('(confirmed)')
+      await userEvent.click(screen.getByRole('button', { name: 'Skip this paper' }))
+      await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import'))
+      expect(api.import.skipJobPaper).toHaveBeenCalledWith('j1', 'q2')
+    })
+
+    it('shows the server error when a confirm is refused', async () => {
+      api.import.review.mockResolvedValue(TWO)
+      api.import.confirmJobPaper.mockRejectedValue({ message: 'Paper q1 was already confirmed' })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(await screen.findByText('Paper q1 was already confirmed')).toBeInTheDocument()
     })
   })
 })

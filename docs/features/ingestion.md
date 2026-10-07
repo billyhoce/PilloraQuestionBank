@@ -21,6 +21,8 @@ POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everythin
 GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
 PUT    /api/import/jobs/{id}/proposal -- save the admin's corrections as `proposal_edited`
 POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
+POST   /api/import/jobs/{id}/confirm -- crop one reviewed paper into the bank (same response as /confirm)
+POST   /api/import/jobs/{id}/skip   -- skip one proposed paper
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
@@ -60,7 +62,9 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   re-implemented. Failed and blocked tasks, and every finished task downstream of them, go back to
   `ready` (or `pending` while their needs are unfinished) with `attempts` reset; the job status is
   re-derived (`queued`/`running`) so the worker picks it up. Returns the job plus `reopened` (a
-  count; `0` when nothing was broken). A `cancelled`, `confirmed` or `expired` job is a `409`.
+  count; `0` when nothing was broken). A `cancelled`, `confirmed` or `expired` job is a `409`, as is a
+  job with any paper already confirmed or skipped (`report.review_outcome`), since a retry can
+  regenerate the proposal under those decisions.
 - **Progress** on every job (`job_progress`): `stage` — the stage of the running task, else of the
   most recently finished task, `null` before anything has started; `tasks_done` / `tasks_total` —
   tasks `done` or `skipped` over all tasks (the total grows as sections fan out);
@@ -75,7 +79,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   `ObjectStore.presign` of `tmp/ingest/{id}/{page.image}`; `null` when the page has no image) and its
   `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
   `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
-  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`. A job with
+  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `filename_metadata`, and per paper its `key` and `outcome` (`null`, `confirmed` or `skipped`). A job with
   no proposal yet is a `409`.
 - `PUT /api/import/jobs/{id}/proposal` `{papers: [{questions, orphan_answers}, ...]}` — saves the
   admin's edits as `ingest_job.proposal_edited`; the generated `proposal` is never touched. Admin-only;
@@ -91,6 +95,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
   Manual flow's own renderer), using the job's stored `filename_metadata` instead of a second Claude
   call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
+- `POST /api/import/jobs/{id}/confirm` and `/skip` — see [Confirming a paper](#confirming-a-paper).
 - `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
   `tmp/ingest/{id}/` prefix (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
   `cancelled` or `expired` job is a `409`.
@@ -106,7 +111,7 @@ tests use the `fake_object_store` fixture.
 | `running` | A task is running, or some have finished and others are still to run |
 | `review_ready` | `report` is done and `ingest_job.proposal` is stored: a proposal is ready for the admin to review |
 | `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
-| `confirmed` | The admin confirmed; papers created (`confirmed_paper_ids`, `paper.source_job_id`) |
+| `confirmed` | Every proposed paper was confirmed or skipped; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
 | `expired` | Left in `review_ready` or `failed` for more than 7 days; the worker's daily sweep marked it expired and deleted its `tmp/ingest/{job_id}/` prefix and scratch folder |
 
@@ -123,7 +128,8 @@ extracted from — or when the pipeline ends with no proposal. A job in an API-o
 **Expiry.** Once a day the worker (`app/worker/sweep.py`) expires jobs whose `updated_at` — when they
 became `review_ready`/`failed` — is more than 7 days old: it sets `expired`, commits, then deletes the
 S3 prefix (a failure is logged and does not stop the sweep) and the job's scratch folder. It also
-removes the scratch folders of jobs cancelled over a day ago. The sweep is claimed by an atomic update
+removes the scratch folders of jobs cancelled or confirmed over a day ago (confirming deletes the S3
+prefix itself; only the worker knows its scratch folder). The sweep is claimed by an atomic update
 of `worker_heartbeat.last_sweep_at`, so it runs at most once a day across restarts and workers. A
 bucket lifecycle rule on `tmp/` backs it up ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
 
@@ -357,3 +363,44 @@ the **parts themselves and their marks survive**, only the now-out-of-scope topi
 
 For the Premium checkbox on the papers list, see
 [users-and-premium.md](./users-and-premium.md#flagging-a-paper-premium).
+
+### Confirming a paper
+
+The review page's right-hand column is the Manual wizard's own `MetadataSidebar` (shared component),
+pre-filled from `report.filename_metadata` (returned by `GET .../review` as `filename_metadata`;
+absent means empty) with **Confirm paper** and **Skip this paper**. Each proposed paper is confirmed
+or skipped on its own (tabs show the outcome). Confirming opens the Manual flow's `TopicReview` on
+the created paper, unchanged; "Skip topics" leaves it with its blank part for Manage Papers. After the
+last decision the page returns to `/admin/import`.
+
+**Identifying a paper.** `paper_label` is the proposal paper's `key` (in `GET .../review`): its
+question `label` (`q1`), else its `answer_label` (`a1`) for an answer-only paper (`label: null`), else
+`paper{position}`. Question and answer labels come from different sections, so keys do not clash.
+
+`POST /api/import/jobs/{id}/confirm` `{paper_label, subject_id, stream_id, level_id, school_id,
+exam_type_id, year, paper_number, is_premium}` (admin, own job; `201`):
+
+1. The job must be `review_ready` and the paper undecided, else `409`; an unknown label is `404`; a
+   stream/level from different school levels is `422`, as in `/confirm`. A paper with **no questions**
+   (an unrouted question section whose answers are all orphans) is `422` — it can only be skipped.
+2. `app/services/ingest_confirm.py::build_confirm_payload` opens `source.pdf`, and for each rectangle
+   of the *edited* proposal (else the original) renders `page.get_pixmap(dpi=300, clip=rect)`,
+   `standardize`s it (wider than 1760 px is scaled down), encodes WebP and uploads it with `put_image`
+   to `tmp/{upload_id}/page_{n}.webp`. One rectangle at a time; each pixmap is freed before the next.
+   A failure deletes the images already uploaded.
+3. Each proposal question becomes one payload question (`question_number` = its number); its
+   `question_rects` become `question` pages and its `answer_rects` `answer` pages, in list order,
+   `page_order` from 1 per type, with the cropped image's `width_px`/`height_px`. **Orphan answers
+   are not imported** (the UI says so).
+4. `confirm_import` runs unchanged (it commits). Then `paper.source_job_id` is set, the paper id is
+   appended to `confirmed_paper_ids`, and `report.review_outcome[key] = "confirmed"` is stored — no
+   schema change. The response is `/confirm`'s (`paper_id`, `questions`) plus `job_status`.
+
+`POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (`200`, `{job_status}`; the
+same `404`/`409` rules). When every proposal paper has an outcome the job becomes `confirmed` (an
+all-skipped job too, with `confirmed_paper_ids` null) and its whole `tmp/ingest/{id}/` prefix
+(source, review pages) is deleted after the commit; a failed delete is logged, and the bucket
+lifecycle rule backs it up. A job whose proposal has no paper at all can only be cancelled. The row is
+locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. `confirm_import` commits
+before the job row is updated, so a crash between the two would leave a paper whose job still offers
+it; the rare duplicate is removed from Manage Papers.

@@ -18,7 +18,7 @@ function createRateLimitedQueue(intervalMs) {
 }
 
 
-export default function TopicReview({ paperId, questions, subjectId, streamId, onDone, onCancel }) {
+export default function TopicReview({ paperId, questions, subjectId, streamId, onDone, onCancel, cancelLabel = 'Cancel import' }) {
   const [topics, setTopics] = useState(null)
   const [topicsError, setTopicsError] = useState(null)
   const [questionState, setQuestionState] = useState(() =>
@@ -208,7 +208,7 @@ export default function TopicReview({ paperId, questions, subjectId, streamId, o
           disabled={saving}
           className="text-sm px-4 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
-          Cancel import
+          {cancelLabel}
         </button>
         <button
           type="button"

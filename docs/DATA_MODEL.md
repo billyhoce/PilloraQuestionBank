@@ -37,7 +37,7 @@ Paper: {
   is_premium (bool),           -- default false; premium papers are gated to premium/admin users
   created_by (FK -> User),
   created_at,
-  source_job_id (uuid, nullable FK -> IngestJob, ON DELETE SET NULL)  -- provenance: the auto-import job that produced it; NULL for manual imports
+  source_job_id (uuid, nullable FK -> IngestJob, ON DELETE SET NULL)  -- provenance: the auto-import job that produced it (set when the review page confirms it); NULL for manual imports
 }
 
 Question: {
@@ -211,10 +211,12 @@ IngestJob: {
   proposal (JSONB, nullable),    -- the pipeline's proposed split
   proposal_edited (JSONB, nullable),  -- the admin's edits to it
   report (JSONB, nullable),      -- run report; `filename_metadata` holds the filename-extraction
-                                 -- result, written by the worker's `register` task (pre-fills the metadata sidebar)
+                                 -- result, written by the worker's `register` task (pre-fills the metadata sidebar);
+                                 -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped"
+                                 -- (written by the confirm/skip endpoints; the job is `confirmed` once all are set)
   error (text, nullable),
   created_at, updated_at,
-  confirmed_paper_ids (int[], nullable)
+  confirmed_paper_ids (int[], nullable)   -- papers created by confirming proposal papers, in order
 }
 
 IngestTask: {

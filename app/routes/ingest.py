@@ -19,6 +19,7 @@ from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topi
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.ingest_confirm import ReviewActionError, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
     InvalidPdfError,
     JobNotCancellableError,
@@ -60,7 +61,7 @@ class QuestionIn(BaseModel):
     pages: list[PageIn]
 
 
-class ConfirmImportPayload(BaseModel):
+class PaperMetadataIn(BaseModel):
     subject_id: int
     stream_id: int
     level_id: int
@@ -71,6 +72,9 @@ class ConfirmImportPayload(BaseModel):
     # Imported papers are premium by default; the admin can untick this at the
     # final import step.
     is_premium: bool = True
+
+
+class ConfirmImportPayload(PaperMetadataIn):
     questions: list[QuestionIn]
 
 
@@ -156,6 +160,19 @@ def _serialize_paper_questions(paper: Paper) -> list[dict]:
     ]
 
 
+def _confirm_response(db: Session, paper_id: int) -> dict:
+    paper = (
+        db.query(Paper)
+        .options(selectinload(Paper.questions).selectinload(Question.pages))
+        .filter(Paper.id == paper_id)
+        .first()
+    )
+    return {
+        "paper_id": paper.id,
+        "questions": _serialize_paper_questions(paper),
+    }
+
+
 @router.post("/confirm", status_code=201)
 def confirm(
     payload: ConfirmImportPayload,
@@ -169,16 +186,7 @@ def confirm(
         raise HTTPException(status_code=422, detail=conflict)
 
     paper = confirm_import(payload.model_dump(), current_user, db)
-    paper = (
-        db.query(Paper)
-        .options(selectinload(Paper.questions).selectinload(Question.pages))
-        .filter(Paper.id == paper.id)
-        .first()
-    )
-    return {
-        "paper_id": paper.id,
-        "questions": _serialize_paper_questions(paper),
-    }
+    return _confirm_response(db, paper.id)
 
 
 @router.post("/ai-topics", response_model=AiTopicsResponse)
@@ -436,7 +444,7 @@ def retry_ingest_job(
     try:
         reopened = retry_job(job, db)
     except JobNotRetryableError as e:
-        raise HTTPException(status_code=409, detail=f"A {e.status} job cannot be retried")
+        raise HTTPException(status_code=409, detail=e.reason)
     db.refresh(job)
     return {**_job_out(job), "reopened": reopened}
 
@@ -524,3 +532,54 @@ def manual_pages(
         raise HTTPException(status_code=422, detail=str(e))
     metadata = (job.report or {}).get("filename_metadata")
     return upload_pages(pdf, job.filename, db, suggested_metadata=metadata)
+
+
+class JobConfirmIn(PaperMetadataIn):
+    # Which proposal paper: its question label, else its answer label (see paper_key).
+    paper_label: str
+
+
+class JobSkipIn(BaseModel):
+    paper_label: str
+
+
+@router.post("/jobs/{job_id}/confirm", status_code=201)
+def confirm_job(
+    job_id: uuid.UUID,
+    payload: JobConfirmIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Confirm one proposed paper of a reviewed job: crop its rectangles from ``source.pdf``,
+    run ``confirm_import``, and answer like ``/confirm`` (plus ``job_status``) so the topic-review
+    step follows unchanged."""
+    job = _get_own_job(db, job_id, current_user)
+    conflict = school_level_conflict(db, payload.stream_id, payload.level_id)
+    if conflict:
+        raise HTTPException(status_code=422, detail=conflict)
+    metadata = payload.model_dump(exclude={"paper_label"})
+    try:
+        paper, settled = confirm_job_paper(job, payload.paper_label, metadata, current_user, db, store)
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {**_confirm_response(db, paper.id), "job_status": "confirmed" if settled else "review_ready"}
+
+
+@router.post("/jobs/{job_id}/skip")
+def skip_job(
+    job_id: uuid.UUID,
+    payload: JobSkipIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Skip one proposed paper; the job is ``confirmed`` once every paper is confirmed or skipped."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        settled = skip_job_paper(job, payload.paper_label, db, store)
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {"job_status": "confirmed" if settled else "review_ready"}
