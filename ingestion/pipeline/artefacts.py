@@ -8,7 +8,7 @@ one intact.
 
 Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
 
-    options.json                  submit: what the job asks for (``debug``)
+    options.json                  submit: what the job asks for (``debug``, ``force``)
     job.json                      register
     segments.json                 segment
     _split/<label>.pdf, split.json  split
@@ -18,6 +18,7 @@ Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
     <label>/ocr.json                ocr (one read per cell of the TIFF)
     <label>/labelled.json, manifest.json, tables.json   questions
     <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render (table route)
+    ingest.json                   report (every section's status, flags and warnings)
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ SPLIT_DIR = "_split"
 SPLIT_NAME = "split.json"
 CELLS_TIFF_NAME = "cells.tiff"
 OCR_NAME = "ocr.json"
+REPORT_NAME = "ingest.json"
 
 
 def write_bytes(path: Path, data: bytes) -> Path:

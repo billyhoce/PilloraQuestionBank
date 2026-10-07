@@ -21,6 +21,21 @@ class Unmet:
 
 
 @dataclass(frozen=True)
+class TaskSummary:
+    """What a settled task left behind, as the ``report`` stage reads it (the store's
+    :class:`~pipeline.store.Task`, without the scheduling columns)."""
+
+    section: str | None
+    stage: str
+    status: str  # done | skipped | failed | blocked
+    detail: str  # the task's error, else its reason
+    needs_review: bool = False
+    warnings: tuple[str, ...] = ()
+    optional: bool = False
+    """The task is another stage's soft need (``ocr``): its failing does not fail its section."""
+
+
+@dataclass(frozen=True)
 class StageContext:
     """Everything a stage may read: where its job lives, which section, the config.
 
@@ -34,9 +49,13 @@ class StageContext:
     config: PipelineConfig
     section: str | None = None  # None for a job-scope stage
     debug: bool = False  # the job's option: also write the debug renders
+    force: bool = False  # the job's option: ask the model to segment even when a plan exists
     unmet: dict[str, Unmet] = field(default_factory=dict)
     """The stage's soft needs (:attr:`.registry.Stage.soft_needs`) that did not end
     ``done``, by stage name; a soft need not listed here is ``done``."""
+    tasks: tuple[TaskSummary, ...] = ()
+    """Every task of the job, for a stage that runs after the sections
+    (:attr:`.registry.Stage.after_sections`); empty for any other."""
 
     def path(self, *parts: str) -> Path:
         """An artefact path under the job dir."""

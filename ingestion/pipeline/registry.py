@@ -25,6 +25,13 @@ scope, a kind, its dependencies and whether it fans out.
   the same name (``render``): a task is identified by ``(job_id, section, stage)``
   and a section has exactly one route, so the name is unique where it matters. A
   section's route is recovered from the stages it has (:meth:`Registry.route_of`).
+- **after_sections**: a job-scope stage that also waits for every *section* task of the job
+  to settle (``done``, ``skipped``, ``failed`` or ``blocked``). Sections do not exist when
+  the job is submitted (``split`` fans them out), so the stage cannot name them in ``needs``;
+  it lists the job stages it follows in ``soft_needs`` (a failed ``split`` must not stop it,
+  and with no sections there is nothing more to wait for) and the runner holds it back until
+  no section task is unsettled. It is handed every task of the job (:attr:`StageContext.tasks`).
+  ``report`` is the one such stage.
 
 Where a stage boundary goes: where an external dependency lives (the API, the
 Tesseract container), where a human may edit the artefact before the next stage
@@ -63,6 +70,7 @@ class Stage:
     needs: tuple[str, ...] = ()
     soft_needs: tuple[str, ...] = ()
     fan_out: bool = False
+    after_sections: bool = False  # job-scope only: also wait for every section task to settle
     route: str | None = None  # section stages only: the chain this stage belongs to
 
 
@@ -86,6 +94,8 @@ class Registry:
             raise ValueError(f"stage {stage.name!r} has an unknown scope or kind")
         if stage.fan_out and stage.scope != JOB:
             raise ValueError(f"stage {stage.name!r} fans out but is not job-scope")
+        if stage.after_sections and (stage.scope != JOB or stage.fan_out):
+            raise ValueError(f"stage {stage.name!r}: only a job-scope, non-fan-out stage can follow the sections")
         if (stage.route is None) != (stage.scope == JOB):
             raise ValueError(f"stage {stage.name!r}: exactly the section stages have a route")
         if set(stage.needs) & set(stage.soft_needs):
@@ -115,6 +125,14 @@ class Registry:
         """``route``'s chain, or the ``unrouted`` one when no stage is registered for it
         yet (a route whose stages have not been written is recorded, not dropped)."""
         return self.section_stages(route) or self.section_stages(UNROUTED)
+
+    def optional(self, route: str | None) -> set[str]:
+        """The stages of ``route``'s chain that are only ever soft needs (``ocr``): a section
+        is not failed by one of them failing."""
+        chain = self.section_stages(route) if route else []
+        soft = {need for stage in chain for need in stage.soft_needs}
+        hard = {need for stage in chain for need in stage.needs}
+        return soft - hard
 
     def route_of(self, stage_names: set[str] | list[str]) -> str | None:
         """The route a section is on, from the names of the stages it has tasks for:
@@ -158,6 +176,7 @@ def default_registry() -> Registry:
         render,
         segment,
         split,
+        report,
         table_render,
         unrouted,
     )
@@ -176,5 +195,7 @@ def default_registry() -> Registry:
             questions.STAGE,
             table_render.STAGE,
             unrouted.STAGE,
+            # after every section has settled: the paper-level report
+            report.STAGE,
         ]
     )

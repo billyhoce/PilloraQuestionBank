@@ -11,12 +11,12 @@ module map, the reasoning behind each heuristic and how to verify a change.
   ranges (`q1`, `a1`, …) and classifies each answer paper's template into
   `segments.json` (`segment`), then the PDF is cut into one PDF per section with a page
   map back to the original (`split`). For a `table` answer section the model also
-  reports which columns hold the question numbers and the reading order. `ingest` runs
-  both, then routes each section into `output/<paper>/<label>/`: question and
+  reports which columns hold the question numbers and the reading order. `ingest` (now
+  `pipeline ingest`; `ingester ingest` forwards to it) runs both, then routes each section into `output/<paper>/<label>/`: question and
   `annotated_booklet` answer sections go through `question_extractor`, `table` answer
   sections (scanned ones included) through `question_extractor --table` with that
   layout; textless (scanned) question and annotated sections are recorded as not
-  routed. `output/<paper>/ingest.json` reports every section. See
+  routed. `output/<paper>/ingest.json` (the `report` stage's) reports every section. See
   [`ingester/README.md`](ingester/README.md).
 - **`question_extractor`** — works inside one question paper. Finds each question and
   records its rectangle in PDF points in `manifest.json`; it does not crop, it draws the
@@ -30,7 +30,7 @@ module map, the reasoning behind each heuristic and how to verify a change.
 
 - **`pipeline`** — runs a booklet as a job of small, file-based stages, each a task in a
   store (`register` → `segment` → `split`, then per section `locate` → `render` for question and
-  `annotated_booklet` sections; `grid` → `ocr` → `questions` → `render` for table sections). A stage is
+  `annotated_booklet` sections; `grid` → `ocr` → `questions` → `render` for table sections, and `report` once every section has settled). `python -m pipeline ingest` runs a folder of PDFs and is what `ingester ingest` forwards to. A stage is
   `run(ctx) -> outcome` that reads and writes artefacts under the job's folder; the runner
   claims, runs, records and fans out; the `Store` Protocol has a SQLite implementation here and
   a Postgres one in the webapp. `segment` and `split` call `ingester`'s functions, they do not
@@ -69,9 +69,9 @@ packages). The repo's `.venv` is Windows-layout: `.venv/Scripts/python`, not `.v
 `ingestion/` must never import `app` (the webapp); `tests/test_ingestion_independence.py`
 enforces it.
 
-`pipeline` is verified the same way: run `python -m pipeline submit/run` over the samples into a
-scratch `--root` and compare each job's `segments.json` and `_split/` with `ingester ingest`'s
-(see `pipeline/README.md`).
+`pipeline` is verified the same way: run `python -m pipeline ingest samples --recursive --debug --output-dir <dir>`
+and compare the tree (`ingest.json`, every manifest, `tables.json`, `segments.json`, the PNGs) with the
+last run's (see `pipeline/README.md`).
 
 ## Conventions
 

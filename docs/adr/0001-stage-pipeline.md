@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-`ingester ingest` runs a booklet start to finish in one process: segment (a vision-model call),
+`ingester ingest` ran a booklet start to finish in one process (it now forwards to `pipeline ingest`): segment (a vision-model call),
 split, then each section through an extractor (some of which shell out to a Tesseract container).
 That is fine from a terminal and wrong for the webapp, which needs to show progress, survive a
 restart, retry only what failed, let the admin edit an intermediate result, and run several
@@ -37,6 +37,13 @@ Run a booklet as a **job** of small **stages**, each recorded as a **task** in a
   ended, told how by its context. It is for a stage whose predecessor improves its result without
   being required for it (the table route's `questions` after `ocr`: a failed OCR flags the scanned
   pages instead of losing the section).
+- A job-scope stage may run **after the sections** (`report`): sections are created by `split`'s
+  fan-out, so it cannot name them as needs. It declares the job stages it follows as soft needs
+  and the runner also holds it until every section task of the job has settled, whichever way
+  (failed and blocked sections included, since the report's job is to say what became of each).
+  The rule reads only task statuses, so any `Store` supports it. `report` writes `ingest.json`, the
+  paper-level report `ingester ingest` used to write; `pipeline ingest` submits a folder of PDFs and
+  runs them with one worker, and `ingester ingest` forwards to it.
 - Leases and heartbeats cover a runner that dies mid-task: a task whose lease lapses is made
   ready again until it has used its retry limit. Thresholds live in `PipelineConfig`.
 

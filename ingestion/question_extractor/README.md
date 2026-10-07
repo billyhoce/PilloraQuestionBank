@@ -381,7 +381,7 @@ python -m question_extractor split/<paper>/_split/a1.pdf --table --output-dir ta
     --question-columns 0 --reading-order down --debug
 ```
 
-Or let the ingester route them all: `python -m ingester ingest samples/ --recursive`.
+Or let the pipeline route them all: `python -m pipeline ingest samples/ --recursive` (`python -m ingester ingest` is an alias).
 
 | Section | Expected |
 |---|---|
