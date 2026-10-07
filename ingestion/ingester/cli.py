@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shlex
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from question_extractor import ExtractConfig
@@ -140,6 +142,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write each section's clean review/pNN.webp page images",
     )
     ingest.add_argument(
+        "--ocr-command",
+        type=shlex.split,
+        default=None,
+        metavar="CMD",
+        help=(
+            "the command that runs Tesseract on a scanned answer table, e.g. 'tesseract' "
+            "where the binary is installed; defaults to `docker run` of the "
+            "pillora-tesseract image"
+        ),
+    )
+    ingest.add_argument(
         "--recursive",
         action="store_true",
         help="when the input is a folder, search it recursively",
@@ -261,6 +274,9 @@ def _split_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
 
 def _ingest_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
     config = _ingest_config(args)
+    extract_config = ExtractConfig()
+    if args.ocr_command:
+        extract_config = replace(extract_config, ocr_command=tuple(args.ocr_command))
     results: list[IngestResult] = []
     failed: list[Path] = []
     for pdf in pdfs:
@@ -270,7 +286,7 @@ def _ingest_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
                     pdf,
                     args.output_dir,
                     config,
-                    ExtractConfig(),
+                    extract_config,
                     force=args.force,
                     debug=args.debug,
                     review=args.review,

@@ -251,7 +251,21 @@ class ExtractConfig:
     # --- OCR of scanned question cells (``ocr.py``) ------------------------
     ocr_image: str = "pillora-tesseract"
     """The Tesseract image the root ``docker-compose.yml`` builds (``docker compose build
-    tesseract``): Tesseract 5.3.0 with the English model."""
+    tesseract``): Tesseract 5.3.0 with the English model. It names the image
+    :attr:`ocr_command`'s default runs, and stays in a manifest's config snapshot as the
+    record of which reader a run used."""
+    ocr_command: tuple[str, ...] = (
+        "docker", "run", "--rm", "-i", "--pull", "never", "--network", "none",
+        "pillora-tesseract",
+    )
+    """The program that runs Tesseract, as an argv, before the ``stdin stdout ...``
+    arguments ``ocr.py`` adds. The default runs the image above, so a host needs only
+    Docker; ``("tesseract",)`` is the value where the binary is installed, as in the
+    production container. Both read the same TIFF from stdin and write the same TSV, so
+    nothing after the subprocess call differs. Left out of a manifest's config snapshot:
+    it says where Tesseract ran, not how it read, and the snapshot of a default run
+    must not change. ``--pull never`` keeps a missing image from being fetched from
+    Docker Hub under the same name. Keep it in step with ``ocr_image``."""
     ocr_psm: int = 6
     """Tesseract's page segmentation mode for one cell: a block of text.
 

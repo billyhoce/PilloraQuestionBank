@@ -29,6 +29,7 @@ python -m question_extractor paper.pdf --output-dir output/ --start-page 3 --deb
 | `--start-page N` | 1-based first question page; inferred by default |
 | `--zoom` | Render scale, 3.0 ≈ 216 dpi (default 3.0) |
 | `--debug` | Also write `_debug/` renders of every intermediate detection |
+| `--ocr-command CMD` | With `--table`: the command that runs Tesseract (default: `docker run` of `pillora-tesseract`; `tesseract` where the binary is installed) |
 | `--review` | Also write `review/pNN.webp`, the clean pages for the admin review page (below) |
 | `--recursive` | Search a folder input recursively |
 | `-v` | Debug-level logging |
@@ -229,7 +230,8 @@ In outline:
   an underline in an answer cell.
 - **Scanned question cells are read by OCR** (`ocr.py`): every cell of the section, cut
   2pt inside its rules with show-through whitened, in one run of the repo's Tesseract
-  container. A digital page's own text layer is used as it is.
+  container (or of `ocr_command`, e.g. `tesseract` where the binary is installed;
+  `--ocr-command` sets it). A digital page's own text layer is used as it is.
 - **Reading order is measured, then checked against the layout.** Across wins when it
   puts the labels' question numbers in order with strictly fewer inversions, down when
   down does, and a page whose measured order contradicts the layout is flagged. A tie
@@ -249,7 +251,8 @@ In outline:
   text inside a table lies outside every pair (a missed edge); the reading order
   contradicts the layout; question numbers repeat, go backwards or skip one; a scan's
   tilt is past `scan_max_skew_deg`; or OCR is unavailable (Docker not running, or the
-  image not built: `docker compose build tesseract`). An OCR failure keeps the grid and
+  image not built: `docker compose build tesseract`; or the `--ocr-command` program missing
+  or failing). An OCR failure keeps the grid and
   flags every scanned page; digital pages never call Docker.
 
 ## Robustness
@@ -305,7 +308,7 @@ only WebP writer is `webp.py`.
 `write_question_manifest` take it and write the page images and `manifest.json`;
 `extract_paper` is the three in sequence. For `--table`, `tablepipeline.py` splits the same
 way: `grid_pages` (column pairs and row bands; for a scan, the straightened pages' question
-cells cropped for OCR), `read_labels` (question labels from the text layer or from OCR; an
+cells cropped for OCR; `ocr.encode_cells` turns them into the stage's TIFF, `ocr.read_tiff` reads one back), `read_labels` (question labels from the text layer or from OCR; an
 OCR failure comes back as flagged pages) and `group_questions` (rows → questions, renders,
 `manifest.json`, `tables.json`); `extract_table_paper` is the three in sequence.
 

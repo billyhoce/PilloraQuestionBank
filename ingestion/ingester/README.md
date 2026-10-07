@@ -14,7 +14,7 @@ python -m ingester segment <pdf|folder> --output-dir output/ [--force] [--write-
 # cut the PDF along them -> _split/<label>.pdf and _split/split.json
 python -m ingester split <pdf|folder> --output-dir output/
 # segment + split + route each section -> <label>/ per section and ingest.json
-python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--debug] [--review]
+python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--debug] [--review] [--ocr-command CMD]
 ```
 
 ```
@@ -162,6 +162,7 @@ way, with its `question_columns`/`reading_order` as the layout hint. That includ
 scanned table: the table extractor straightens it and reads its question numbers with
 the Tesseract container, so Docker must be running with the image built (`docker
 compose build tesseract`); without them its pages come back flagged, with the reason.
+`--ocr-command tesseract` runs a locally installed binary instead of the container.
 The output lands in `output/<paper>/<label>/` — the split PDF is named for its label —
 and that folder is replaced on every run. Not routed, and recorded with the reason: an
 answer section with no template (flagged for review), and a question or

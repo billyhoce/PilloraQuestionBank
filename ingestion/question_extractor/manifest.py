@@ -87,9 +87,14 @@ def config_snapshot(config: ExtractConfig) -> dict:
 
     The ``review_*`` settings are left out: they shape only the ``--review`` images,
     not a rectangle, so they explain nothing in a manifest and would change every
-    one for a run that never asked for them.
+    one for a run that never asked for them. So is ``ocr_command``, which says where
+    Tesseract ran rather than how it read (``ocr_image`` records the reader).
     """
-    return {k: v for k, v in asdict(config).items() if not k.startswith("review_")}
+    return {
+        k: v
+        for k, v in asdict(config).items()
+        if not k.startswith("review_") and k != "ocr_command"
+    }
 
 
 def build_manifest(
