@@ -244,13 +244,13 @@ def route_section(
 
     if route.pipeline == QUESTION_EXTRACTOR:
         try:
-            has_text = _has_text(section.pdf)
+            carries_text = has_text(section.pdf)
         except Exception as exc:
             log.warning("%s: '%s' could not be read (%s)", paper, segment.label, exc)
             return SectionReport(
                 **base, route=route.pipeline, status=FAILED, reason=str(exc), needs_review=True
             )
-        if not has_text:
+        if not carries_text:
             reason = "no page carries extractable text (a scanned paper needs OCR)"
             log.warning("%s: '%s' not routed: %s", paper, segment.label, reason)
             return SectionReport(
@@ -308,6 +308,7 @@ def _layout(segment: Segment) -> TableLayout | None:
     return TableLayout(tuple(segment.question_columns), segment.reading_order)
 
 
-def _has_text(pdf: Path) -> bool:
+def has_text(pdf: Path) -> bool:
+    """Whether any page of the PDF carries extractable text (``False`` for a scan)."""
     with pymupdf.open(pdf) as doc:
         return any(page.has_text for page in extract_document(doc))

@@ -25,6 +25,7 @@ class StageContext:
     source: Path
     config: PipelineConfig
     section: str | None = None  # None for a job-scope stage
+    debug: bool = False  # the job's option: also write the debug renders
 
     def path(self, *parts: str) -> Path:
         """An artefact path under the job dir."""
@@ -36,7 +37,8 @@ class Outcome:
     """``done | skipped(reason) | failed(error)``, plus what a human should know.
 
     ``sections`` is only read from a fan-out stage: the labels it found, which
-    the runner turns into one task per section stage.
+    the runner turns into one task per stage of the section's route; ``routes``
+    names each label's route (a label missing from it is ``unrouted``).
     """
 
     status: str
@@ -45,6 +47,7 @@ class Outcome:
     needs_review: bool = False
     warnings: tuple[str, ...] = ()
     sections: tuple[str, ...] = field(default=())
+    routes: dict[str, str] = field(default_factory=dict)
 
 
 def done(
@@ -52,9 +55,14 @@ def done(
     needs_review: bool = False,
     warnings: tuple[str, ...] = (),
     sections: tuple[str, ...] = (),
+    routes: dict[str, str] | None = None,
 ) -> Outcome:
     return Outcome(
-        DONE, needs_review=needs_review, warnings=tuple(warnings), sections=tuple(sections)
+        DONE,
+        needs_review=needs_review,
+        warnings=tuple(warnings),
+        sections=tuple(sections),
+        routes=dict(routes or {}),
     )
 
 

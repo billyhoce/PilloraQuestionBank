@@ -26,9 +26,10 @@ from pathlib import Path
 
 from question_extractor.warnscope import collect_warnings
 
+from .artefacts import OPTIONS_NAME, read_options, write_json
 from .config import PipelineConfig
 from .outcome import FAILED, Outcome, StageContext, failed
-from .registry import Registry
+from .registry import UNROUTED, Registry
 from .store import (
     BLOCKED,
     DONE,
@@ -55,12 +56,13 @@ _BROKEN = (TASK_FAILED, BLOCKED)
 def settle(store: Store, registry: Registry, job_id: str) -> None:
     """Promote, block or skip every ``pending`` task of a job whose needs are settled."""
     tasks = {task.key: task for task in store.tasks(job_id)}
+    routes = _routes(registry, tasks.values())
     while True:
         moves: list[tuple[Task, str, str]] = []
         for task in tasks.values():
             if task.status != PENDING:
                 continue
-            needs = [tasks.get(key) for key in registry.needs(task.stage, task.section)]
+            needs = [tasks.get(key) for key in registry.needs(task.stage, task.section, routes.get(task.section))]
             if any(need is None for need in needs):
                 continue  # a dependency not yet created (a section stage before its fan-out)
             broken = next((n for n in needs if n.status in _BROKEN), None)
@@ -80,6 +82,15 @@ def settle(store: Store, registry: Registry, job_id: str) -> None:
             store.set_status(ids, status, reason)
         for task, status, reason in moves:
             tasks[task.key] = replace(task, status=status, reason=reason)
+
+
+def _routes(registry: Registry, tasks) -> dict[str | None, str | None]:
+    """Each section's route, from the stages it has tasks for (job stages: ``None``)."""
+    stages: dict[str, set[str]] = {}
+    for task in tasks:
+        if task.section is not None:
+            stages.setdefault(task.section, set()).add(task.stage)
+    return {section: registry.route_of(names) for section, names in stages.items()}
 
 
 def job_status(tasks: list[Task]) -> str:
@@ -116,8 +127,14 @@ class Runner:
         self._sleep = sleep
 
     # --- submitting -------------------------------------------------------
-    def submit(self, job_id: str, source: Path) -> None:
-        """Create the job and a task for every job-scope stage (``register`` runs first)."""
+    def submit(self, job_id: str, source: Path, *, debug: bool = False) -> None:
+        """Create the job and a task for every job-scope stage (``register`` runs first).
+
+        ``debug`` asks for the debug renders as well as the review images; it is
+        kept in the job folder as ``options.json`` so any runner sees it.
+        """
+        if debug:
+            write_json(self.job_dir(job_id) / OPTIONS_NAME, {"debug": True})
         self.store.add_job(job_id, str(source))
         self.store.add_tasks(
             [TaskSpec(job_id, stage.name) for stage in self.registry.job_stages()]
@@ -139,7 +156,11 @@ class Runner:
             self.store.fail(task.id, outcome)
         else:
             self.store.complete(task.id, outcome)
-        if outcome.status != FAILED and self.registry.get(task.stage).fan_out:
+        if (
+            outcome.status != FAILED
+            and task.section is None
+            and self.registry.get(task.stage).fan_out
+        ):
             self._expand(task, outcome)
         self._refresh(task.job_id)
         return task
@@ -161,16 +182,22 @@ class Runner:
 
     # --- internals --------------------------------------------------------
     def _execute(self, task: Task) -> Outcome:
-        stage = self.registry.get(task.stage)
         job = self.store.get_job(task.job_id)
+        job_dir = self.job_dir(task.job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        route = None
+        if task.section is not None:
+            siblings = [t.stage for t in self.store.tasks(task.job_id) if t.section == task.section]
+            route = self.registry.route_of(siblings)
+        stage = self.registry.get(task.stage, route)
         ctx = StageContext(
             job_id=task.job_id,
-            job_dir=self.job_dir(task.job_id),
+            job_dir=job_dir,
             source=Path(job.source),
             config=self.config,
             section=task.section,
+            debug=bool(read_options(job_dir).get("debug")),
         )
-        ctx.job_dir.mkdir(parents=True, exist_ok=True)
         stopped = threading.Event()
         beat = threading.Thread(target=self._heartbeats, args=(task.id, stopped), daemon=True)
         beat.start()
@@ -197,6 +224,7 @@ class Runner:
             needs_review=outcome.needs_review,
             warnings=warnings,
             sections=outcome.sections,
+            routes=outcome.routes,
         )
 
     def _heartbeats(self, task_id: int, stopped: threading.Event) -> None:
@@ -205,11 +233,11 @@ class Runner:
                 return
 
     def _expand(self, task: Task, outcome: Outcome) -> None:
-        """A fan-out stage finished: one task per section for every section stage."""
+        """A fan-out stage finished: one task per stage of each section's route."""
         specs = [
             TaskSpec(task.job_id, stage.name, section)
             for section in outcome.sections
-            for stage in self.registry.section_stages()
+            for stage in self.registry.chain_for(outcome.routes.get(section, UNROUTED))
         ]
         if specs:
             self.store.add_tasks(specs)
