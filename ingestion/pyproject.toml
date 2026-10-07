@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 question-extractor = "question_extractor.cli:main"
 ingester = "ingester.cli:main"
+pipeline = "pipeline.cli:main"
 
 [tool.setuptools]
-packages = ["question_extractor", "ingester"]
+packages = ["question_extractor", "ingester", "pipeline", "pipeline.stages"]

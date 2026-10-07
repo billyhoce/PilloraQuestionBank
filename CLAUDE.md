@@ -113,7 +113,9 @@ Every new feature or behavior change must, **in the same change**:
 ## Ingestion package
 
 `ingestion/` is the PDF ingester, moved in from the former `PilloraQuestionBankIngester` repo
-(history stays in that archived repo). It is a separate installable library
+(history stays in that archived repo). It holds three packages — `question_extractor` (inside one paper),
+`ingester` (the booklet) and `pipeline` (runs the booklet-level stages as tasks in a store; see
+[docs/adr/0001-stage-pipeline.md](./docs/adr/0001-stage-pipeline.md) and [CONTEXT.md](./CONTEXT.md)). It is a separate installable library
 (`pip install -e ./ingestion`; its own `pyproject.toml`) that must never import `app` — a pytest
 (`tests/test_ingestion_independence.py`) enforces it. It keeps its own conventions
 ([ingestion/CLAUDE.md](./ingestion/CLAUDE.md)) and **its own verification rule**: it has no unit-test

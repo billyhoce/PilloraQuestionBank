@@ -1,6 +1,6 @@
 # Pillora Question Bank Ingester
 
-Turns exam-paper PDFs into located questions, in two packages:
+Turns exam-paper PDFs into located questions, in three packages:
 
 - **[`ingester`](ingester/README.md)** reads a downloaded booklet — question papers and
   their answer papers bound together — labels which pages are which with a vision model,
@@ -9,7 +9,15 @@ Turns exam-paper PDFs into located questions, in two packages:
   digital-text question paper and records the rectangle it occupies, drawing it in red on
   a whole-page render for checking by eye.
 
-`python -m ingester ingest` runs the whole chain on a booklet:
+- **[`pipeline`](pipeline/README.md)** runs a booklet as a job of small, file-based stages,
+  each a task in a store (`python -m pipeline submit|run|status`). It calls the other two
+  packages' functions, so its artefacts match theirs. A stage boundary sits where an external
+  dependency lives (the API, Tesseract), where a human may edit the artefact, or where the work
+  is costly and separately useful; smaller steps stay function calls. Only the booklet-level
+  stages (`register`, `segment`, `split`) exist so far. See
+  [docs/adr/0001-stage-pipeline.md](../docs/adr/0001-stage-pipeline.md).
+
+`python -m ingester ingest` runs the whole chain on a booklet in one process:
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 400}}}%%
@@ -56,6 +64,7 @@ python -m venv .venv
 python -m ingester segment paper.pdf --output-dir output/
 python -m ingester split paper.pdf --output-dir output/
 python -m question_extractor paper.pdf --output-dir output/
+python -m pipeline submit paper.pdf && python -m pipeline run && python -m pipeline status
 ```
 
 Every command writes into `output/<paper name>/`. `samples/` is the regression corpus;

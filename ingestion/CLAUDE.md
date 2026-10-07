@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Two packages, at two scales. Read a package's README before changing it — it holds the
+Three packages, at three scales. Read a package's README before changing it — it holds the
 module map, the reasoning behind each heuristic and how to verify a change.
 
 - **`ingester`** — works on the booklet a paper arrived in. A vision model labels page
@@ -28,7 +28,16 @@ module map, the reasoning behind each heuristic and how to verify a change.
   same `manifest.json`; the row-level reading goes to `tables.json`. See
   [`question_extractor/README.md`](question_extractor/README.md).
 
+- **`pipeline`** — runs a booklet as a job of small, file-based stages, each a task in a
+  store (`register` → `segment` → `split` so far; section stages come later). A stage is
+  `run(ctx) -> outcome` that reads and writes artefacts under the job's folder; the runner
+  claims, runs, records and fans out; the `Store` Protocol has a SQLite implementation here and
+  a Postgres one in the webapp. `segment` and `split` call `ingester`'s functions, they do not
+  copy them. See [`pipeline/README.md`](pipeline/README.md), the repo's `CONTEXT.md` and
+  `docs/adr/0001-stage-pipeline.md`.
+
 ```
+pipeline/                      the stage runner: registry, store, runner, one module per stage
 question_extractor/            the extractor; one module per pipeline stage
 ingester/                      the booklet-level package
 samples/                       the regression corpus
@@ -36,6 +45,7 @@ docker/tesseract/              Tesseract OCR image (the root docker-compose.yml'
                                pillora-tesseract); question_extractor/ocr.py runs it for
                                scanned answer tables (see README.md, OCR)
 samples/<paper>.segments.json  hand-written segmentation fixture, one per sample paper
+output/pipeline/               `pipeline`'s pipeline.db and one folder per job id (job.json, segments.json, _split/)
 output/<paper name>/           manifest.json, segments.json, pNN.png, _split/, _debug/,
                                ingest.json, <label>/ (one extractor run per routed section),
                                tables.json (a --table run's row-level reading),
@@ -58,6 +68,10 @@ packages). The repo's `.venv` is Windows-layout: `.venv/Scripts/python`, not `.v
 `ingestion/` must never import `app` (the webapp); `tests/test_ingestion_independence.py`
 enforces it.
 
+`pipeline` is verified the same way: run `python -m pipeline submit/run` over the samples into a
+scratch `--root` and compare each job's `segments.json` and `_split/` with `ingester ingest`'s
+(see `pipeline/README.md`).
+
 ## Conventions
 
 - **Every threshold goes in its package's config dataclass** (`ExtractConfig`,
@@ -70,5 +84,10 @@ enforces it.
 - `question_extractor/geometry.py` is the only module that talks to PyMuPDF extraction,
   `question_extractor/ocr.py` the only one that runs Tesseract, and
   `ingester/request.py` the only one that talks to the Messages API.
+- **Stage boundaries** sit where an external dependency lives (the API, Tesseract), where a human
+  may edit the artefact before the next stage reads it, or where the work is costly and separately
+  useful. Smaller steps are function calls inside a stage. `pipeline.PipelineConfig` holds the
+  scheduling thresholds with their justification; the `Store` Protocol (`pipeline/store.py`) stays
+  free of SQLite specifics so Postgres can satisfy it.
 - Module docstrings carry the reasoning behind their heuristics; extend them, and the
   package README, when you change the logic.

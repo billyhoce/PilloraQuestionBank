@@ -70,8 +70,28 @@ def segment_paper(
     force: bool = False,
     write_fixture: bool = False,
 ) -> SegmentPlan:
+    return segment_into(
+        pdf,
+        output_dir / paper_name(pdf),
+        config,
+        force=force,
+        write_fixture=write_fixture,
+    )
+
+
+def segment_into(
+    pdf: Path,
+    out_dir: Path,
+    config: IngestConfig | None = None,
+    *,
+    force: bool = False,
+    write_fixture: bool = False,
+) -> SegmentPlan:
+    """:func:`segment_paper` with the output folder named, not derived from the PDF.
+
+    The stage runner keeps one folder per job rather than one per paper name.
+    """
     config = config or IngestConfig()
-    out_dir = output_dir / paper_name(pdf)
 
     if not force:
         reused = find_plan(pdf, out_dir)

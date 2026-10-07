@@ -1,9 +1,9 @@
 """One shared collector turning logged warnings into an output file's ``warnings``.
 
-Every stage (extractor, table extractor, segmenter, splitter, router) reports a
+Every stage (extractor, table extractor, segmenter, splitter, router, the pipeline's own) reports a
 problem with ``log.warning`` and lists it in its output file. This module is the
-only place that bridges the two: one logging handler, installed once on both
-package loggers (``question_extractor`` and ``ingester``), appends each
+only place that bridges the two: one logging handler, installed once on the
+package loggers (``question_extractor``, ``ingester`` and ``pipeline``), appends each
 WARNING-and-above message to the innermost open :func:`collect_warnings` scope.
 
 The open scopes live in a context variable, not in a module-level list or a
@@ -29,7 +29,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-PACKAGE_LOGGERS = ("question_extractor", "ingester")
+PACKAGE_LOGGERS = ("question_extractor", "ingester", "pipeline")
 
 # The lists of the scopes open in this context, outermost first (only the last
 # receives). A tuple, replaced rather than mutated, so a copied context never
