@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
@@ -181,6 +182,14 @@ export default function AutoImport() {
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{formatCreated(job.created_at)}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {job.status === 'review_ready' && (
+                      <Link
+                        to={`/admin/import/jobs/${job.id}/review`}
+                        className="text-blue-700 hover:underline mr-3"
+                      >
+                        Review
+                      </Link>
+                    )}
                     {RETRYABLE.includes(job.status) && (
                       <button
                         type="button"

@@ -33,7 +33,11 @@ def iter_pdf_pages(pdf_bytes: bytes) -> Iterator[Image.Image]:
             del img
 
 
-def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
+def upload_pages(
+    pdf_bytes: bytes, filename: str, db: Any, suggested_metadata: dict | None = None
+) -> dict:
+    """Render ``pdf_bytes`` into temp page images. ``suggested_metadata`` (already known, e.g.
+    from an auto-import job) skips the filename extraction."""
     with Timer() as t_total:
         upload_id = str(uuid.uuid4())
         pages = []
@@ -78,7 +82,11 @@ def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
         log.info(f"{'upload_pages':<22}| s3_upload | {t_s3:.3f}s  ({n} pages)")
 
         with Timer() as t_meta:
-            suggested = extract_metadata(filename, db)
+            suggested = (
+                suggested_metadata
+                if suggested_metadata is not None
+                else extract_metadata(filename, db)
+            )
         log.info(f"{'upload_pages':<22}| ai_extract| {t_meta.s}")
 
     log.info(f"{'upload_pages':<22}| TOTAL     | {t_total.s}")

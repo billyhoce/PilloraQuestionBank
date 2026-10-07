@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import ReferencePage from './pages/admin/ReferencePage'
 import ImportPage from './pages/admin/ImportPage'
+import ReviewPage from './pages/admin/ReviewPage'
 import PapersPage from './pages/admin/PapersPage'
 import PaperEditorPage from './pages/admin/PaperEditorPage'
 import UserManagementPage from './pages/admin/UserManagementPage'
@@ -30,6 +31,7 @@ export default function App() {
             <Route element={<ProtectedRoute requiredRole="admin" />}>
               <Route path="/admin/reference" element={<ReferencePage />} />
               <Route path="/admin/import" element={<ImportPage />} />
+              <Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} />
               <Route path="/admin/papers" element={<PapersPage />} />
               <Route path="/admin/papers/:id" element={<PaperEditorPage />} />
               <Route path="/admin/users" element={<UserManagementPage />} />
