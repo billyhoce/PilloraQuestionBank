@@ -45,7 +45,8 @@ from .furniture import Furniture, detect_furniture
 from .geometry import PageGeometry, TextLine, extract_document
 from .manifest import build_manifest, config_snapshot, write_manifest
 from .ocr import BUILD_HINT, OcrCell, question_cells, read_cells
-from .pipeline import ExtractionError, _WarningCollector, paper_name
+from .pipeline import ExtractionError, paper_name
+from .warnscope import collect_warnings, current_warnings
 from .provenance import SourceProvenance, check_page_map
 from .render import render_pages
 from .scanpage import read_scan_page
@@ -95,13 +96,8 @@ def extract_table_paper(
     ``layout`` is the segmenter's word on which columns hold the question numbers
     and which way the answers read; without it both are measured.
     """
-    collector = _WarningCollector()
-    package_logger = logging.getLogger(__package__)
-    package_logger.addHandler(collector)
-    try:
-        return _extract(pdf_path, output_root, config, debug, collector, provenance, layout)
-    finally:
-        package_logger.removeHandler(collector)
+    with collect_warnings():
+        return _extract(pdf_path, output_root, config, debug, provenance, layout)
 
 
 def _extract(
@@ -109,7 +105,6 @@ def _extract(
     output_root: Path,
     config: ExtractConfig,
     debug: bool,
-    collector: _WarningCollector,
     provenance: SourceProvenance | None,
     layout: TableLayout | None,
 ) -> TablePaperResult:
@@ -169,7 +164,7 @@ def _extract(
     if debug:
         render_table_pages(pdf_path, out_dir, results, config, debug=True)
 
-    warnings = list(collector.messages)
+    warnings = current_warnings()
     manifest = build_manifest(
         paper=name,
         source_pdf=pdf_path,

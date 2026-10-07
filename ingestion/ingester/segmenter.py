@@ -13,6 +13,7 @@ from pathlib import Path
 import pymupdf
 
 from question_extractor.pipeline import paper_name
+from question_extractor.warnscope import collect_warnings, current_warnings
 
 from .config import IngestConfig
 from .request import ModelAnswer, ask, encode_pdf, encoded_size
@@ -29,17 +30,6 @@ from .validation import anomalies, validate
 log = logging.getLogger(__name__)
 
 FIXTURE_SUFFIX = ".segments.json"
-
-
-class _WarningCollector(logging.Handler):
-    """Collects this package's warnings into ``segments.json``."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
 
 
 def fixture_path(pdf: Path) -> Path:
@@ -88,13 +78,8 @@ def segment_paper(
         if reused is not None:
             return reused
 
-    collector = _WarningCollector()
-    package_log = logging.getLogger(__package__)
-    package_log.addHandler(collector)
-    try:
-        plan = _segment(pdf, config, collector)
-    finally:
-        package_log.removeHandler(collector)
+    with collect_warnings():
+        plan = _segment(pdf, config)
 
     path = write_plan(plan, out_dir)
     log.info(
@@ -126,9 +111,7 @@ def find_plan(pdf: Path, out_dir: Path) -> SegmentPlan | None:
     return None
 
 
-def _segment(
-    pdf: Path, config: IngestConfig, collector: _WarningCollector
-) -> SegmentPlan:
+def _segment(pdf: Path, config: IngestConfig) -> SegmentPlan:
     paper = paper_name(pdf)
     snapshot = asdict(config)
 
@@ -141,7 +124,7 @@ def _segment(
             pdf=pdf,
             paper=paper,
             page_count=0,
-            warnings=tuple(collector.messages),
+            warnings=tuple(current_warnings()),
             config=snapshot,
         )
 
@@ -152,7 +135,7 @@ def _segment(
             pdf=pdf,
             paper=paper,
             page_count=page_count,
-            warnings=tuple(collector.messages),
+            warnings=tuple(current_warnings()),
             config=snapshot,
         )
 
@@ -201,6 +184,6 @@ def _segment(
         segments=segments,
         model=accepted.model if accepted is not None else None,
         attempts=tuple(attempts),
-        warnings=tuple(collector.messages),
+        warnings=tuple(current_warnings()),
         config=snapshot,
     )

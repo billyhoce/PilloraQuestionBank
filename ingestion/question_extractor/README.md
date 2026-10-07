@@ -252,7 +252,8 @@ In outline:
 ## Robustness
 
 Nothing raises where a warning will do; warnings are logged and collected into the
-manifest's `warnings`.
+manifest's `warnings`, by the one context-variable collector in `warnscope.py` (also used by
+`ingester`; a warning goes to the innermost open scope only).
 
 | Situation | Behaviour |
 |---|---|
@@ -292,6 +293,7 @@ removed.
 | `render.py` | `pNN.png` with red rectangles. |
 | `debug.py` | The `--debug` overlay. |
 | `provenance.py` | `SourceProvenance`; read only by `manifest.py`. |
+| `warnscope.py` | The one warning collector (`collect_warnings`, `current_warnings`) shared with `ingester`. |
 | `manifest.py` | `manifest.json`. |
 | `config.py` | `ExtractConfig`, every threshold with its justification. |
 | `scanpage.py` | `--table` on a scan: border whitening, straightening, rules from pixels. |
