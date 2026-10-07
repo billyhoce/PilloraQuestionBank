@@ -8,16 +8,80 @@ too.
 ## Import API — admin only
 
 ```
-POST   /api/import/upload-pdf       -- upload a single PDF; returns page images + AI-suggested metadata
+POST   /api/import/upload-pdf       -- (Manual) upload a single PDF; returns page images + AI-suggested metadata
 POST   /api/import/confirm          -- submit labeled paper + questions
 POST   /api/import/ai-topics        -- AI part split + topic/marks suggestions for one question
 POST   /api/import/save-topics      -- persist user-reviewed parts for a paper's questions
 DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
+
+POST   /api/import/jobs             -- (Auto-detect) submit a PDF as an ingest job; returns {job_id}
+GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first
+GET    /api/import/jobs/{id}        -- one job, its report and its tasks
+DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
 The two AI-topics routes are documented in [ai-labelling.md](./ai-labelling.md).
 
+## Auto-detect import
+
+On `/admin/import` the admin picks **Auto-detect** or **Manual** (the wizard below, unchanged).
+Auto-detect is the start of automatic import: the admin drops PDF(s), each becomes an **ingest job**
+and shows up in the job list. **Nothing processes a job yet** — a later ticket adds the worker — so
+jobs sit `queued`. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
+
+### Job routes (admin only; non-admins get `403`)
+
+- `POST /api/import/jobs` (multipart `file`) — a non-`application/pdf` content type, or bytes
+  PyMuPDF cannot open (corrupt, encrypted, zero pages), is a `422`. Otherwise it reads the page
+  count and SHA-256 from the bytes (no rendering), puts the PDF at
+  `tmp/ingest/{job_id}/source.pdf`, inserts the `ingest_job` (`queued`) with its first task
+  (`section` NULL, stage `register`, status `ready`), and returns `{"job_id": ...}` with `201`.
+  It makes no Claude call, so it returns in well under a second. If the DB insert fails the
+  uploaded object is deleted.
+- **Filename metadata** is not extracted in the request. The worker runs the existing filename
+  extraction ([ai-labelling.md](./ai-labelling.md#filename-metadata-extraction)) as part of the
+  `register` task, via `record_filename_metadata` in `app/services/ingest_jobs.py`, and stores the
+  result in `report.filename_metadata` (merged into any existing report; empty metadata on error)
+  so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
+  needs the DB reference data (`ingestion/` never imports `app`). The worker is not built yet, so
+  until it lands `report` stays empty.
+- `GET /api/import/jobs?status=` — **only jobs the requesting admin created**, newest first, as
+  `{"data": [...]}`; an unknown `status` is `422`.
+- `GET /api/import/jobs/{id}` — the job plus `report` and its `tasks`. Another admin's job, or an
+  unknown id, is `404`.
+- `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
+  `tmp/ingest/{id}/` prefix (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
+  `cancelled` or `expired` job is a `409`.
+
+S3 goes through the `get_object_store` dependency (`put` / `get` / `presign` / `delete_prefix`), so
+tests use the `fake_object_store` fixture.
+
+### Job statuses
+
+| Status | Meaning |
+| --- | --- |
+| `queued` | Created; waiting for the worker |
+| `running` | The worker is processing it |
+| `review_ready` | A proposal is ready for the admin to review |
+| `failed` | Processing failed (`error` says why) |
+| `confirmed` | The admin confirmed; papers created (`confirmed_paper_ids`, `paper.source_job_id`) |
+| `cancelled` | The admin cancelled it; its S3 prefix is removed |
+| `expired` | Abandoned and cleaned up |
+
+Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`. Only
+`queued` and `cancelled` are produced by the current code.
+
+### UI
+
+`ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in
+progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
+compact drop zone (one job per dropped PDF) above the job list — filename, status, created time and
+a Cancel button for jobs that can still be cancelled — with a manual Refresh button (no polling
+until the worker exists).
+
 ## Server-side pipeline
+
+*(The Manual flow.)*
 
 ### 1. `POST /api/import/upload-pdf`
 

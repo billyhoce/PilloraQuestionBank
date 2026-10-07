@@ -66,7 +66,7 @@ const emptyMetadata = {
   is_premium: true,  // imported papers are premium by default
 }
 
-export default function ImportPage() {
+export default function ManualImport() {
   const [step, setStep] = useState(() => loadSession()?.step ?? 'upload')
   const [pages, setPages] = useState(() => loadSession()?.pages ?? [])
   const [dividerIdx, setDividerIdx] = useState(() => loadSession()?.dividerIdx ?? null)

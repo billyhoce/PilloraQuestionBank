@@ -17,7 +17,9 @@ parameter; these providers extend the same idea to the route layer.
 
 from typing import Callable
 
+from app.ai.filename_extractor import extract_metadata
 from app.ai.topic_labeler import label_question
+from app.storage.object_store import ObjectStore, S3ObjectStore
 from app.storage.s3_client import get_image_bytes, get_presigned_url
 
 Presigner = Callable[[str], str]
@@ -37,3 +39,13 @@ def get_image_fetcher() -> ImageFetcher:
 def get_question_labeller():
     """The Claude call that splits a question into parts and labels them."""
     return label_question
+
+
+def get_object_store() -> ObjectStore:
+    """put / get / presign / delete-prefix over the bucket, for auto-import jobs."""
+    return S3ObjectStore()
+
+
+def get_metadata_extractor():
+    """The Claude call that reads paper metadata out of a filename."""
+    return extract_metadata

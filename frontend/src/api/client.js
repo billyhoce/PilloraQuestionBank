@@ -66,6 +66,25 @@ export const api = {
           return res.json()
         })
     },
+    // Auto-detect: submit a PDF as an ingest job -> { job_id }.
+    createJob: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return fetch('/api/import/jobs', { method: 'POST', credentials: 'include', body: form })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+            throw { status: res.status, message: data?.detail || 'Upload failed' }
+          }
+          return res.json()
+        })
+    },
+    // The admin's own jobs, newest first; optional status filter.
+    listJobs: (status) =>
+      request('GET', `/api/import/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`).then(r => r.data),
+    getJob: (id) => request('GET', `/api/import/jobs/${id}`),
+    cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
     aiTopicsForQuestion: (question_id, signal) =>
       request('POST', '/api/import/ai-topics', { question_id }, signal),

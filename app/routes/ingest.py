@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 
 import anthropic
@@ -7,14 +8,21 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.ai.topic_labeler import TruncatedResponseError
 from app.db import get_db
-from app.deps import ImageFetcher, get_image_fetcher, get_question_labeller
+from app.deps import (
+    ImageFetcher,
+    get_image_fetcher,
+    get_object_store,
+    get_question_labeller,
+)
 from app.logger import Timer, log
-from app.models.orm import Paper, Question, Topic
+from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.ingest_jobs import InvalidPdfError, JobNotCancellableError, cancel_job, create_job
 from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
+from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, get_presigned_url
 
 
@@ -300,4 +308,118 @@ def delete_paper_route(
             delete_object(key)
         except Exception:
             pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Auto-import jobs
+# ---------------------------------------------------------------------------
+
+
+def _task_out(t) -> dict:
+    return {
+        "id": t.id,
+        "section": t.section,
+        "stage": t.stage,
+        "status": t.status,
+        "attempts": t.attempts,
+        "reason": t.reason,
+        "error": t.error,
+        "warnings": t.warnings,
+        "needs_review": t.needs_review,
+        "started_at": t.started_at,
+        "finished_at": t.finished_at,
+        "duration_ms": t.duration_ms,
+    }
+
+
+def _job_out(job: IngestJob) -> dict:
+    return {
+        "id": str(job.id),
+        "filename": job.filename,
+        "status": job.status,
+        "page_count": job.page_count,
+        "error": job.error,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "confirmed_paper_ids": job.confirmed_paper_ids,
+    }
+
+
+def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
+    job = (
+        db.query(IngestJob)
+        .filter(IngestJob.id == job_id, IngestJob.created_by == user.id)
+        .first()
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.post("/jobs", status_code=201)
+async def create_ingest_job(
+    file: UploadFile = File(...),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=422, detail="Only PDF files are accepted")
+    pdf_bytes = await file.read()
+    try:
+        job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
+    except InvalidPdfError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"job_id": str(job.id)}
+
+
+@router.get("/jobs")
+def list_ingest_jobs(
+    status: Optional[str] = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if status is not None and status not in INGEST_JOB_STATUSES:
+        raise HTTPException(status_code=422, detail="Unknown job status")
+    q = db.query(IngestJob).filter(IngestJob.created_by == current_user.id)
+    if status is not None:
+        q = q.filter(IngestJob.status == status)
+    jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
+    return {"data": [_job_out(j) for j in jobs]}
+
+
+@router.get("/jobs/{job_id}")
+def get_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    job = _get_own_job(db, job_id, current_user)
+    return {
+        **_job_out(job),
+        "report": job.report,
+        "tasks": [_task_out(t) for t in job.tasks],
+    }
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+def cancel_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        prefix = cancel_job(job)
+    except JobNotCancellableError as e:
+        raise HTTPException(status_code=409, detail=f"A {e.status} job cannot be cancelled")
+    # Commit the status change before the irreversible S3 delete, as the paper
+    # delete does; a failed delete only orphans temp objects.
+    db.commit()
+    try:
+        store.delete_prefix(prefix)
+    except Exception:
+        log.error(f"{'cancel_ingest_job':<22}| s3_delete | prefix={prefix}")
     return None
