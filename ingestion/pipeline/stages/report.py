@@ -19,7 +19,8 @@ soft need), so a failed or blocked section is a row in the report, not a reason 
 A task that is another stage's soft need (``ocr``) is not required: its failure is
 already in the manifest's warnings, as the extractor's own is.
 
-This is the stage a later ticket extends with the proposal JSON; ``report`` below is
+It also writes ``proposal.json`` and the ``pages/`` review images (see
+:mod:`pipeline.proposal`): the document the admin review page reads. ``report`` below is
 the one place that reads the artefacts, ``_section_report`` the one row.
 """
 
@@ -39,7 +40,7 @@ from ingester.router import (
 from ingester.segments import SegmentPlan, read_plan
 from question_extractor.pipeline import paper_name
 
-from .. import artefacts
+from .. import artefacts, proposal
 from ..outcome import Outcome, StageContext, TaskSummary, done
 from ..registry import CPU, JOB, Stage
 from ..sections import load_section
@@ -86,6 +87,12 @@ def run(ctx: StageContext) -> Outcome:
             "split_warnings": split["warnings"],
             "warnings": warnings,
         },
+    )
+    artefacts.write_json(
+        ctx.path(artefacts.PROPOSAL_NAME),
+        proposal.build(
+            ctx.job_dir, plan, split, sections, ctx.config.proposal_tolerance_pt
+        ),
     )
     return done(needs_review=needs_review)
 
@@ -194,7 +201,8 @@ def _inputs(ctx: StageContext) -> list:
         for t in ctx.tasks
         if t.stage != STAGE.name
     )
-    return [ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *ended]
+    reviews = sorted(ctx.job_dir.glob("*/review")) if ctx.job_dir.is_dir() else []
+    return [ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *reviews, *ended]
 
 
 STAGE = Stage(
@@ -205,5 +213,11 @@ STAGE = Stage(
     soft_needs=("register", "segment", "split"),
     after_sections=True,
     inputs=_inputs,
-    outputs=lambda ctx: [ctx.path(artefacts.REPORT_NAME)],
+    settings=lambda ctx: {"proposal_tolerance_pt": ctx.config.proposal_tolerance_pt},
+    outputs=lambda ctx: [
+        ctx.path(artefacts.REPORT_NAME),
+        ctx.path(artefacts.PROPOSAL_NAME),
+        ctx.path(proposal.PAGES_DIR),
+    ],
+    version=2,  # the proposal and pages/ are new outputs
 )

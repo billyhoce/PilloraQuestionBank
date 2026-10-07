@@ -35,7 +35,7 @@ State lives under `--root` (default `output/pipeline`): `pipeline.db` and one fo
 | `questions` | section (table route) | cpu | grid; **soft**: ocr | `<label>/manifest.json`, `<label>/tables.json` and `<label>/labelled.json` (the labelled grid and the question rectangles `render` draws from). Without OCR reads the scanned pages are flagged with the `ocr` task's error |
 | `render` | section (table route) | cpu | questions | `<label>/pNN.png` (rectangles, on the straightened image for a scan), `<label>/review/pNN.webp` (clean, **unstraightened**) and, for a `--debug` job, `<label>/_debug/pNN.png`, drawn from `labelled.json` |
 | `unrouted` | section (unrouted route) | cpu | split | nothing; `skipped` with the reason (an answer section with no template) |
-| `report` | job (after the sections) | cpu | **soft**: register, segment, split; every section task settled | `ingest.json`: every section's route, status (`extracted`, `not_routed`, `failed`), question count, warnings, review flag and review pages, plus the segment and split warnings, written whatever became of the sections |
+| `report` | job (after the sections) | cpu | **soft**: register, segment, split; every section task settled | `proposal.json` and `pages/pNN.webp` (see `ingestion/README.md`, "The proposal"), and `ingest.json`: every section's route, status (`extracted`, `not_routed`, `failed`), question count, warnings, review flag and review pages, plus the segment and split warnings, written whatever became of the sections |
 
 ### Routes
 
@@ -82,8 +82,10 @@ and decides each section as the one-process router did: a required task `failed`
 with no template), otherwise `extracted`, with its counts, warnings and review pages from the
 manifest. A failed `ocr` is not a failed section: its soft-needing `questions` still wrote the
 manifest, which already flags the unread pages. A failed `register` has no `segments.json`, so the
-report says `segmented: false` and names the failure in `warnings`. `report` is where the proposal
-JSON will be added (#49).
+report says `segmented: false` and names the failure in `warnings`. `report` also writes the
+proposal (`pipeline/proposal.py`): `proposal.json` plus the review WebPs copied to `pages/` at booklet
+numbering (rebuilt whole on every run), from the manifests, the split PDFs' page sizes and the review
+images. The format is documented in `ingestion/README.md`.
 
 ### Resuming, retrying and fingerprints
 
@@ -109,7 +111,7 @@ with. A stage also declares its `outputs`, the files that must exist. What each 
 | `ocr` | `grid.json`, `cells.tiff` | `ExtractConfig` |
 | `questions` | the section's split inputs, `grid.json`, `ocr.json` | `ExtractConfig` |
 | `render` (both routes) | the section's split inputs, `detections.json` / `labelled.json` | `ExtractConfig`, `--debug` |
-| `report` | `segments.json`, `split.json`, every `manifest.json`, how each other task ended | |
+| `report` | `segments.json`, `split.json`, every `manifest.json`, every `review/` folder, how each other task ended | `proposal_tolerance_pt`; outputs `ingest.json`, `proposal.json`, `pages/` |
 
 Left out on purpose: `ExtractConfig.ocr_command` (where Tesseract runs, not how it reads, as in the
 manifest's config snapshot and `PipelineConfig.stage_config_hash`), the scheduling knobs, `--force`
@@ -188,6 +190,7 @@ the same code `ingester segment|split` run, so their artefacts match.
 
 - `registry.py`: `Stage` (with `needs`, `soft_needs` and `after_sections`), `Registry`, `default_registry()`. The place to add a stage.
 - `sections.py`: `load_section` (rebuilds an `ingester` section from the job's artefacts) and `section_route`.
+- `proposal.py`: builds `proposal.json` and the `pages/` images for `report` (pure functions over the artefacts).
 - `outcome.py`: `StageContext` (job dir, source PDF, section, config, `unmet` soft needs, `tasks` for `report`), `TaskSummary` and `Outcome` (`done`, `skipped`, `failed`).
 - `artefacts.py`: artefact names and atomic writes.
 - `store.py`: the `Store` Protocol and its dataclasses; no SQL. `sqlite_store.py` implements it.

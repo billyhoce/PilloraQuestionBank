@@ -35,6 +35,14 @@ class PipelineConfig:
     # kills its runner from looping on its own, and a person asking for another go
     # is the judgement it was waiting for.
 
+    # --- the proposal ------------------------------------------------------
+    # How far (points) a rectangle may stick out of its booklet page before the
+    # proposal warns about it (it is clipped to the page either way). The extractor's
+    # rectangles sit inside the page by construction, so any overhang is an error, but
+    # a rule drawn on the very edge of a scan reads a hair outside; 2pt (under a
+    # millimetre) is below anything a crop or a reviewer could see. A judgement.
+    proposal_tolerance_pt: float = 2.0
+
     # --- what the stages themselves run with ------------------------------
     ingest: IngestConfig = field(default_factory=IngestConfig)
     extract: ExtractConfig = field(default_factory=ExtractConfig)
