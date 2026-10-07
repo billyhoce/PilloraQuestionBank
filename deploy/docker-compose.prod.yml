@@ -24,3 +24,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Ingest worker: same image and env file, drains the ingest-job queue (PDF -> question
+  # images via the ingestion pipeline, OCR via the image's Tesseract). No ports.
+  # Limits sized for the 2 OCPU / 12 GB VM: the worker gets one core and up to 6 GB
+  # (an 80-page booklet), leaving the other core and 6 GB to the API, Nginx and the OS.
+  worker:
+    image: ghcr.io/billyhoce/pillora-api:${IMAGE_TAG:-latest}
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - /opt/pillora/.env
+    cpus: "1.0"
+    mem_limit: 6g
+    restart: unless-stopped

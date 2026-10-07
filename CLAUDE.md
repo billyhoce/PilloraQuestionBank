@@ -45,7 +45,8 @@ role. Either way the session is a JWT in an httpOnly cookie.
 | Backend API | Python 3.11+ / FastAPI |
 | Database | PostgreSQL on Supabase (managed, free tier) |
 | Object Store | AWS S3 |
-| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 1 OCPU / 6 GB RAM |
+| Ingest worker | `python -m app.worker` — a second container from the same image, draining the ingest-job queue through the `ingestion/` package (installed in the image); OCR via Tesseract 5.3 (`apt`) |
+| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 2 OCPU / 12 GB RAM (API + worker; the worker is capped at 1 CPU / 6 GB) |
 | AI | Anthropic Claude API — Haiku 4.5 for both the vision and text calls |
 
 Full rationale and alternatives are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
@@ -63,6 +64,12 @@ FastAPI                                              │
     ├──► PostgreSQL (Supabase)        — metadata    │
     ├──► AWS S3                       — images      │
     └──► Anthropic Claude API         — AI labeling │
+                                                     │
+Ingest worker (same image, 2nd container)            │
+    ├──► PostgreSQL — job/task queue                 │
+    ├──► AWS S3     — source PDFs, review images     │
+    ├──► Tesseract  — OCR of scanned answer tables   │
+    └──► Anthropic Claude API — segmentation         │
 ─────────────────────────────────────────────────────┘
 ```
 

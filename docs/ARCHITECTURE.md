@@ -25,7 +25,10 @@ Ingest worker  (python -m app.worker, same VM)       │
 
 The **worker** is a second process, not part of the API: it takes queued auto-import jobs through
 the `ingestion/pipeline` stages, one job at a time, and leaves a proposal on the job row. See
-[features/ingestion.md](./features/ingestion.md#the-worker).
+[features/ingestion.md](./features/ingestion.md#the-worker). In production it is a `worker`
+service in `deploy/docker-compose.prod.yml`, built from the **same image** as the API (the `Dockerfile`
+installs the `ingestion/` package non-editable and `tesseract-ocr` from apt) and capped at 1 CPU /
+6 GB; see [DEPLOYMENT.md](./DEPLOYMENT.md#ingest-worker).
 
 Infrastructure detail (Cloudflare, CI/CD, provisioning) is in [DEPLOYMENT.md](./DEPLOYMENT.md).
 
