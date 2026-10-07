@@ -18,7 +18,8 @@ Order matters and each stage depends only on the ones above it:
 Stages 1-6 are :func:`locate_questions`, which writes nothing and returns a
 :class:`LocatedPaper`; stage 7 is :func:`write_renders` and
 :func:`write_question_manifest`, each taking that result. :func:`extract_paper`
-is the three in sequence.
+is the three in sequence. :func:`write_renders` also saves the detections
+(:func:`write_detections`), and ``--debug`` draws from that file.
 
 A caller may also hand in provenance: the document this PDF was carved out of
 and the page map back into it (:mod:`question_extractor.provenance`). It takes
@@ -30,6 +31,7 @@ existed.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +51,8 @@ from .trim import trim_bands
 from .warnscope import collect_warnings, current_warnings
 
 log = logging.getLogger(__name__)
+
+DETECTIONS_NAME = "detections.json"
 
 
 class ExtractionError(RuntimeError):
@@ -261,20 +265,70 @@ def locate_questions(
     )
 
 
+def write_detections(located: LocatedPaper, out_dir: Path) -> Path:
+    """Save every page's detections and the calibration as ``detections.json``.
+
+    ``{"paper", "page_count", "start_page", "end_page", "calibration", "pages"}``
+    where ``calibration`` is a :meth:`.calibration.Calibration.entry` or ``None``
+    and ``pages`` are :meth:`.boundaries.PageResult.entry`; floats are exact.
+    Read back with :func:`read_detections`.
+    """
+    record = {
+        "paper": located.paper,
+        "page_count": located.page_count,
+        "start_page": located.start_page,
+        "end_page": located.end_page,
+        "calibration": None if located.calibration is None else located.calibration.entry(),
+        "pages": [page.entry() for page in located.pages],
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / DETECTIONS_NAME
+    path.write_text(json.dumps(record, separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
+def read_detections(path: Path) -> tuple[list[PageResult], Calibration | None]:
+    """The page results and calibration :func:`write_detections` saved."""
+    record = json.loads(path.read_text(encoding="utf-8"))
+    calibration = record["calibration"]
+    return (
+        [PageResult.from_entry(page) for page in record["pages"]],
+        None if calibration is None else Calibration.from_entry(calibration),
+    )
+
+
+def render_saved(
+    pdf_path: Path, out_dir: Path, config: ExtractConfig, debug: bool = False
+) -> dict[int, str]:
+    """Render the pages of a ``detections.json`` in ``out_dir``, with no detection run.
+
+    The rectangles and every overlay come from the file, the pixels from the PDF.
+    A question's segment count is the number of its bands on the saved pages.
+    """
+    pages, calibration = read_detections(out_dir / DETECTIONS_NAME)
+    segment_totals: dict[int, int] = {}
+    for page in pages:
+        for band in page.bands:
+            segment_totals[band.number] = segment_totals.get(band.number, 0) + 1
+    return render_pages(pdf_path, out_dir, pages, segment_totals, calibration, config, debug=debug)
+
+
 def write_renders(
     located: LocatedPaper, out_dir: Path, config: ExtractConfig, debug: bool = False
 ) -> dict[int, str]:
     """Draw each page whole with the question rectangles in red; ``{page: filename}``.
 
-    ``debug`` also writes the debug renders (calibration and anchors drawn in).
+    Also saves ``detections.json`` (:func:`write_detections`). ``debug`` also
+    writes the debug renders (calibration and anchors drawn in), and those are
+    drawn from that file (:func:`render_saved`), not from ``located``.
     """
     segment_totals = {q.number: len(q.bands) for q in located.questions}
-    args = (
+    images = render_pages(
         located.pdf_path, out_dir, located.pages, segment_totals, located.calibration, config
     )
-    images = render_pages(*args, debug=False)
+    write_detections(located, out_dir)
     if debug:
-        render_pages(*args, debug=True)
+        render_saved(located.pdf_path, out_dir, config, debug=True)
     return images
 
 

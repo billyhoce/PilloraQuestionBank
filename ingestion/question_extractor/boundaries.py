@@ -26,7 +26,7 @@ from .calibration import Calibration
 from .config import ExtractConfig
 from .figures import PageFigures, collect_figures, union_figures
 from .furniture import BodyBand, Furniture
-from .geometry import PageGeometry
+from .geometry import PageGeometry, rect_entry, rect_from_entry
 from .gridpage import GridPage, detect_grid
 from .pagekind import blank_page_reason
 from .tokens import is_part_label
@@ -68,6 +68,40 @@ class Band:
     says whether the pixels or the geometry put it there.
     """
 
+    def entry(self) -> dict:
+        """JSON-ready; ``rect``, ``partition`` and ``pixel_ink_box`` are
+        ``[x0, y0, x1, y1]`` (or ``None``) in PDF points."""
+        return {
+            "page": self.page,
+            "number": self.number,
+            "rect": rect_entry(self.rect),
+            "partition": None if self.partition is None else rect_entry(self.partition),
+            "segment": self.segment,
+            "is_continuation": self.is_continuation,
+            "figure_extended": self.figure_extended,
+            "grid_page": self.grid_page,
+            "pixel_ink_box": (
+                None if self.pixel_ink_box is None else rect_entry(self.pixel_ink_box)
+            ),
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> Band:
+        def optional(value):
+            return None if value is None else rect_from_entry(value)
+
+        return cls(
+            page=entry["page"],
+            number=entry["number"],
+            rect=rect_from_entry(entry["rect"]),
+            partition=optional(entry["partition"]),
+            segment=entry["segment"],
+            is_continuation=entry["is_continuation"],
+            figure_extended=entry["figure_extended"],
+            grid_page=entry["grid_page"],
+            pixel_ink_box=optional(entry["pixel_ink_box"]),
+        )
+
     @property
     def pixel_ink(self) -> bool:
         """True when the pixel fallback contributed to this band's ink box."""
@@ -108,6 +142,42 @@ class PageResult:
     """The graph grid covering this page, when it is graph paper."""
     continuation_note: str | None = None
     """Why the page was read as continuing the previous question, if it was."""
+
+    def entry(self) -> dict:
+        """JSON-ready, every field: ``bands`` and ``anchors`` are lists of their
+        types' entries, ``figures`` / ``body_band`` / ``grid`` an entry or ``None``."""
+        return {
+            "page": self.page,
+            "bands": [band.entry() for band in self.bands],
+            "has_text": self.has_text,
+            "needs_review": self.needs_review,
+            "review_reason": self.review_reason,
+            "skip_reason": self.skip_reason,
+            "anchors": [anchor.entry() for anchor in self.anchors],
+            "figures": None if self.figures is None else self.figures.entry(),
+            "body_band": None if self.body_band is None else self.body_band.entry(),
+            "grid": None if self.grid is None else self.grid.entry(),
+            "continuation_note": self.continuation_note,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> PageResult:
+        def optional(kind, value):
+            return None if value is None else kind.from_entry(value)
+
+        return cls(
+            page=entry["page"],
+            bands=[Band.from_entry(band) for band in entry["bands"]],
+            has_text=entry["has_text"],
+            needs_review=entry["needs_review"],
+            review_reason=entry["review_reason"],
+            skip_reason=entry["skip_reason"],
+            anchors=[Anchor.from_entry(anchor) for anchor in entry["anchors"]],
+            figures=optional(PageFigures, entry["figures"]),
+            body_band=optional(BodyBand, entry["body_band"]),
+            grid=optional(GridPage, entry["grid"]),
+            continuation_note=entry["continuation_note"],
+        )
 
 
 def _merged_intervals(

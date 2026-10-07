@@ -88,7 +88,7 @@ import pymupdf
 
 from .config import ExtractConfig
 from .furniture import BodyBand
-from .geometry import PageGeometry, TextLine
+from .geometry import PageGeometry, TextLine, rect_entry, rect_from_entry
 from .tokens import is_part_label, leading_question_number
 
 log = logging.getLogger(__name__)
@@ -123,6 +123,14 @@ class Rule:
     hi: float
     """Where it starts and ends along its own axis."""
 
+    def entry(self) -> dict:
+        """JSON-ready: the four fields by name."""
+        return {"horizontal": self.horizontal, "pos": self.pos, "lo": self.lo, "hi": self.hi}
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> Rule:
+        return cls(entry["horizontal"], entry["pos"], entry["lo"], entry["hi"])
+
     @property
     def length(self) -> float:
         return self.hi - self.lo
@@ -156,6 +164,22 @@ class RowBand:
     """Whether the row's answer area holds any ink: a row with neither a label
     nor an answer is blank, and belongs to no question."""
 
+    def entry(self) -> dict:
+        """JSON-ready: the seven fields by name."""
+        return {
+            "top": self.top,
+            "bottom": self.bottom,
+            "label": self.label,
+            "number": self.number,
+            "order": self.order,
+            "confidence": self.confidence,
+            "answer_ink": self.answer_ink,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> RowBand:
+        return cls(**entry)
+
 
 @dataclass
 class ColumnPair:
@@ -172,6 +196,33 @@ class ColumnPair:
     """1-based, by the page's columns left to right, then top to bottom."""
     table: int = 0
     """0-based index of the table it belongs to, in :attr:`TablePage.tables`."""
+
+    def entry(self) -> dict:
+        """JSON-ready: the geometry fields by name, ``rows`` a list of
+        :meth:`RowBand.entry`."""
+        return {
+            "x0": self.x0,
+            "question_x1": self.question_x1,
+            "x1": self.x1,
+            "top": self.top,
+            "bottom": self.bottom,
+            "rows": [row.entry() for row in self.rows],
+            "index": self.index,
+            "table": self.table,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> ColumnPair:
+        return cls(
+            x0=entry["x0"],
+            question_x1=entry["question_x1"],
+            x1=entry["x1"],
+            top=entry["top"],
+            bottom=entry["bottom"],
+            rows=[RowBand.from_entry(row) for row in entry["rows"]],
+            index=entry["index"],
+            table=entry["table"],
+        )
 
     @property
     def rect(self) -> pymupdf.Rect:
@@ -211,6 +262,45 @@ class TablePage:
     (:attr:`ScanPage.angle_deg`), which every rectangle on it is measured after.
     ``None`` on a born-digital page."""
     problems: list[str] = field(default_factory=list)
+
+    def entry(self) -> dict:
+        """JSON-ready, every field. ``tables`` are ``[x0, y0, x1, y1]``; ``rules``
+        and ``inferred_edges`` are :meth:`Rule.entry` lists, ``pairs`` are
+        :meth:`ColumnPair.entry` lists, ``sequence`` is ``[[pair, row], ...]`` and
+        ``inversions`` a plain object."""
+        return {
+            "page": self.page,
+            "has_text": self.has_text,
+            "body_band": self.body_band.entry(),
+            "rules": [rule.entry() for rule in self.rules],
+            "tables": [rect_entry(table) for table in self.tables],
+            "inferred_edges": [edge.entry() for edge in self.inferred_edges],
+            "table_problems": [list(problems) for problems in self.table_problems],
+            "pairs": [pair.entry() for pair in self.pairs],
+            "reading_order": self.reading_order,
+            "inversions": dict(self.inversions),
+            "sequence": [list(item) for item in self.sequence],
+            "straightened_deg": self.straightened_deg,
+            "problems": list(self.problems),
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> TablePage:
+        return cls(
+            page=entry["page"],
+            has_text=entry["has_text"],
+            body_band=BodyBand.from_entry(entry["body_band"]),
+            rules=[Rule.from_entry(rule) for rule in entry["rules"]],
+            tables=[rect_from_entry(table) for table in entry["tables"]],
+            inferred_edges=[Rule.from_entry(edge) for edge in entry["inferred_edges"]],
+            table_problems=[list(problems) for problems in entry["table_problems"]],
+            pairs=[ColumnPair.from_entry(pair) for pair in entry["pairs"]],
+            reading_order=entry["reading_order"],
+            inversions=dict(entry["inversions"]),
+            sequence=[(pair, row) for pair, row in entry["sequence"]],
+            straightened_deg=entry["straightened_deg"],
+            problems=list(entry["problems"]),
+        )
 
     @property
     def scanned(self) -> bool:

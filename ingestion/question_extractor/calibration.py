@@ -45,6 +45,20 @@ class Calibration:
     confident: bool
     """False when no distinct gutter cluster was found and a fallback was used."""
 
+    def entry(self) -> dict:
+        """JSON-ready: the five fields by name."""
+        return {
+            "x_cut": self.x_cut,
+            "content_right": self.content_right,
+            "gutter_x": self.gutter_x,
+            "content_x": self.content_x,
+            "confident": self.confident,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> Calibration:
+        return cls(**entry)
+
 
 def gutter_candidates(
     geom: PageGeometry, body_lines: list[TextLine], config: ExtractConfig

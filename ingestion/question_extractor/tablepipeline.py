@@ -28,7 +28,7 @@ none of its question-paper ones:
 Stages 1-3 are :func:`grid_pages` (which also crops the scanned pages' question
 cells), 4-5 are :func:`read_labels` and 6-7 are :func:`group_questions`;
 :func:`extract_table_paper` is the three in sequence. Only :func:`group_questions`
-writes files, and an OCR failure never raises out of :func:`read_labels`: the
+writes files (``grid.json`` among them, which ``--debug`` draws from), and an OCR failure never raises out of :func:`read_labels`: the
 scanned pages come back flagged.
 
 Provenance works as in :mod:`.pipeline`: it takes part in no detection and only
@@ -64,6 +64,7 @@ from .trim import _pixel_box
 log = logging.getLogger(__name__)
 
 TABLES_NAME = "tables.json"
+GRID_NAME = "grid.json"
 
 
 @dataclass
@@ -102,6 +103,43 @@ class GridPages:
     cells: list[OcrCell]
     """The question cells of every scanned page, cropped from its straightened
     image and waiting to be OCR'd; empty for a born-digital section."""
+
+    def entry(self) -> dict:
+        """JSON-ready: ``paper``, ``pdf_path``, ``page_count``, ``pages`` (each a
+        :meth:`.tables.TablePage.entry`) and ``cells`` (each an
+        :meth:`.ocr.OcrCell.entry`, without pixels).
+
+        ``geoms`` and ``furniture`` are left out: they are the PDF's own text and
+        drawing boxes, which :func:`.geometry.extract_document` and
+        :func:`.furniture.detect_furniture` read off it again, and a file of them
+        would be most of the PDF. :meth:`from_entry` takes them from the caller.
+        """
+        by_page = {page.page: page for page in self.pages}
+        return {
+            "paper": self.paper,
+            "pdf_path": str(self.pdf_path),
+            "page_count": self.page_count,
+            "pages": [page.entry() for page in self.pages],
+            "cells": [cell.entry(by_page[cell.page]) for cell in self.cells],
+        }
+
+    @classmethod
+    def from_entry(
+        cls, entry: dict, geoms: list[PageGeometry], furniture: Furniture
+    ) -> GridPages:
+        """The result :meth:`entry` described; its ``cells`` come back without
+        their pixel crops."""
+        pages = [TablePage.from_entry(page) for page in entry["pages"]]
+        by_page = {page.page: page for page in pages}
+        return cls(
+            entry["paper"],
+            Path(entry["pdf_path"]),
+            entry["page_count"],
+            geoms,
+            furniture,
+            pages,
+            [OcrCell.from_entry(cell, by_page[cell["page"]]) for cell in entry["cells"]],
+        )
 
 
 def grid_pages(
@@ -198,8 +236,12 @@ def group_questions(
         config,
         straightened=straightened,
     )
+    # Always written, and what the debug view is drawn from: the saved reading,
+    # not the in-memory one, so the file is known to be enough to draw it.
+    grid_path = write_grid(grid, out_dir)
     if debug:
-        render_table_pages(pdf_path, out_dir, results, config, debug=True)
+        saved = read_grid(grid_path)
+        render_table_pages(pdf_path, out_dir, saved["pages"], config, debug=True)
 
     warnings = current_warnings()
     manifest = build_manifest(
@@ -253,6 +295,34 @@ def group_questions(
         " - some pages need review" if result.needs_review else "",
     )
     return result
+
+
+def write_grid(grid: GridPages, out_dir: Path) -> Path:
+    """Save the labelled grid as ``grid.json``: :meth:`GridPages.entry`, every float
+    exact. Read it back with :func:`read_grid`."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / GRID_NAME
+    path.write_text(json.dumps(grid.entry(), separators=(",", ":")) + "\n", encoding="utf-8")
+    return path
+
+
+def read_grid(path: Path) -> dict:
+    """The saved grid with its pages and cells restored.
+
+    ``{"paper", "pdf_path", "page_count", "pages": [TablePage], "cells": [OcrCell]}``;
+    no PDF is opened, which is why the ``geoms``/``furniture`` of a
+    :class:`GridPages` are not in it.
+    """
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    pages = [TablePage.from_entry(page) for page in entry["pages"]]
+    by_page = {page.page: page for page in pages}
+    return {
+        "paper": entry["paper"],
+        "pdf_path": Path(entry["pdf_path"]),
+        "page_count": entry["page_count"],
+        "pages": pages,
+        "cells": [OcrCell.from_entry(cell, by_page[cell["page"]]) for cell in entry["cells"]],
+    }
 
 
 def extract_table_paper(

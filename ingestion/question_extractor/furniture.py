@@ -63,6 +63,14 @@ class BodyBand:
     top: float
     bottom: float
 
+    def entry(self) -> dict:
+        """JSON-ready: ``{"top", "bottom"}`` in PDF points."""
+        return {"top": self.top, "bottom": self.bottom}
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> BodyBand:
+        return cls(entry["top"], entry["bottom"])
+
     def contains(self, y0: float, y1: float) -> bool:
         """True when the midpoint of a span falls inside the band."""
         return self.top <= (y0 + y1) / 2.0 <= self.bottom
