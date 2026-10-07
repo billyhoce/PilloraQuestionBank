@@ -127,6 +127,21 @@ by `.dockerignore`. Check memory with `docker stats` after a large booklet (80 p
    - `pillora-question-bank-prod` (images) and `question-bank-backups` (DB dumps).
    - **Block all public access** on both (app uses presigned URLs).
    - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
+   - **Expire temporary uploads.** On `pillora-question-bank-prod` add a lifecycle rule for prefix `tmp/` that expires current objects after 7 days and aborts incomplete multipart uploads after 7 days. `tmp/` holds only in-flight data: manual-import page images (`tmp/{upload_id}/`, moved to `papers/...` when the import is confirmed) and automatic-import jobs (`tmp/ingest/{job_id}/`: source PDF and review pages). The worker's daily sweep expires `review_ready`/`failed` jobs older than 7 days and deletes their prefix itself; this rule is the backstop for failed deletes and abandoned manual uploads. Nothing under `tmp/` is meant to live longer than 7 days. Applying it is a one-time manual step:
+     ```bash
+     aws s3api put-bucket-lifecycle-configuration --bucket pillora-question-bank-prod \
+       --lifecycle-configuration file://tmp-lifecycle.json
+     ```
+     Note this call **replaces** the bucket's whole lifecycle configuration, so put the noncurrent-version rule above in the same file:
+     ```json
+     {"Rules": [
+       {"ID": "expire-noncurrent", "Status": "Enabled", "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 30}},
+       {"ID": "expire-tmp", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
+        "Expiration": {"Days": 7}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}
+     ]}
+     ```
    - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.

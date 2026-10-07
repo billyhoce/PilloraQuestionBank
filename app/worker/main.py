@@ -15,6 +15,7 @@ import shlex
 import signal
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -26,12 +27,16 @@ from question_extractor import ExtractConfig
 from app.logger import log_tokens
 from app.worker.edges import Edges
 from app.worker.store import SqlStore
+from app.worker.sweep import run_sweep
 
 log = logging.getLogger("pillora.worker")
 
 LEASE_SECONDS = 600.0  # a task's lease: now + 10 minutes, refreshed by the heartbeat
 HEARTBEAT_SECONDS = 30.0  # the liveness thread's period; the lease is far longer than this
 POLL_SECONDS = 2.0  # idle sleep between looks at the queue
+# How often a pass asks whether the daily sweep is due (an in-memory throttle; the claim itself is
+# the database's), so the poll loop does not hit the heartbeat row every 2 seconds.
+SWEEP_CHECK_EVERY = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,7 @@ class Worker:
         runner_factory: Callable,
         settings: WorkerSettings | None = None,
         sleep: Callable[[float], None] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.settings = settings or WorkerSettings()
         self.store = SqlStore(
@@ -96,6 +102,10 @@ class Worker:
         )
         self._stop = threading.Event()
         self._sleep = sleep
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._session_factory = session_factory
+        self._objects = object_store
+        self._sweep_checked: datetime | None = None
 
     # --- lifecycle ----------------------------------------------------------
     def request_stop(self, *_args) -> None:
@@ -120,9 +130,21 @@ class Worker:
             except Exception:
                 log.exception("job %s: could not revalidate its tasks", job.id)
 
+    def sweep(self) -> None:
+        """The daily expiry sweep, when due (see :mod:`app.worker.sweep`); never raises."""
+        now = self._clock()
+        if self._sweep_checked is not None and now - self._sweep_checked < SWEEP_CHECK_EVERY:
+            return
+        self._sweep_checked = now
+        try:
+            run_sweep(self._session_factory, self._objects, self.settings.scratch_dir, self._clock)
+        except Exception:
+            log.exception("the expiry sweep failed")
+
     def run_once(self) -> bool:
         """One look at the queue: ``True`` when a task was run."""
         self.store.touch_worker()
+        self.sweep()
         try:
             return self.runner.run_one() is not None
         except Exception:

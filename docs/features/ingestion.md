@@ -84,7 +84,7 @@ tests use the `fake_object_store` fixture.
 | `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
 | `confirmed` | The admin confirmed; papers created (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
-| `expired` | Abandoned and cleaned up |
+| `expired` | Left in `review_ready` or `failed` for more than 7 days; the worker's daily sweep marked it expired and deleted its `tmp/ingest/{job_id}/` prefix and scratch folder |
 
 Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
 
@@ -95,6 +95,13 @@ them as failed, flagged for the admin). It is `failed` when a job-level stage (`
 `split`) failed or was blocked — `report` still runs then, but describes a booklet nothing was
 extracted from — or when the pipeline ends with no proposal. A job in an API-owned state
 (`cancelled`, `confirmed`, `expired`) is never touched.
+
+**Expiry.** Once a day the worker (`app/worker/sweep.py`) expires jobs whose `updated_at` — when they
+became `review_ready`/`failed` — is more than 7 days old: it sets `expired`, commits, then deletes the
+S3 prefix (a failure is logged and does not stop the sweep) and the job's scratch folder. It also
+removes the scratch folders of jobs cancelled over a day ago. The sweep is claimed by an atomic update
+of `worker_heartbeat.last_sweep_at`, so it runs at most once a day across restarts and workers. A
+bucket lifecycle rule on `tmp/` backs it up ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
 
 ### UI
 

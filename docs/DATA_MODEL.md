@@ -232,7 +232,8 @@ IngestTask: {
 
 WorkerHeartbeat: {             -- singleton
   id (int, CHECK id = 1),
-  seen_at, version, current_job_id (nullable FK -> IngestJob, ON DELETE SET NULL)
+  seen_at, version, current_job_id (nullable FK -> IngestJob, ON DELETE SET NULL),
+  last_sweep_at (timestamptz, nullable)   -- when the daily expiry sweep last ran
 }
 ```
 

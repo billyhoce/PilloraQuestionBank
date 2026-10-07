@@ -493,3 +493,5 @@ class WorkerHeartbeat(Base):
     current_job_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("ingest_job.id", ondelete="SET NULL"), nullable=True
     )
+    # When the daily expiry sweep last ran (claimed atomically by the worker).
+    last_sweep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
