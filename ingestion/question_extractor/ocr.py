@@ -73,17 +73,19 @@ class OcrCell:
     def entry(self, result: TablePage) -> dict:
         """JSON-ready metadata, without the pixels.
 
-        ``row`` is ``[pair index, row index]``, both 1-based as in
-        :attr:`TablePage.sequence`, found in ``result`` (this cell's page); the
+        ``row`` is ``[pair, row]``, both 1-based, found in ``result`` (this cell's
+        page). The pair is its position in ``result.pairs`` and not its ``index``, which
+        is only set once the labels are read: a cell is saved before that, and
+        afterwards the two are the same number, as in :attr:`TablePage.sequence`. The
         rest are ``rect`` as ``[x0, y0, x1, y1]``, ``origin_px`` as ``[x, y]``,
         ``pad_px`` and ``scale``.
         """
-        for pair in result.pairs:
+        for p, pair in enumerate(result.pairs, start=1):
             for i, row in enumerate(pair.rows, start=1):
                 if row is self.row:
                     return {
                         "page": self.page,
-                        "row": [pair.index, i],
+                        "row": [p, i],
                         "rect": rect_entry(self.rect),
                         "origin_px": list(self.origin_px),
                         "pad_px": self.pad_px,
@@ -95,8 +97,8 @@ class OcrCell:
     def from_entry(cls, entry: dict, result: TablePage) -> OcrCell:
         """The cell :meth:`entry` described, its row looked up in ``result``,
         with ``image`` left ``None``."""
-        pair_index, row_index = entry["row"]
-        pair = next(p for p in result.pairs if p.index == pair_index)
+        pair_position, row_index = entry["row"]
+        pair = result.pairs[pair_position - 1]
         x, y = entry["origin_px"]
         return cls(
             entry["page"],
@@ -117,6 +119,15 @@ class OcrRead:
     """One line per text line it found, in straightened page points."""
     confidence: float | None = None
     """The lowest word confidence (0-100); ``None`` when it read nothing."""
+
+    def entry(self) -> dict:
+        """JSON-ready: ``lines`` (each a :meth:`.geometry.TextLine.entry`) and
+        ``confidence``, every float exact."""
+        return {"lines": [line.entry() for line in self.lines], "confidence": self.confidence}
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> OcrRead:
+        return cls(tuple(TextLine.from_entry(line) for line in entry["lines"]), entry["confidence"])
 
 
 def question_cells(scan: ScanPage, result: TablePage, config: ExtractConfig) -> list[OcrCell]:

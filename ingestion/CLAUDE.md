@@ -30,7 +30,7 @@ module map, the reasoning behind each heuristic and how to verify a change.
 
 - **`pipeline`** — runs a booklet as a job of small, file-based stages, each a task in a
   store (`register` → `segment` → `split`, then per section `locate` → `render` for question and
-  `annotated_booklet` sections; table sections come later). A stage is
+  `annotated_booklet` sections; `grid` → `ocr` → `questions` → `render` for table sections). A stage is
   `run(ctx) -> outcome` that reads and writes artefacts under the job's folder; the runner
   claims, runs, records and fans out; the `Store` Protocol has a SQLite implementation here and
   a Postgres one in the webapp. `segment` and `split` call `ingester`'s functions, they do not

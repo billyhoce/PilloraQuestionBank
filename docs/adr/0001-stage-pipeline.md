@@ -32,7 +32,11 @@ Run a booklet as a **job** of small **stages**, each recorded as a **task** in a
 - **One runner loop**: claim, run, record, expand fan-out. A stage that raises is recorded as
   `failed`. Dependencies live in the registry: when a task finishes the runner promotes
   dependents to `ready`, marks those downstream of a failure `blocked`, and those downstream of a
-  skip `skipped`. Other jobs are untouched.
+  skip `skipped`. Other jobs are untouched. A dependency may be declared **soft**: the dependent
+  then waits only until it has settled (done, skipped, failed or blocked) and runs whichever way it
+  ended, told how by its context. It is for a stage whose predecessor improves its result without
+  being required for it (the table route's `questions` after `ocr`: a failed OCR flags the scanned
+  pages instead of losing the section).
 - Leases and heartbeats cover a runner that dies mid-task: a task whose lease lapses is made
   ready again until it has used its retry limit. Thresholds live in `PipelineConfig`.
 

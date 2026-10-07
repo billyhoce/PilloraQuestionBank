@@ -8,6 +8,8 @@ Dependencies live in the registry, not the store. After each task the runner
 :func:`settle`\\ s its job: a ``pending`` task whose needs are all ``done`` becomes
 ``ready``; one whose need ``failed`` or is ``blocked`` becomes ``blocked``; one
 whose need was ``skipped`` is ``skipped`` itself (there is nothing to run on).
+A *soft* need (:attr:`~pipeline.registry.Stage.soft_needs`) only has to have settled:
+however it ended, the dependent runs, and ``StageContext.unmet`` tells it how.
 Settling is one reader-then-writer pass, which is exact for one runner; with
 several runners finishing sibling tasks at once it can miss a promotion until the
 next settle, so the loop settles every unfinished job when it finds nothing to
@@ -28,7 +30,7 @@ from question_extractor.warnscope import collect_warnings
 
 from .artefacts import OPTIONS_NAME, read_options, write_json
 from .config import PipelineConfig
-from .outcome import FAILED, Outcome, StageContext, failed
+from .outcome import FAILED, Outcome, StageContext, Unmet, failed
 from .registry import UNROUTED, Registry
 from .store import (
     BLOCKED,
@@ -51,6 +53,8 @@ log = logging.getLogger(__name__)
 
 # Statuses that stop a task's dependents from running.
 _BROKEN = (TASK_FAILED, BLOCKED)
+# Statuses after which a soft need no longer holds its dependent back.
+_SETTLED = (DONE, SKIPPED, TASK_FAILED, BLOCKED)
 
 
 def settle(store: Store, registry: Registry, job_id: str) -> None:
@@ -62,8 +66,10 @@ def settle(store: Store, registry: Registry, job_id: str) -> None:
         for task in tasks.values():
             if task.status != PENDING:
                 continue
-            needs = [tasks.get(key) for key in registry.needs(task.stage, task.section, routes.get(task.section))]
-            if any(need is None for need in needs):
+            route = routes.get(task.section)
+            needs = [tasks.get(key) for key in registry.needs(task.stage, task.section, route)]
+            soft = [tasks.get(key) for key in registry.soft_needs(task.stage, task.section, route)]
+            if any(need is None for need in (*needs, *soft)):
                 continue  # a dependency not yet created (a section stage before its fan-out)
             broken = next((n for n in needs if n.status in _BROKEN), None)
             skipped = next((n for n in needs if n.status == SKIPPED), None)
@@ -71,7 +77,7 @@ def settle(store: Store, registry: Registry, job_id: str) -> None:
                 moves.append((task, BLOCKED, f"{broken.stage} {broken.status}"))
             elif skipped is not None:
                 moves.append((task, SKIPPED, f"{skipped.stage} was skipped"))
-            elif all(n.status == DONE for n in needs):
+            elif all(n.status == DONE for n in needs) and all(n.status in _SETTLED for n in soft):
                 moves.append((task, READY, ""))
         if not moves:
             return
@@ -186,10 +192,16 @@ class Runner:
         job_dir = self.job_dir(task.job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         route = None
+        tasks = {t.key: t for t in self.store.tasks(task.job_id)}
         if task.section is not None:
-            siblings = [t.stage for t in self.store.tasks(task.job_id) if t.section == task.section]
+            siblings = [t.stage for t in tasks.values() if t.section == task.section]
             route = self.registry.route_of(siblings)
         stage = self.registry.get(task.stage, route)
+        unmet = {}
+        for key in self.registry.soft_needs(task.stage, task.section, route):
+            need = tasks.get(key)
+            if need is not None and need.status != DONE:
+                unmet[need.stage] = Unmet(need.status, need.error or need.reason)
         ctx = StageContext(
             job_id=task.job_id,
             job_dir=job_dir,
@@ -197,6 +209,7 @@ class Runner:
             config=self.config,
             section=task.section,
             debug=bool(read_options(job_dir).get("debug")),
+            unmet=unmet,
         )
         stopped = threading.Event()
         beat = threading.Thread(target=self._heartbeats, args=(task.id, stopped), daemon=True)

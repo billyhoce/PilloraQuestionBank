@@ -14,6 +14,10 @@ Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
     _split/<label>.pdf, split.json  split
     <label>/manifest.json, detections.json   locate
     <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render
+    <label>/grid.json, cells.tiff   grid (a table section: column pairs, row bands, OCR cells)
+    <label>/ocr.json                ocr (one read per cell of the TIFF)
+    <label>/labelled.json, manifest.json, tables.json   questions
+    <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render (table route)
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ JOB_NAME = "job.json"
 SEGMENTS_NAME = "segments.json"
 SPLIT_DIR = "_split"
 SPLIT_NAME = "split.json"
+CELLS_TIFF_NAME = "cells.tiff"
+OCR_NAME = "ocr.json"
 
 
 def write_bytes(path: Path, data: bytes) -> Path:

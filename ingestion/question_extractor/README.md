@@ -308,7 +308,7 @@ only WebP writer is `webp.py`.
 `write_question_manifest` take it and write the page images and `manifest.json`;
 `extract_paper` is the three in sequence. For `--table`, `tablepipeline.py` splits the same
 way: `grid_pages` (column pairs and row bands; for a scan, the straightened pages' question
-cells cropped for OCR; `ocr.encode_cells` turns them into the stage's TIFF, `ocr.read_tiff` reads one back), `read_labels` (question labels from the text layer or from OCR; an
+cells cropped for OCR; `ocr.encode_cells` turns them into the stage's TIFF, `ocr.read_tiff` reads one back), `read_labels` (question labels from the text layer or from OCR, or from `reads` the caller already made; an
 OCR failure comes back as flagged pages) and `group_questions` (rows → questions, renders,
 `manifest.json`, `tables.json`); `extract_table_paper` is the three in sequence.
 
@@ -348,7 +348,7 @@ are drawn from these files (`render_saved`, `read_grid`), not from the in-memory
 | `tables.py` | `--table`: rules → column pairs, row bands, labels, reading order. |
 | `tablequestions.py` | `--table`: rows → `Question`s, one `Band` per run of rows. |
 | `tablerender.py` | `--table --debug`: the row-level geometry, as the `_debug/pNN.png` marks. |
-| `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json`, `tables.json` and `grid.json`); `extract_table_paper` runs them. |
+| `tablepipeline.py` | `--table`: `grid_pages`, `read_labels`, `group_questions` (the last writes `manifest.json`, `tables.json` and `grid.json`); `extract_table_paper` runs them. `render_table`, `write_table_records`, `write_labelled`/`read_labelled` and `load_grid` are the pieces `group_questions` is made of, which the pipeline's `grid` / `questions` / `render` stages call separately. |
 | `cli.py` / `__main__.py` | The command line. |
 
 Public surface: `ExtractConfig`, `extract_paper`, `locate_questions`, `LocatedPaper`, `Band`, `Question`, `PageResult`,
