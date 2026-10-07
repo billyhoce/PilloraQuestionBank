@@ -31,6 +31,9 @@ class PipelineConfig:
     # kills its runner every time would otherwise loop forever. A stage that
     # *reports* failure is never retried automatically.
     retry_limit: int = 3
+    # ``pipeline retry`` starts a task's count again: the limit stops a stage that
+    # kills its runner from looping on its own, and a person asking for another go
+    # is the judgement it was waiting for.
 
     # --- what the stages themselves run with ------------------------------
     ingest: IngestConfig = field(default_factory=IngestConfig)
@@ -45,6 +48,15 @@ class PipelineConfig:
 
         The scheduling knobs are left out: retuning the lease must not make every
         earlier job look as though it was produced by a different configuration.
+        So is ``extract.ocr_command``: it says where Tesseract runs, not how it
+        reads (the manifest's config snapshot leaves it out for the same reason),
+        and a job moved to a host with a different command is the same job.
         """
-        payload = json.dumps({"ingest": asdict(self.ingest), "extract": asdict(self.extract)}, sort_keys=True)
+        payload = json.dumps(
+            {"ingest": asdict(self.ingest), "extract": self.extract_settings()}, sort_keys=True
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def extract_settings(self) -> dict:
+        """``ExtractConfig`` as a plain dict, without ``ocr_command`` (see above)."""
+        return {k: v for k, v in asdict(self.extract).items() if k != "ocr_command"}

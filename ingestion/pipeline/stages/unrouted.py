@@ -26,4 +26,6 @@ def run(ctx: StageContext) -> Outcome:
     return skipped(route.reason, needs_review=route.needs_review or section.segment.needs_review)
 
 
-STAGE = Stage(name="unrouted", scope=SECTION, kind=CPU, run=run, route=UNROUTED)
+STAGE = Stage(
+    name="unrouted", scope=SECTION, kind=CPU, run=run, needs=("split",), route=UNROUTED
+)

@@ -25,6 +25,8 @@ scope, a kind, its dependencies and whether it fans out.
   the same name (``render``): a task is identified by ``(job_id, section, stage)``
   and a section has exactly one route, so the name is unique where it matters. A
   section's route is recovered from the stages it has (:meth:`Registry.route_of`).
+- **inputs / settings / outputs / version**: what the task fingerprint is made of and
+  what "its artefacts exist" checks (``pipeline.fingerprint``).
 - **after_sections**: a job-scope stage that also waits for every *section* task of the job
   to settle (``done``, ``skipped``, ``failed`` or ``blocked``). Sections do not exist when
   the job is submitted (``split`` fans them out), so the stage cannot name them in ``needs``;
@@ -41,8 +43,9 @@ function call inside a stage, not a stage.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from .outcome import Outcome, StageContext
 
@@ -61,6 +64,10 @@ TABLE = "table"
 UNROUTED = "unrouted"
 
 
+def _nothing(ctx: StageContext) -> Sequence:
+    return ()
+
+
 @dataclass(frozen=True)
 class Stage:
     name: str
@@ -72,6 +79,14 @@ class Stage:
     fan_out: bool = False
     after_sections: bool = False  # job-scope only: also wait for every section task to settle
     route: str | None = None  # section stages only: the chain this stage belongs to
+    # What the stage's artefacts are a function of, for the task fingerprint
+    # (pipeline.fingerprint): the files it reads (a path is hashed by content, a string
+    # is taken as is), the configuration subset and options it reads, the files it must
+    # leave behind, and a version to bump when its code changes what it writes.
+    inputs: Callable[[StageContext], Sequence[Path | str]] = _nothing
+    settings: Callable[[StageContext], object] = _nothing
+    outputs: Callable[[StageContext], Sequence[Path]] = _nothing
+    version: int = 1
 
 
 class Registry:

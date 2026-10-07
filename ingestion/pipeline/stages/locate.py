@@ -23,11 +23,12 @@ import shutil
 
 from ingester.router import has_text
 from question_extractor import ExtractionError, locate_questions
-from question_extractor.pipeline import write_detections, write_question_manifest
+from question_extractor.pipeline import DETECTIONS_NAME, write_detections, write_question_manifest
 from question_extractor.render import page_filename
 from question_extractor.warnscope import collect_warnings, current_warnings
 
 from .. import artefacts
+from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed, skipped
 from ..registry import CPU, QUESTION, SECTION, Stage
 from ..sections import load_section
@@ -71,5 +72,16 @@ def run(ctx: StageContext) -> Outcome:
 
 
 STAGE = Stage(
-    name="locate", scope=SECTION, kind=CPU, run=run, route=QUESTION
+    name="locate",
+    scope=SECTION,
+    kind=CPU,
+    run=run,
+    needs=("split",),
+    route=QUESTION,
+    inputs=plan_inputs,
+    settings=extract_settings,
+    outputs=lambda ctx: [
+        ctx.path(ctx.section, "manifest.json"),
+        ctx.path(ctx.section, DETECTIONS_NAME),
+    ],
 )

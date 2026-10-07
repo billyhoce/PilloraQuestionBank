@@ -10,7 +10,10 @@ python -m pipeline submit paper.pdf      # creates the job and its tasks, prints
                                          #   --debug also writes each section's _debug/ renders
 python -m pipeline run                   # drains the queue (--watch keeps polling)
                                          #   --ocr-command tesseract: the OCR command, as in `ingester ingest`
+                                         #   --lease-seconds S: how long a dead runner's task is held (default 120)
 python -m pipeline status [job-id]       # per task: status, duration, warnings, reason/error
+python -m pipeline retry <job-id>        # failed and blocked tasks, and what follows them, back to the queue
+                                         #   (then `run` again; everything else keeps its result)
 python -m pipeline ingest <pdf|folder> --output-dir output/ [--recursive] [--debug] [--force] [--ocr-command CMD]
                                          # submit every PDF and run them with one worker: the whole-folder
                                          # command that replaced `ingester ingest` (which now forwards here)
@@ -69,9 +72,9 @@ failed, whose `segment` found nothing or whose `split` was blocked still gets it
 sections to wait for. This reads only task statuses, so it works over any `Store`; the runner hands
 the stage every task of the job as `ctx.tasks` (a `TaskSummary` per task: section, stage, status,
 reason or error, flags, warnings, and `optional` for a stage that is another's soft need, `ocr`).
-The fan-out runs before the runner settles the job, so `report` never sees a half-expanded job in one
-runner; with several runners, a crash between `split` completing and its fan-out is #48's to
-repair.
+`split`'s completion and its fan-out are one `Store.complete(..., spawn=...)` call (one transaction in
+SQLite, one in Postgres), so a crash cannot leave `split` done with its section tasks never created
+(which would have let `report` run early); `add_tasks` stays idempotent for the rerun.
 
 `report` reads `segments.json`, `_split/split.json`, each section's `manifest.json` and `ctx.tasks`,
 and decides each section as the one-process router did: a required task `failed`/`blocked` makes it
@@ -81,6 +84,59 @@ manifest. A failed `ocr` is not a failed section: its soft-needing `questions` s
 manifest, which already flags the unread pages. A failed `register` has no `segments.json`, so the
 report says `segmented: false` and names the failure in `warnings`. `report` is where the proposal
 JSON will be added (#49).
+
+### Resuming, retrying and fingerprints
+
+A runner that dies mid-task leaves it `running` with a lease. Every `claim_ready` takes
+`PipelineConfig.lease_seconds` (120 s), a live runner renews it every third of that, and each pass of
+the loop calls `reset_stale`: a task past its lease goes back to `ready` (`failed` after
+`retry_limit` attempts, which `retry` starts again). So after a SIGKILL, run `pipeline run`
+again: it waits out the dead runner's lease (`run` keeps polling while a task is `running`), runs that
+task and everything unfinished, and nothing else. `--lease-seconds` shortens the wait (and the
+heartbeat) for a test or a fast machine; it is a run-time setting, in no fingerprint.
+
+Each `done` task records a **fingerprint**: the sha256 of its stage name and `version`, the content of
+every file it reads (`Stage.inputs`), and the configuration subset and options it reads
+(`Stage.settings`); `pipeline/fingerprint.py` holds the hashing and the helpers the stages declare
+with. A stage also declares its `outputs`, the files that must exist. What each reads:
+
+| stage | inputs | settings |
+|---|---|---|
+| `register` | the booklet | hash of `IngestConfig` + `ExtractConfig` (it is in `job.json`) |
+| `segment` | the booklet's sha256, the `<paper>.segments.json` fixture | `IngestConfig` |
+| `split` | the booklet's sha256, `segments.json` | |
+| `locate`, `grid` | `segments.json`, `_split/split.json`, `_split/<label>.pdf` | `ExtractConfig` |
+| `ocr` | `grid.json`, `cells.tiff` | `ExtractConfig` |
+| `questions` | the section's split inputs, `grid.json`, `ocr.json` | `ExtractConfig` |
+| `render` (both routes) | the section's split inputs, `detections.json` / `labelled.json` | `ExtractConfig`, `--debug` |
+| `report` | `segments.json`, `split.json`, every `manifest.json`, how each other task ended | |
+
+Left out on purpose: `ExtractConfig.ocr_command` (where Tesseract runs, not how it reads, as in the
+manifest's config snapshot and `PipelineConfig.stage_config_hash`), the scheduling knobs, `--force`
+(whether the model is asked, not what a plan makes of the file) and a stage's own outputs. `ExtractConfig` is
+taken whole for every stage that reads it, not field by field: a stage silently missing a field it
+reads would be the worse failure, and a rerun of a stage is minutes at most. A directory output
+(`review/`, `_debug/`) is checked for existing, not for content. A `skipped` task records no
+fingerprint (its work is the check that made it skip).
+
+Two uses. At the start of `run`, `Runner.revalidate` reopens every job's **stale** tasks: a `done` task
+whose fingerprint differs from what its inputs give now (or that has none, as before #48), or whose
+outputs are missing (a rebuilt scratch folder), and everything downstream of it. And when a reopened
+(or retried) task is claimed, a recorded fingerprint equal to the current one with the outputs present
+completes it as `done` with the reason "unchanged", without running (`claim_ready` clears the row's
+fingerprint, so a runner killed mid-rerun leaves nothing vouching for half-written artefacts, but still
+hands the runner the previous run's value). So changing `--model` reruns `register` and `segment`, and the
+stages after them find their inputs unchanged; changing an `ExtractConfig` value reruns every stage
+that reads it and `report`.
+
+`pipeline retry <job>` returns the job's `failed` and `blocked` tasks, and every finished task
+downstream of them (including `report`, and a `questions` that ran on without a failed `ocr`), to
+`pending` with their attempts reset; `run` settles them to `ready` as their needs allow. A job whose
+`segment` failed for want of a fixture and credential reruns `segment`, `split`, the section stages and
+`report` once the fixture is beside the PDF, and `register` stays as it was. (`segment` forgets a
+sectionless `segments.json` a failed run left behind; `segment_into` would otherwise reuse it.)
+Limits: a retried `split` that finds different sections does not remove tasks of sections that no longer
+exist, and `pipeline ingest` keeps its throwaway store, so resume and retry apply to `submit`/`run`.
 
 ### `pipeline ingest`
 
@@ -135,13 +191,16 @@ the same code `ingester segment|split` run, so their artefacts match.
 - `outcome.py`: `StageContext` (job dir, source PDF, section, config, `unmet` soft needs, `tasks` for `report`), `TaskSummary` and `Outcome` (`done`, `skipped`, `failed`).
 - `artefacts.py`: artefact names and atomic writes.
 - `store.py`: the `Store` Protocol and its dataclasses; no SQL. `sqlite_store.py` implements it.
-- `runner.py`: `Runner` (claim, run, record, expand fan-out) and `settle` (promote/block/skip dependents; a soft need only has to have settled; an `after_sections` stage waits for every section task).
-- `stages/`: one module per stage. `cli.py`: the four commands (`submit`, `run`, `status`, `ingest`).
-- `config.py`: `PipelineConfig` (lease, poll interval, retry limit, each with its justification).
+- `fingerprint.py`: the hashing of a task's inputs, settings and outputs, and the helpers stages declare them with.
+- `runner.py`: `Runner` (claim, run, record, fan out atomically with completion, `revalidate`, `retry`) and `settle` (promote/block/skip dependents; a soft need only has to have settled; an `after_sections` stage waits for every section task).
+- `stages/`: one module per stage. `cli.py`: the commands (`submit`, `run`, `retry`, `status`, `ingest`).
+- `config.py`: `PipelineConfig` (lease, poll interval, retry limit, each with its justification; `extract_settings()` for the fingerprints).
 
 ## Adding a stage
 
-Write `stages/<name>.py` with `run(ctx) -> Outcome` and a `STAGE = Stage(...)`, and add it to
+Write `stages/<name>.py` with `run(ctx) -> Outcome` and a `STAGE = Stage(...)` (declaring `inputs`,
+`settings` and `outputs` for its fingerprint, and bumping `version` whenever its code changes what it
+writes), and add it to
 `default_registry()`. Read inputs from and write outputs to files under `ctx.job_dir` with
 `artefacts.write_*`; log problems with `log.warning` (the runner collects them into the task's
 warnings, as `question_extractor.warnscope` does elsewhere); keep stage names to 16 characters.

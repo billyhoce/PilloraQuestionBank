@@ -15,6 +15,7 @@ import logging
 
 from question_extractor.tablepipeline import LABELLED_NAME, read_labelled, render_table
 
+from ..fingerprint import plan_inputs, render_settings
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, SECTION, TABLE, Stage
 from ..sections import load_section
@@ -42,5 +43,14 @@ def run(ctx: StageContext) -> Outcome:
 
 
 STAGE = Stage(
-    name="render", scope=SECTION, kind=CPU, run=run, needs=("questions",), route=TABLE
+    name="render",
+    scope=SECTION,
+    kind=CPU,
+    run=run,
+    needs=("questions",),
+    route=TABLE,
+    inputs=lambda ctx: [*plan_inputs(ctx), ctx.path(ctx.section, LABELLED_NAME)],
+    settings=render_settings,
+    outputs=lambda ctx: [ctx.path(ctx.section, "review")]
+    + ([ctx.path(ctx.section, "_debug")] if ctx.debug else []),
 )
