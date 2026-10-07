@@ -14,7 +14,7 @@ python -m ingester segment <pdf|folder> --output-dir output/ [--force] [--write-
 # cut the PDF along them -> _split/<label>.pdf and _split/split.json
 python -m ingester split <pdf|folder> --output-dir output/
 # segment + split + route each section -> <label>/ per section and ingest.json
-python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--debug]
+python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--debug] [--review]
 ```
 
 ```

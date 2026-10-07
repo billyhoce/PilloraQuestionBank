@@ -61,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write _debug/ renders showing x_cut, anchors, figures and dividers",
     )
     parser.add_argument(
+        "--review",
+        action="store_true",
+        help=(
+            "also write review/pNN.webp: each page clean, with nothing drawn on it, as "
+            "filed (a scan is not straightened), at review_zoom"
+        ),
+    )
+    parser.add_argument(
         "--table",
         action="store_true",
         help=(
@@ -155,7 +163,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.table:
                 succeeded.append(
                     extract_table_paper(
-                        pdf, args.output_dir, config, debug=args.debug, layout=layout
+                        pdf,
+                        args.output_dir,
+                        config,
+                        debug=args.debug,
+                        layout=layout,
+                        review=args.review,
                     )
                 )
                 continue
@@ -166,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
                     config,
                     start_page=args.start_page,
                     debug=args.debug,
+                    review=args.review,
                 )
             )
         except ExtractionError as exc:

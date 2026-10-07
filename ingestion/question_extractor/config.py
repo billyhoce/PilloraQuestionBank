@@ -17,6 +17,18 @@ class ExtractConfig:
     # --- rendering -------------------------------------------------------
     zoom: float = 3.0
     """Render scale passed to ``pymupdf.Matrix``; 3.0 ≈ 216 dpi."""
+    review_zoom: float = 2.0
+    """Scale of the clean ``--review`` images; 2.0 ≈ 144 dpi.
+
+    The admin review page shows these under an SVG of the rectangles, so they only
+    have to make a candidate's handwriting legible, not to be pixel-exact: a pupil's
+    working at 144 dpi stays readable while the image has 4/9 of the pixels of the
+    216 dpi render, and these are uploaded with the paper: a page is ~26 KB at 2.0
+    on the sample corpus.
+    """
+    review_webp_quality: int = 80
+    """WebP quality of the review images (0-100); 80 keeps pencil and printed
+    text edges crisp at a few tens of KB a page (see ``review_zoom``)."""
 
     # --- running header / footer detection -------------------------------
     furniture_band_frac: float = 0.15
