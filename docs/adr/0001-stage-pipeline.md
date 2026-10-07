@@ -21,8 +21,8 @@ Run a booklet as a **job** of small **stages**, each recorded as a **task** in a
   human may edit the artefact before the next stage reads it, or where work is costly and
   separately useful. Everything finer stays a function call.
 - A **registry** declares each stage's name, scope (job or section), kind (cpu, api,
-  subprocess), dependencies and fan-out. A fan-out stage (`split`) reports its sections and the
-  runner creates a task per section for every section stage.
+  subprocess), dependencies and fan-out. A fan-out stage (`split`) reports its sections and each
+  one's route, and the runner creates a task per stage of that route's chain.
 - The **store** is a Protocol (`claim_ready`, `heartbeat`, `complete`, `fail`, `add_tasks`,
   `reset_stale`, plus job and task reads). Task identity is `(job_id, section, stage)` and
   `add_tasks` is idempotent on it. The package ships a SQLite implementation for the local CLI

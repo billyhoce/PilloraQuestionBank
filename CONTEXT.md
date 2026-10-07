@@ -29,6 +29,12 @@ another process and a human can read or edit the file in between.
 One labelled page range of a booklet, named in `segments.json`: `q1`, `q2` for question papers,
 `a1`, `a2` for the answer papers that belong to them. Section stages run once per section.
 
+**Route**
+Which chain of section stages a section runs, chosen once when `split` fans out, mirroring
+`ingester.router`: `question` (question sections and `annotated_booklet` answer sections: `locate`
+then `render`), `table` (table answer sections) or `unrouted` (nothing can take it; one `skipped` task
+with the reason).
+
 **Proposal**
 What the pipeline offers for a booklet: its sections, the questions found in each and their
 rectangles, with every flag raised along the way. A proposal is a suggestion for an admin to

@@ -2,7 +2,8 @@
 
 Builds ``_split.partial/`` with ``ingester.splitter`` and swaps it in as
 ``_split/`` once complete. Reports the sections it wrote, which the runner turns
-into one task per section stage.
+into one task per stage of that section's route
+(:func:`pipeline.sections.section_route`, the same choice ``ingester ingest`` makes).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from ingester.splitter import split_into
 from .. import artefacts
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, JOB, Stage
+from ..sections import section_route
 
 
 def run(ctx: StageContext) -> Outcome:
@@ -31,6 +33,7 @@ def run(ctx: StageContext) -> Outcome:
         needs_review=bool(result.skipped),
         warnings=warnings,
         sections=tuple(section.segment.label for section in result.sections),
+        routes={section.segment.label: section_route(section) for section in result.sections},
     )
 
 

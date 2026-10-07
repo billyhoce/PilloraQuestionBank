@@ -7,6 +7,7 @@ import json
 from dataclasses import asdict, dataclass, field
 
 from ingester import IngestConfig
+from question_extractor import ExtractConfig
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class PipelineConfig:
 
     # --- what the stages themselves run with ------------------------------
     ingest: IngestConfig = field(default_factory=IngestConfig)
+    extract: ExtractConfig = field(default_factory=ExtractConfig)
 
     @property
     def heartbeat_seconds(self) -> float:
@@ -44,5 +46,5 @@ class PipelineConfig:
         The scheduling knobs are left out: retuning the lease must not make every
         earlier job look as though it was produced by a different configuration.
         """
-        payload = json.dumps({"ingest": asdict(self.ingest)}, sort_keys=True)
+        payload = json.dumps({"ingest": asdict(self.ingest), "extract": asdict(self.extract)}, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()

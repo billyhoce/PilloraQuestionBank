@@ -8,10 +8,12 @@ one intact.
 
 Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
 
+    options.json                  submit: what the job asks for (``debug``)
     job.json                      register
     segments.json                 segment
     _split/<label>.pdf, split.json  split
-    <label>/...                   one folder per section, from the section stages
+    <label>/manifest.json, detections.json   locate
+    <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import os
 import shutil
 from pathlib import Path
 
+OPTIONS_NAME = "options.json"
 JOB_NAME = "job.json"
 SEGMENTS_NAME = "segments.json"
 SPLIT_DIR = "_split"
@@ -54,3 +57,9 @@ def replace_dir(partial: Path, final: Path) -> Path:
         shutil.rmtree(final)
     os.replace(partial, final)
     return final
+
+
+def read_options(job_dir: Path) -> dict:
+    """The options the job was submitted with; none when nothing was asked for."""
+    path = job_dir / OPTIONS_NAME
+    return read_json(path) if path.is_file() else {}

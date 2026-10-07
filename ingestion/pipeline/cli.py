@@ -40,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit = commands.add_parser("submit", help="queue a booklet PDF as a job")
     submit.add_argument("pdf", type=Path, nargs="+", help="the booklet PDF(s)")
+    submit.add_argument(
+        "--debug",
+        action="store_true",
+        help="also write each question section's _debug/ renders (review images are always written)",
+    )
 
     run = commands.add_parser("run", help="run queued tasks until none are left")
     run.add_argument("--watch", action="store_true", help="keep polling for new work")
@@ -83,7 +88,7 @@ def _submit(args: argparse.Namespace, store: Store) -> int:
         if pdf in missing:
             continue
         job_id = str(uuid.uuid4())
-        runner.submit(job_id, pdf.resolve())
+        runner.submit(job_id, pdf.resolve(), debug=args.debug)
         print(f"{job_id}  {pdf.name}")
     return 1 if missing else 0
 
