@@ -29,6 +29,12 @@ from app.services.ingest_jobs import (
     retry_job,
     worker_state,
 )
+from app.services.ingest_review import (
+    NoProposalError,
+    PageRangeError,
+    build_review,
+    extract_page_range,
+)
 from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
 from app.storage.object_store import ObjectStore
@@ -453,3 +459,43 @@ def cancel_ingest_job(
     except Exception:
         log.error(f"{'cancel_ingest_job':<22}| s3_delete | prefix={prefix}")
     return None
+
+
+@router.get("/jobs/{job_id}/review")
+def review_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        return build_review(job, store)
+    except NoProposalError:
+        raise HTTPException(status_code=409, detail="This job has no proposal to review yet")
+
+
+class ManualPagesIn(BaseModel):
+    first_page: int
+    last_page: int
+
+
+@router.post("/jobs/{job_id}/manual-pages")
+def manual_pages(
+    job_id: uuid.UUID,
+    payload: ManualPagesIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Hand a page range of the job's source PDF to the Manual import flow: the same
+    ``{pages, suggested_metadata}`` the Manual flow's own PDF upload returns."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        pdf = extract_page_range(store.get(job.source_key), payload.first_page, payload.last_page)
+    except PageRangeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except InvalidPdfError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    metadata = (job.report or {}).get("filename_metadata")
+    return upload_pages(pdf, job.filename, db, suggested_metadata=metadata)

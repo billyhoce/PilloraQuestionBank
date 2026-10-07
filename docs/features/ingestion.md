@@ -18,6 +18,8 @@ POST   /api/import/jobs             -- (Auto-detect) submit a PDF as an ingest j
 GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first, with progress + worker_alive
 GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
 POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
+GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
+POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
@@ -67,6 +69,17 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   its age in whole seconds. No row (worker never started) gives `false` / `null`. The server computes
   both so the UI never compares clocks. With the worker stopped a new job stays `queued`; starting
   the worker drains it.
+- `GET /api/import/jobs/{id}/review` — `proposal_edited` if present, else `proposal`
+  (`app/services/ingest_review.py::build_review`), with each page given a presigned `url` (via
+  `ObjectStore.presign` of `tmp/ingest/{id}/{page.image}`; `null` when the page has no image) and its
+  `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
+  `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
+  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`. A job with
+  no proposal yet is a `409`. Read-only: editing the proposal is a later step.
+- `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` (booklet pages, 1-based,
+  inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
+  Manual flow's own renderer), using the job's stored `filename_metadata` instead of a second Claude
+  call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
 - `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
   `tmp/ingest/{id}/` prefix (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
   `cancelled` or `expired` job is a `409`.
@@ -115,6 +128,25 @@ none is and on unmount; Refresh is still there. While a job is active and `worke
 the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
 lists every task with its section, status, duration, warnings and reason or error, and refreshes
 with each poll.
+
+### Review page
+
+`/admin/import/jobs/:jobId/review` (`ReviewPage`), linked as "Review" from each `review_ready` row of
+the job list. It shows one proposed paper at a time (tabs when there are several; a paper with
+`label: null` is an answer-only paper). Left: a strip of the paper's pages — a flagged page
+(`needs_review`) has an amber border and its reason as a tooltip. Centre: the clean page image with
+the question rectangles (blue), answer rectangles (green) and unmatched `orphan_answers` (grey,
+dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
+points by `rectToPx` in `reviewGeometry.js` (`width_px / width_pt` per axis, from the API's sizes).
+Right: the question list with each question's flags (`pixel_ink`, `grid_page`, `page N: reason`);
+clicking a question selects it and jumps to its first page. Read-only for now.
+
+Every `unrouted` section is listed above the paper with its reason and page range. "Handle manually"
+calls `manual-pages` for that range, writes the Manual wizard's `sessionStorage` session
+(`manualHandoff.js`: step `review`, the pages, the suggested metadata) and navigates to
+`/admin/import`, which opens on Manual. This is how a scanned question paper — whose answer key
+extracted but whose questions could not be located — is finished by hand. The range comes from the
+proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
 
 ### The worker
 

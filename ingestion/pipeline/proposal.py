@@ -127,7 +127,13 @@ def build(
         papers.append(_paper(job_dir, staging, None, a, loaded, by_label, tolerance))
 
     unrouted = [
-        {"label": r.label, "status": r.status, "reason": r.reason}
+        {
+            "label": r.label,
+            "status": r.status,
+            "reason": r.reason,
+            "first_page": r.first_page,
+            "last_page": r.last_page,
+        }
         for r in reports
         if r.status != EXTRACTED
     ]

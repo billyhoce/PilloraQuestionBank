@@ -219,5 +219,5 @@ STAGE = Stage(
         ctx.path(artefacts.PROPOSAL_NAME),
         ctx.path(proposal.PAGES_DIR),
     ],
-    version=2,  # the proposal and pages/ are new outputs
+    version=3,  # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range
 )

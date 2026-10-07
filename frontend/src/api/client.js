@@ -89,6 +89,11 @@ export const api = {
         heartbeatAgeS: r.heartbeat_age_s,
       })),
     getJob: (id) => request('GET', `/api/import/jobs/${id}`),
+    // The proposal under review, with presigned page-image URLs and pixel sizes.
+    review: (id) => request('GET', `/api/import/jobs/${id}/review`),
+    // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
+    manualPages: (id, first_page, last_page) =>
+      request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),

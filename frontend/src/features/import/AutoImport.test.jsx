@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AutoImport, { POLL_MS } from './AutoImport'
@@ -33,7 +34,7 @@ beforeEach(() => {
 
 describe('AutoImport', () => {
   it('lists jobs with filename and status; only live jobs can be cancelled', async () => {
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     expect(await screen.findByText('second.pdf')).toBeInTheDocument()
     expect(screen.getByText('first.pdf')).toBeInTheDocument()
     expect(screen.getByText('Queued')).toBeInTheDocument()
@@ -43,12 +44,12 @@ describe('AutoImport', () => {
 
   it('shows an empty state', async () => {
     api.import.listJobs.mockResolvedValue(listing([]))
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     expect(await screen.findByText('No import jobs yet.')).toBeInTheDocument()
   })
 
   it('uploads a dropped PDF as a job and refreshes the list', async () => {
-    const { container } = render(<AutoImport />)
+    const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await screen.findByText('second.pdf')
     const file = new File(['%PDF'], 'new.pdf', { type: 'application/pdf' })
     await userEvent.upload(container.querySelector('input[type=file]'), file)
@@ -58,7 +59,7 @@ describe('AutoImport', () => {
 
   it('cancels a job after confirmation', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(api.import.cancelJob).toHaveBeenCalledWith('j2'))
     await waitFor(() => expect(api.import.listJobs).toHaveBeenCalledTimes(2))
@@ -66,14 +67,14 @@ describe('AutoImport', () => {
 
   it('does not cancel when the confirmation is declined', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
     expect(api.import.cancelJob).not.toHaveBeenCalled()
   })
 
   it('shows the upload error', async () => {
     api.import.createJob.mockRejectedValue({ message: 'Only PDF files are accepted' })
-    const { container } = render(<AutoImport />)
+    const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await screen.findByText('second.pdf')
     await userEvent.upload(
       container.querySelector('input[type=file]'),
@@ -87,7 +88,7 @@ describe('AutoImport', () => {
       ...JOBS[1], status: 'review_ready', stage: 'report', tasks_done: 7, tasks_total: 9,
       warnings_count: 2, needs_review: true,
     }]))
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     expect(await screen.findByText('7/9 tasks')).toBeInTheDocument()
     expect(screen.getByText('report')).toBeInTheDocument()
     expect(screen.getByText('2 warnings')).toBeInTheDocument()
@@ -96,7 +97,7 @@ describe('AutoImport', () => {
   })
 
   it('retries a job and refreshes', async () => {
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await userEvent.click((await screen.findAllByRole('button', { name: 'Retry' }))[0])
     await waitFor(() => expect(api.import.retryJob).toHaveBeenCalledWith('j2'))
     await waitFor(() => expect(api.import.listJobs).toHaveBeenCalledTimes(2))
@@ -110,7 +111,7 @@ describe('AutoImport', () => {
         { id: 2, stage: 'segment', section: null, status: 'failed', duration_ms: null, warnings: [], reason: '', error: 'boom' },
       ],
     })
-    render(<AutoImport />)
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: 'second.pdf' }))
     expect(await screen.findByText('1.5 s')).toBeInTheDocument()
     expect(screen.getByText('odd page')).toBeInTheDocument()
@@ -127,7 +128,7 @@ describe('AutoImport', () => {
 
     it('polls every 3 s while a job is queued or running, and stops when none is', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
-      render(<AutoImport />)
+      render(<MemoryRouter><AutoImport /></MemoryRouter>)
       await screen.findByText('second.pdf')
       expect(api.import.listJobs).toHaveBeenCalledTimes(1)
 
@@ -148,7 +149,7 @@ describe('AutoImport', () => {
     it('does not poll when no job is active, and stops on unmount', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       api.import.listJobs.mockResolvedValue(listing([{ ...JOBS[1] }]))
-      const idle = render(<AutoImport />)
+      const idle = render(<MemoryRouter><AutoImport /></MemoryRouter>)
       await screen.findByText('first.pdf')
       await tick()
       await tick()
@@ -156,7 +157,7 @@ describe('AutoImport', () => {
       idle.unmount()
 
       api.import.listJobs.mockResolvedValue(listing(JOBS))
-      const { unmount } = render(<AutoImport />)
+      const { unmount } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
       await screen.findByText('second.pdf')
       const before = api.import.listJobs.mock.calls.length
       unmount()
@@ -167,22 +168,30 @@ describe('AutoImport', () => {
 
     it('warns "worker offline" when jobs are waiting and the heartbeat is stale', async () => {
       api.import.listJobs.mockResolvedValue(listing(JOBS, false))
-      render(<AutoImport />)
+      render(<MemoryRouter><AutoImport /></MemoryRouter>)
       expect(await screen.findByRole('alert')).toHaveTextContent('Worker offline')
       expect(screen.getByText('Worker offline', { selector: 'div' })).toBeInTheDocument()
     })
 
     it('shows no offline warning while the worker is alive', async () => {
-      render(<AutoImport />)
+      render(<MemoryRouter><AutoImport /></MemoryRouter>)
       await screen.findByText('second.pdf')
       expect(screen.queryByText(/worker offline/i)).not.toBeInTheDocument()
     })
 
     it('shows no offline warning when nothing is waiting', async () => {
       api.import.listJobs.mockResolvedValue(listing([JOBS[1]], false))
-      render(<AutoImport />)
+      render(<MemoryRouter><AutoImport /></MemoryRouter>)
       await screen.findByText('first.pdf')
       expect(screen.queryByText(/worker offline/i)).not.toBeInTheDocument()
     })
+  })
+
+  it('links review-ready jobs to their review page', async () => {
+    api.import.listJobs.mockResolvedValue(
+      listing([{ id: 'j9', filename: 'r.pdf', status: 'review_ready', created_at: '2026-10-07T10:00:00Z' }]),
+    )
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    expect(await screen.findByRole('link', { name: 'Review' })).toHaveAttribute('href', '/admin/import/jobs/j9/review')
   })
 })

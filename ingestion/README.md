@@ -91,7 +91,7 @@ are PDF points on that page, image paths are relative to the job folder.
      "orphan_answers": [{"page": 23, "x0": ..., "y0": ..., "x1": ..., "y1": ...}],
      "warnings": []}
   ],
-  "unrouted": [{"label": "a2", "status": "not_routed", "reason": "..."}],
+  "unrouted": [{"label": "a2", "status": "not_routed", "reason": "...", "first_page": 31, "last_page": 36}],
   "warnings": []
 }
 ```
@@ -121,7 +121,8 @@ are PDF points on that page, image paths are relative to the job folder.
   it answers), `pixel_ink` (a rectangle whose bounds came from the pixels, not the text layer) and
   `grid_page` (a graph-paper page).
 - **Unrouted.** Every section that was not extracted (`not_routed` or `failed`) is in `unrouted` with
-  its reason, whatever else the proposal does with it. A question section that was not extracted but
+  its reason and its booklet page range (`first_page`..`last_page`, what the review page's "handle
+  manually" opens), whatever else the proposal does with it. A question section that was not extracted but
   whose answer section was still gets a paper: no `questions`, the answer rectangles in
   `orphan_answers` and a paper warning naming why (the scanned booklets whose answer key reads but
   whose question paper cannot be located). An answer section with no question section (an answer-only
