@@ -1,4 +1,4 @@
-"""The route stage, and ``ingest``: segment, split, then send each section on.
+"""The routing rules: which pipeline can crop a section, and the report row it earns.
 
 A split section goes to whichever pipeline can crop its shape:
 
@@ -21,43 +21,27 @@ A split section goes to whichever pipeline can crop its shape:
   pages is routed; the extractor already flags a textless page inside an
   otherwise digital paper.
 
-A routed section lands in ``output/<paper>/<label>/`` -- the extractor's own
-folder layout, because the split PDF is named for its label -- with the split's
-page map as provenance, so every page in its manifest also carries its
-``original_page``. Each section folder is replaced on every run, so a label that
-stops being routed does not leave last run's rectangles behind.
-
-``output/<paper>/ingest.json`` is the paper-level report: every section with its
-label, range, template, route, status, question count, warnings and review
-flag, plus the segment and split stages' own warnings. It is what a human opens
-to see whether a paper ingested properly. One section failing is recorded there
-and the rest still run.
+:func:`choose_route`, :func:`has_text` and :func:`table_layout` are what the
+``pipeline`` stages call (the fan-out chooses each section's chain with
+``choose_route``; ``locate`` applies the text rule; ``questions`` reads the table
+layout). The walk over a paper's sections that used to live here, ``ingest``, is
+``pipeline``'s ``report`` stage: it writes ``<paper>/ingest.json`` -- every section
+with its label, range, template, route, status, question count, warnings and review
+flag, as a :class:`SectionReport` -- from the artefacts the stages left.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import shutil
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 
 import pymupdf
 
-from question_extractor import ExtractConfig, TableLayout, extract_paper, extract_table_paper
+from question_extractor import TableLayout
 from question_extractor.geometry import extract_document
-from question_extractor.pipeline import paper_name
-from question_extractor.warnscope import collect_warnings
 
-from .config import IngestConfig
-from .segmenter import segment_paper
-from .segments import Segment, SegmentPlan
-from .splitter import Section, SplitResult, split_paper
-
-log = logging.getLogger(__name__)
-
-REPORT_NAME = "ingest.json"
+from .segments import Segment
+from .splitter import Section
 
 QUESTION_EXTRACTOR = "question_extractor"
 TABLE_EXTRACTOR = "question_extractor --table"
@@ -124,180 +108,6 @@ class SectionReport:
             "needs_review": self.needs_review,
             "review_pages": list(self.review_pages),
         }
-
-
-@dataclass(frozen=True)
-class IngestResult:
-    pdf: Path
-    paper: str
-    plan: SegmentPlan
-    split: SplitResult
-    sections: tuple[SectionReport, ...] = ()
-    warnings: tuple[str, ...] = ()  # the route stage's own
-    generated_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
-    )
-
-    @property
-    def needs_review(self) -> bool:
-        return (
-            not self.plan.segmented
-            or bool(self.split.skipped)
-            or any(section.needs_review for section in self.sections)
-        )
-
-    def entry(self) -> dict:
-        return {
-            "pdf": Path(self.pdf).as_posix(),
-            "paper": self.paper,
-            "generated_at": self.generated_at,
-            "segmented": self.plan.segmented,
-            "needs_review": self.needs_review,
-            "sections": [section.entry() for section in self.sections],
-            "split_skipped": list(self.split.skipped),
-            "segment_warnings": list(self.plan.warnings),
-            "split_warnings": list(self.split.warnings),
-            "warnings": list(self.warnings),
-        }
-
-
-def ingest_paper(
-    pdf: Path,
-    output_dir: Path,
-    ingest_config: IngestConfig | None = None,
-    extract_config: ExtractConfig | None = None,
-    *,
-    force: bool = False,
-    debug: bool = False,
-    review: bool = False,
-) -> IngestResult:
-    """Segment, split and route one PDF; write ``ingest.json`` either way."""
-    extract_config = extract_config or ExtractConfig()
-    plan = segment_paper(pdf, output_dir, ingest_config, force=force)
-    split = split_paper(pdf, output_dir)
-    paper_dir = output_dir / paper_name(pdf)
-
-    with collect_warnings() as warnings:
-        sections = tuple(
-            route_section(section, paper_dir, extract_config, debug=debug, review=review)
-            for section in split.sections
-        )
-
-    result = IngestResult(
-        pdf=pdf,
-        paper=paper_name(pdf),
-        plan=plan,
-        split=split,
-        sections=sections,
-        warnings=tuple(warnings),
-    )
-    paper_dir.mkdir(parents=True, exist_ok=True)
-    path = paper_dir / REPORT_NAME
-    path.write_text(json.dumps(result.entry(), indent=2) + "\n", encoding="utf-8")
-    log.info("%s: report -> %s", result.paper, path)
-    return result
-
-
-def route_section(
-    section: Section,
-    paper_dir: Path,
-    config: ExtractConfig,
-    *,
-    debug: bool = False,
-    review: bool = False,
-) -> SectionReport:
-    """Send one section to its pipeline and record what came out; never raises."""
-    segment = section.segment
-    paper = paper_dir.name
-    base = dict(
-        label=segment.label,
-        kind=segment.kind,
-        template=segment.template,
-        first_page=segment.first_page,
-        last_page=segment.last_page,
-    )
-
-    out_dir = paper_dir / segment.label
-    if out_dir.exists():
-        try:
-            shutil.rmtree(out_dir)
-        except OSError as exc:
-            log.warning(
-                "%s: '%s' could not clear its previous output %s (%s)",
-                paper,
-                segment.label,
-                out_dir,
-                exc,
-            )
-
-    route = choose_route(section)
-    if route.pipeline is None:
-        if route.needs_review:
-            log.warning("%s: '%s' not routed: %s", paper, segment.label, route.reason)
-        return SectionReport(
-            **base,
-            route=None,
-            status=NOT_ROUTED,
-            reason=route.reason,
-            needs_review=route.needs_review or segment.needs_review,
-        )
-
-    if route.pipeline == QUESTION_EXTRACTOR:
-        try:
-            carries_text = has_text(section.pdf)
-        except Exception as exc:
-            log.warning("%s: '%s' could not be read (%s)", paper, segment.label, exc)
-            return SectionReport(
-                **base, route=route.pipeline, status=FAILED, reason=str(exc), needs_review=True
-            )
-        if not carries_text:
-            reason = "no page carries extractable text (a scanned paper needs OCR)"
-            log.warning("%s: '%s' not routed: %s", paper, segment.label, reason)
-            return SectionReport(
-                **base, route=None, status=NOT_ROUTED, reason=reason, needs_review=True
-            )
-
-    try:
-        if route.pipeline == TABLE_EXTRACTOR:
-            result = extract_table_paper(
-                section.pdf,
-                paper_dir,
-                config,
-                debug=debug,
-                review=review,
-                provenance=section.provenance,
-                layout=table_layout(segment),
-            )
-        else:
-            result = extract_paper(
-                section.pdf,
-                paper_dir,
-                config,
-                debug=debug,
-                review=review,
-                provenance=section.provenance,
-            )
-    except Exception as exc:
-        log.warning("%s: '%s' failed in %s (%s)", paper, segment.label, route.pipeline, exc)
-        return SectionReport(
-            **base, route=route.pipeline, status=FAILED, reason=str(exc), needs_review=True
-        )
-
-    review_pages = tuple(
-        section.provenance.original_page(page.page)
-        for page in result.pages
-        if page.needs_review
-    )
-    return SectionReport(
-        **base,
-        route=route.pipeline,
-        status=EXTRACTED,
-        output=result.out_dir.relative_to(paper_dir).as_posix(),
-        questions=len(result.questions),
-        warnings=tuple(result.warnings),
-        needs_review=result.needs_review or segment.needs_review,
-        review_pages=review_pages,
-    )
 
 
 def table_layout(segment: Segment) -> TableLayout | None:

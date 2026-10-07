@@ -16,7 +16,7 @@ from ..registry import API, JOB, Stage
 
 
 def run(ctx: StageContext) -> Outcome:
-    plan = segment_into(ctx.source, ctx.job_dir, ctx.config.ingest)
+    plan = segment_into(ctx.source, ctx.job_dir, ctx.config.ingest, force=ctx.force)
     warnings = tuple(plan.warnings)
     if not plan.segmented:
         # The last warning is the ingester's verdict; the rest are in `warnings`.

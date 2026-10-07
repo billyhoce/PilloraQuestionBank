@@ -10,21 +10,22 @@ Turns exam-paper PDFs into located questions, in three packages:
   a whole-page render for checking by eye.
 
 - **[`pipeline`](pipeline/README.md)** runs a booklet as a job of small, file-based stages,
-  each a task in a store (`python -m pipeline submit|run|status`). It calls the other two
+  each a task in a store (`python -m pipeline submit|run|status|ingest`). It calls the other two
   packages' functions, so its artefacts match theirs. A stage boundary sits where an external
   dependency lives (the API, Tesseract), where a human may edit the artefact, or where the work
-  is costly and separately useful; smaller steps stay function calls. Only the booklet-level
-  stages (`register`, `segment`, `split`) exist so far. See
+  is costly and separately useful; smaller steps stay function calls. `python -m pipeline ingest`
+  runs a whole folder of papers through every stage (segment, split, each section's extraction, and
+  the `report` stage's `ingest.json`); `python -m ingester ingest` is an alias for it. See
   [docs/adr/0001-stage-pipeline.md](../docs/adr/0001-stage-pipeline.md).
 
-`python -m ingester ingest` runs the whole chain on a booklet in one process:
+`python -m pipeline ingest` runs the whole chain on each booklet (as stage tasks, one worker):
 
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart TD
     pdf[/"booklet PDF<br/>question papers and answer papers bound together"/]
 
-    subgraph ING["ingester"]
+    subgraph ING["ingester functions, run as pipeline stages"]
         seg["segment<br/>label page ranges q1, a1, ...<br/>and each answer paper's template"]
         plan[("segments.json")]
         split["split<br/>one PDF per section,<br/>with a page map back to the booklet"]
@@ -65,6 +66,7 @@ python -m ingester segment paper.pdf --output-dir output/
 python -m ingester split paper.pdf --output-dir output/
 python -m question_extractor paper.pdf --output-dir output/
 python -m pipeline submit paper.pdf && python -m pipeline run && python -m pipeline status
+python -m pipeline ingest samples/ --recursive --output-dir output/   # a folder, one <paper>/ each; `ingester ingest` is the same
 ```
 
 Every command writes into `output/<paper name>/`. `samples/` is the regression corpus;
@@ -80,14 +82,14 @@ with the English model. Build the image once:
 docker compose build tesseract    # from the repo root: the service lives in the root docker-compose.yml
 ```
 
-**Scanned answer tables use it.** `question_extractor --table` (and `ingest`, for a
+**Scanned answer tables use it.** `question_extractor --table` (and `pipeline ingest`, for a
 `table` section) reads a scanned key's question numbers by piping every question cell
 of the section, as one multi-page TIFF, to `docker run --rm -i --network none
 pillora-tesseract` (`question_extractor/ocr.py`). Nothing is mounted or written to disk.
 With Docker stopped or the image not built, those pages come back flagged with the
 reason; digital pages never call Docker. The command is a setting
 (`ExtractConfig.ocr_command`, `--ocr-command` on `question_extractor --table` and
-`ingester ingest`): `--ocr-command tesseract` runs the binary directly, as the
+`pipeline ingest`/`ingester ingest`): `--ocr-command tesseract` runs the binary directly, as the
 production container will, and reads the same. The question-cell crops are also a stage
 artefact: `ocr.encode_cells` makes the multi-page TIFF and `ocr.read_tiff` reads it. Scanned *question* and `annotated_booklet`
 sections are still left unrouted.

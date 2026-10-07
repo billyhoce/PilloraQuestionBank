@@ -8,7 +8,8 @@ Dependencies live in the registry, not the store. After each task the runner
 :func:`settle`\\ s its job: a ``pending`` task whose needs are all ``done`` becomes
 ``ready``; one whose need ``failed`` or is ``blocked`` becomes ``blocked``; one
 whose need was ``skipped`` is ``skipped`` itself (there is nothing to run on).
-A *soft* need (:attr:`~pipeline.registry.Stage.soft_needs`) only has to have settled:
+A stage with ``after_sections`` (``report``) is also held until every section task of the job
+has settled, whichever way. A *soft* need (:attr:`~pipeline.registry.Stage.soft_needs`) only has to have settled:
 however it ended, the dependent runs, and ``StageContext.unmet`` tells it how.
 Settling is one reader-then-writer pass, which is exact for one runner; with
 several runners finishing sibling tasks at once it can miss a promotion until the
@@ -30,7 +31,7 @@ from question_extractor.warnscope import collect_warnings
 
 from .artefacts import OPTIONS_NAME, read_options, write_json
 from .config import PipelineConfig
-from .outcome import FAILED, Outcome, StageContext, Unmet, failed
+from .outcome import FAILED, Outcome, StageContext, TaskSummary, Unmet, failed
 from .registry import UNROUTED, Registry
 from .store import (
     BLOCKED,
@@ -71,6 +72,10 @@ def settle(store: Store, registry: Registry, job_id: str) -> None:
             soft = [tasks.get(key) for key in registry.soft_needs(task.stage, task.section, route)]
             if any(need is None for need in (*needs, *soft)):
                 continue  # a dependency not yet created (a section stage before its fan-out)
+            if registry.get(task.stage, route).after_sections and any(
+                t.section is not None and t.status not in _SETTLED for t in tasks.values()
+            ):
+                continue  # a section task is still to run: the report waits for all of them
             broken = next((n for n in needs if n.status in _BROKEN), None)
             skipped = next((n for n in needs if n.status == SKIPPED), None)
             if broken is not None:
@@ -133,14 +138,18 @@ class Runner:
         self._sleep = sleep
 
     # --- submitting -------------------------------------------------------
-    def submit(self, job_id: str, source: Path, *, debug: bool = False) -> None:
+    def submit(
+        self, job_id: str, source: Path, *, debug: bool = False, force: bool = False
+    ) -> None:
         """Create the job and a task for every job-scope stage (``register`` runs first).
 
         ``debug`` asks for the debug renders as well as the review images; it is
-        kept in the job folder as ``options.json`` so any runner sees it.
+        kept in the job folder as ``options.json`` so any runner sees it. ``force`` asks
+        ``segment`` to ask the model again even when a plan or fixture is on disk.
         """
-        if debug:
-            write_json(self.job_dir(job_id) / OPTIONS_NAME, {"debug": True})
+        options = {name: True for name, on in (("debug", debug), ("force", force)) if on}
+        if options:
+            write_json(self.job_dir(job_id) / OPTIONS_NAME, options)
         self.store.add_job(job_id, str(source))
         self.store.add_tasks(
             [TaskSpec(job_id, stage.name) for stage in self.registry.job_stages()]
@@ -197,19 +206,25 @@ class Runner:
             siblings = [t.stage for t in tasks.values() if t.section == task.section]
             route = self.registry.route_of(siblings)
         stage = self.registry.get(task.stage, route)
+        summaries = ()
+        if stage.after_sections:
+            summaries = self._summaries(tasks.values())
         unmet = {}
         for key in self.registry.soft_needs(task.stage, task.section, route):
             need = tasks.get(key)
             if need is not None and need.status != DONE:
                 unmet[need.stage] = Unmet(need.status, need.error or need.reason)
+        options = read_options(job_dir)
         ctx = StageContext(
             job_id=task.job_id,
             job_dir=job_dir,
             source=Path(job.source),
             config=self.config,
             section=task.section,
-            debug=bool(read_options(job_dir).get("debug")),
+            debug=bool(options.get("debug")),
+            force=bool(options.get("force")),
             unmet=unmet,
+            tasks=summaries,
         )
         stopped = threading.Event()
         beat = threading.Thread(target=self._heartbeats, args=(task.id, stopped), daemon=True)
@@ -238,6 +253,24 @@ class Runner:
             warnings=warnings,
             sections=outcome.sections,
             routes=outcome.routes,
+        )
+
+    def _summaries(self, tasks) -> tuple[TaskSummary, ...]:
+        """Every task of a job as the ``report`` stage reads it."""
+        tasks = list(tasks)
+        routes = _routes(self.registry, tasks)
+        optional = {route: self.registry.optional(route) for route in self.registry.routes()}
+        return tuple(
+            TaskSummary(
+                section=t.section,
+                stage=t.stage,
+                status=t.status,
+                detail=t.error or t.reason,
+                needs_review=t.needs_review,
+                warnings=t.warnings,
+                optional=t.stage in optional.get(routes.get(t.section), ()),
+            )
+            for t in tasks
         )
 
     def _heartbeats(self, task_id: int, stopped: threading.Event) -> None:

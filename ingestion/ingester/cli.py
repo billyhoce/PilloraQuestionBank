@@ -1,4 +1,4 @@
-"""``python -m ingester segment|split|ingest <pdf|folder>``."""
+"""``python -m ingester segment|split <pdf|folder>``; ``ingest`` forwards to ``python -m pipeline ingest``."""
 
 from __future__ import annotations
 
@@ -6,14 +6,11 @@ import argparse
 import logging
 import shlex
 import sys
-from dataclasses import replace
 from pathlib import Path
 
-from question_extractor import ExtractConfig
 from question_extractor.cli import find_pdfs
 
 from .config import IngestConfig
-from .router import EXTRACTED, IngestResult, ingest_paper
 from .segments import SegmentPlan
 from .segmenter import segment_paper
 from .splitter import SplitResult, split_paper
@@ -102,8 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = subparsers.add_parser(
         "ingest",
         help=(
-            "segment, split and route each section to its extractor, writing "
-            "ingest.json"
+            "alias for `python -m pipeline ingest`: segment, split and extract each "
+            "section as stage tasks, writing <paper>/ingest.json"
         ),
     )
     ingest.add_argument("input", type=Path, help="a PDF file, or a folder of PDFs")
@@ -169,13 +166,13 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)-8s %(message)s",
     )
+    if args.command == "ingest":
+        return _ingest_command(args)
     pdfs = _find_inputs(args.input, args.recursive)
     if pdfs is None:
         return 1
     if args.command == "split":
         return _split_command(args, pdfs)
-    if args.command == "ingest":
-        return _ingest_command(args, pdfs)
     return _segment_command(args, pdfs)
 
 
@@ -272,45 +269,28 @@ def _split_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
 
 
 
-def _ingest_command(args: argparse.Namespace, pdfs: list[Path]) -> int:
-    config = _ingest_config(args)
-    extract_config = ExtractConfig()
-    if args.ocr_command:
-        extract_config = replace(extract_config, ocr_command=tuple(args.ocr_command))
-    results: list[IngestResult] = []
-    failed: list[Path] = []
-    for pdf in pdfs:
-        try:
-            results.append(
-                ingest_paper(
-                    pdf,
-                    args.output_dir,
-                    config,
-                    extract_config,
-                    force=args.force,
-                    debug=args.debug,
-                    review=args.review,
-                )
-            )
-        except Exception as exc:  # pragma: no cover - keep a folder run alive
-            log.exception("%s: unexpected failure (%s)", pdf.name, exc)
-            failed.append(pdf)
+def _ingest_command(args: argparse.Namespace) -> int:
+    """``ingest`` is ``pipeline ingest``: the router's walk over a paper's sections is now
+    the stage runner's, so this forwards its flags there. ``--review`` is accepted and has
+    nothing to do (the pipeline always writes the review images)."""
+    from pipeline.cli import main as pipeline_main
 
-    for result in results:
-        sections = ", ".join(
-            f"{section.label} {section.status}"
-            + (f" ({section.questions} question(s))" if section.status == EXTRACTED else "")
-            for section in result.sections
-        )
-        log.info(
-            "done %s: %s%s",
-            result.paper,
-            sections or "no sections",
-            " - needs review" if result.needs_review else "",
-        )
-    if failed:
-        log.warning("%d paper(s) could not be processed", len(failed))
-    return 1 if failed and not results else 0
+    argv = ["--verbose"] if args.verbose else []
+    argv += ["ingest", str(args.input), "--output-dir", str(args.output_dir)]
+    for flag, on in (
+        ("--force", args.force),
+        ("--debug", args.debug),
+        ("--review", args.review),
+        ("--recursive", args.recursive),
+    ):
+        if on:
+            argv.append(flag)
+    for flag, value in (("--model", args.model), ("--retry-model", args.retry_model)):
+        if value is not None:
+            argv += [flag, value]
+    if args.ocr_command:
+        argv += ["--ocr-command", shlex.join(args.ocr_command)]
+    return pipeline_main(argv)
 
 
 if __name__ == "__main__":  # pragma: no cover

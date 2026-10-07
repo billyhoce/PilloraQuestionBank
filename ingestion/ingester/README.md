@@ -5,8 +5,9 @@ second behind it, and often each one's answer paper (marking scheme, worked solu
 a bare answer key). `ingester` says which pages are which, so `question_extractor` can be
 handed one paper at a time.
 
-Two stages, each writing into `output/<paper>/`, and a command that runs both and
-routes what they produce:
+Two stages, each writing into `output/<paper>/`. Running both and routing what they produce
+is `python -m pipeline ingest` (see [`pipeline/README.md`](../pipeline/README.md)); `python -m ingester
+ingest` is kept as an alias that forwards its flags there:
 
 ```bash
 # ask a vision model for labelled page ranges -> segments.json
@@ -14,7 +15,8 @@ python -m ingester segment <pdf|folder> --output-dir output/ [--force] [--write-
 # cut the PDF along them -> _split/<label>.pdf and _split/split.json
 python -m ingester split <pdf|folder> --output-dir output/
 # segment + split + route each section -> <label>/ per section and ingest.json
-python -m ingester ingest <pdf|folder> --output-dir output/ [--recursive] [--debug] [--review] [--ocr-command CMD]
+# (an alias for `python -m pipeline ingest`; --review is accepted and a no-op, the review images are always written)
+python -m ingester ingest <pdf|folder> --output-dir output/ [--force] [--recursive] [--debug] [--model M] [--retry-model M] [--ocr-command CMD]
 ```
 
 ```
@@ -152,7 +154,7 @@ original page, the map `SourceProvenance` takes), plus `skipped` labels and
 one that fails to write, is warned and skipped; the rest are still written. No plan,
 or a plan with no sections, writes an empty `split.json` and a warning.
 
-**Route.** `ingest` sends each split section to the pipeline that can crop its shape
+**Route.** `pipeline ingest` sends each split section to the pipeline that can crop its shape
 (`router.choose_route`): a question section, and an answer section whose template is
 `annotated_booklet` (each page carries question and answer, the shape the extractor was
 built for), go through `question_extractor` with the split's page map as provenance,
@@ -169,7 +171,9 @@ answer section with no template (flagged for review), and a question or
 `annotated_booklet` section none of whose pages has extractable text (a scanned paper;
 flagged — the question extractor would only emit every page "for review", which reads
 as a result when it is not one). A section that fails is recorded as `failed` and the
-rest still run; a paper that fails does not stop a folder run.
+rest still run; a paper that fails does not stop a folder run. The walk over a paper's
+sections is the pipeline's: `split` fans out each section's chain by `choose_route`, and
+the `report` stage writes `ingest.json` from the artefacts.
 
 `ingest.json` lists every section with `label`, `kind`, `template`,
 `first_page`/`last_page`, `route` (pipeline name or null), `status` (`extracted`,
@@ -211,9 +215,9 @@ there changes everything downstream.
 | `validation.py` | The gate. `validate` lists the reasons an answer cannot describe the document and rejects it whole; `anomalies` lists readings that are merely unusual and accepts them. |
 | `segmenter.py` | The segment stage: reuse a plan on disk → refuse a document too large to send → ask, validate, escalate once → write `segments.json` either way. |
 | `splitter.py` | The split stage: plan (via `find_plan`) → `_split/<label>.pdf` per section, plus `split.json` with each page map. A bad section is warned and skipped. |
-| `router.py` | The route stage and `ingest_paper`: segment → split → `choose_route` per section → `question_extractor`, or its `--table` reader with the section's layout (or not, with a reason) → `ingest.json`. |
-| `cli.py` / `__main__.py` | `python -m ingester segment\|split\|ingest <pdf\|folder>`; `segment` takes `--output-dir --force --write-fixture --model --retry-model --recursive -v`, `split` takes `--output-dir --recursive -v`, `ingest` takes `--output-dir --force --model --retry-model --debug --recursive -v`. |
-| `__init__.py` | Public surface: `IngestConfig`, `segment_paper`, `Segment`, `SegmentPlan`, `Attempt`, `ModelAnswer`, `validate`, `anomalies`, `too_large_to_ask`, `TEMPLATES`, `find_plan`, `fixture_path`, `read_plan`, `write_plan`, `split_paper`, `SplitResult`, `Section`, `ingest_paper`, `IngestResult`, `SectionReport`, `Route`, `choose_route`. |
+| `router.py` | The routing rules the pipeline's stages call: `choose_route` (kind and template → `question_extractor`, its `--table` reader, or no route with a reason), `has_text`, `table_layout`, and `SectionReport`, one row of `ingest.json`. The orchestration (`ingest_paper`) is retired: `pipeline`'s `report` stage writes `ingest.json`. |
+| `cli.py` / `__main__.py` | `python -m ingester segment\|split <pdf\|folder>`, and `ingest`, an alias for `python -m pipeline ingest`; `segment` takes `--output-dir --force --write-fixture --model --retry-model --recursive -v`, `split` takes `--output-dir --recursive -v`, `ingest` takes `--output-dir --force --model --retry-model --debug --review --ocr-command --recursive -v` and forwards them. |
+| `__init__.py` | Public surface: `IngestConfig`, `segment_paper`, `Segment`, `SegmentPlan`, `Attempt`, `ModelAnswer`, `validate`, `anomalies`, `too_large_to_ask`, `TEMPLATES`, `find_plan`, `fixture_path`, `read_plan`, `write_plan`, `split_paper`, `SplitResult`, `Section`, `SectionReport`, `Route`, `choose_route`. |
 
 ## Verifying a change
 
@@ -233,7 +237,7 @@ pages by `original_page`:
 
 ```bash
 python -m question_extractor samples/ --recursive --output-dir direct/
-python -m ingester ingest samples/ --recursive --output-dir ingest/
+python -m pipeline ingest samples/ --recursive --output-dir ingest/
 ```
 
 They match on `standard`, `ACSBR 2024 4E5N Prelim Math P1 QP` and

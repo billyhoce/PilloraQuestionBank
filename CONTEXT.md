@@ -35,6 +35,11 @@ Which chain of section stages a section runs, chosen once when `split` fans out,
 then `render`), `table` (table answer sections: `grid`, `ocr`, `questions`, then `render`) or `unrouted` (nothing can take it; one `skipped` task
 with the reason).
 
+**Report**
+`ingest.json`, written by the `report` stage once every section task of the job has settled
+(whatever became of them): each section's route, status (`extracted`, `not_routed`, `failed`),
+question count, warnings and review flag, plus the segment and split stages' warnings.
+
 **Proposal**
 What the pipeline offers for a booklet: its sections, the questions found in each and their
 rectangles, with every flag raised along the way. A proposal is a suggestion for an admin to

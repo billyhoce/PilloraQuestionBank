@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .config import IngestConfig
 from .request import ModelAnswer
-from .router import IngestResult, Route, SectionReport, choose_route, ingest_paper
+from .router import Route, SectionReport, choose_route
 from .segmenter import find_plan, fixture_path, segment_into, segment_paper, too_large_to_ask
 from .segments import (
     SEGMENTS_NAME,
@@ -28,7 +28,6 @@ __all__ = [
     "TEMPLATES",
     "Attempt",
     "IngestConfig",
-    "IngestResult",
     "ModelAnswer",
     "Route",
     "Segment",
@@ -41,7 +40,6 @@ __all__ = [
     "find_plan",
     "fixture_path",
     "format_label",
-    "ingest_paper",
     "parse_label",
     "read_plan",
     "segment_into",
