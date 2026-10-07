@@ -19,7 +19,16 @@ from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topi
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
-from app.services.ingest_jobs import InvalidPdfError, JobNotCancellableError, cancel_job, create_job
+from app.services.ingest_jobs import (
+    InvalidPdfError,
+    JobNotCancellableError,
+    JobNotRetryableError,
+    cancel_job,
+    create_job,
+    job_progress,
+    retry_job,
+    worker_state,
+)
 from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
 from app.storage.object_store import ObjectStore
@@ -343,6 +352,7 @@ def _job_out(job: IngestJob) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
         "confirmed_paper_ids": job.confirmed_paper_ids,
+        **job_progress(job),
     }
 
 
@@ -382,11 +392,15 @@ def list_ingest_jobs(
 ):
     if status is not None and status not in INGEST_JOB_STATUSES:
         raise HTTPException(status_code=422, detail="Unknown job status")
-    q = db.query(IngestJob).filter(IngestJob.created_by == current_user.id)
+    q = (
+        db.query(IngestJob)
+        .options(selectinload(IngestJob.tasks))
+        .filter(IngestJob.created_by == current_user.id)
+    )
     if status is not None:
         q = q.filter(IngestJob.status == status)
     jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
-    return {"data": [_job_out(j) for j in jobs]}
+    return {"data": [_job_out(j) for j in jobs], **worker_state(db)}
 
 
 @router.get("/jobs/{job_id}")
@@ -400,7 +414,23 @@ def get_ingest_job(
         **_job_out(job),
         "report": job.report,
         "tasks": [_task_out(t) for t in job.tasks],
+        **worker_state(db),
     }
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        reopened = retry_job(job, db)
+    except JobNotRetryableError as e:
+        raise HTTPException(status_code=409, detail=f"A {e.status} job cannot be retried")
+    db.refresh(job)
+    return {**_job_out(job), "reopened": reopened}
 
 
 @router.delete("/jobs/{job_id}", status_code=204)

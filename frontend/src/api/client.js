@@ -80,11 +80,18 @@ export const api = {
           return res.json()
         })
     },
-    // The admin's own jobs, newest first; optional status filter.
+    // The admin's own jobs, newest first; optional status filter. Resolves to
+    // { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
     listJobs: (status) =>
-      request('GET', `/api/import/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`).then(r => r.data),
+      request('GET', `/api/import/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`).then(r => ({
+        jobs: r.data,
+        workerAlive: r.worker_alive,
+        heartbeatAgeS: r.heartbeat_age_s,
+      })),
     getJob: (id) => request('GET', `/api/import/jobs/${id}`),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
+    // Failed/blocked tasks and everything downstream go back to ready.
+    retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
     aiTopicsForQuestion: (question_id, signal) =>
       request('POST', '/api/import/ai-topics', { question_id }, signal),
