@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shlex
 import sys
 import uuid
 from dataclasses import replace
 from pathlib import Path
 
 from ingester import IngestConfig
+from question_extractor import ExtractConfig
 
 from .config import PipelineConfig
 from .registry import default_registry
@@ -50,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--watch", action="store_true", help="keep polling for new work")
     run.add_argument("--model", default=None, help=f"default: {IngestConfig.model}")
     run.add_argument("--retry-model", default=None, help=f"default: {IngestConfig.retry_model}")
+    run.add_argument(
+        "--ocr-command",
+        type=shlex.split,
+        default=None,
+        metavar="CMD",
+        help=(
+            "the command the ocr stage runs Tesseract with on a scanned answer table, e.g. "
+            "'tesseract' where the binary is installed; defaults to `docker run` of the "
+            "pillora-tesseract image. A run-time setting like --model, not part of the job"
+        ),
+    )
 
     status = commands.add_parser("status", help="show each job's tasks")
     status.add_argument("job", nargs="?", help="a job id (default: every job)")
@@ -99,7 +112,10 @@ def _run(args: argparse.Namespace, store: Store) -> int:
         for key, value in (("model", args.model), ("retry_model", args.retry_model))
         if value is not None
     }
-    config = replace(PipelineConfig(), ingest=IngestConfig(**overrides))
+    extract = ExtractConfig()
+    if args.ocr_command:
+        extract = replace(extract, ocr_command=tuple(args.ocr_command))
+    config = replace(PipelineConfig(), ingest=IngestConfig(**overrides), extract=extract)
     ran = _runner(args, store, config).run(watch=args.watch)
     log.info("ran %d task(s)", ran)
     return 0

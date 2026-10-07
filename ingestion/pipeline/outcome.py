@@ -13,6 +13,14 @@ FAILED = "failed"
 
 
 @dataclass(frozen=True)
+class Unmet:
+    """How a soft need ended other than ``done``: its task status and why."""
+
+    status: str  # failed | blocked | skipped
+    detail: str  # the task's error or reason
+
+
+@dataclass(frozen=True)
 class StageContext:
     """Everything a stage may read: where its job lives, which section, the config.
 
@@ -26,6 +34,9 @@ class StageContext:
     config: PipelineConfig
     section: str | None = None  # None for a job-scope stage
     debug: bool = False  # the job's option: also write the debug renders
+    unmet: dict[str, Unmet] = field(default_factory=dict)
+    """The stage's soft needs (:attr:`.registry.Stage.soft_needs`) that did not end
+    ``done``, by stage name; a soft need not listed here is ``done``."""
 
     def path(self, *parts: str) -> Path:
         """An artefact path under the job dir."""

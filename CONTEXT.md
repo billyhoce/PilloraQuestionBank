@@ -32,7 +32,7 @@ One labelled page range of a booklet, named in `segments.json`: `q1`, `q2` for q
 **Route**
 Which chain of section stages a section runs, chosen once when `split` fans out, mirroring
 `ingester.router`: `question` (question sections and `annotated_booklet` answer sections: `locate`
-then `render`), `table` (table answer sections) or `unrouted` (nothing can take it; one `skipped` task
+then `render`), `table` (table answer sections: `grid`, `ocr`, `questions`, then `render`) or `unrouted` (nothing can take it; one `skipped` task
 with the reason).
 
 **Proposal**

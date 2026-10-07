@@ -266,7 +266,7 @@ def route_section(
                 debug=debug,
                 review=review,
                 provenance=section.provenance,
-                layout=_layout(segment),
+                layout=table_layout(segment),
             )
         else:
             result = extract_paper(
@@ -300,7 +300,7 @@ def route_section(
     )
 
 
-def _layout(segment: Segment) -> TableLayout | None:
+def table_layout(segment: Segment) -> TableLayout | None:
     """The segment's column layout as the table extractor's hint; ``None`` when
     the segmenter gave none, and the extractor then measures."""
     if not segment.question_columns and segment.reading_order is None:

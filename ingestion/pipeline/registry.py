@@ -10,10 +10,16 @@ scope, a kind, its dependencies and whether it fans out.
   runner treats all three alike.
 - **needs**: stage names that must be ``done`` first. A section stage's needs are
   the same section's tasks, or job-scope tasks.
+- **soft_needs**: stage names that must have *settled* (``done``, ``skipped`` or
+  ``failed``) before the stage runs, whichever way they ended. A stage for which the
+  predecessor's output is an improvement and not a requirement (``questions`` without
+  OCR reads) lists it here: it waits, then runs, and is told how the need ended
+  (:attr:`StageContext.unmet`). A ``blocked`` soft need does not stop it either; if
+  the stage also has a hard need that is broken it is ``blocked`` as usual.
 - **fan_out**: a job-scope stage whose ``Outcome.sections`` become one task for
   every stage of that section's route.
 - **route**: a section stage belongs to one route's chain (``question``: ``locate``
-  -> ``render``; ``table`` and ``unrouted`` likewise). The fan-out picks each
+  -> ``render``; ``table``: ``grid`` -> ``ocr`` -> ``questions`` -> ``render``). The fan-out picks each
   section's chain once, from how ``ingester.router`` would route it, so a section
   only ever gets the tasks that apply to it. Two routes may each have a stage of
   the same name (``render``): a task is identified by ``(job_id, section, stage)``
@@ -55,6 +61,7 @@ class Stage:
     kind: str
     run: Callable[[StageContext], Outcome]
     needs: tuple[str, ...] = ()
+    soft_needs: tuple[str, ...] = ()
     fan_out: bool = False
     route: str | None = None  # section stages only: the chain this stage belongs to
 
@@ -81,7 +88,9 @@ class Registry:
             raise ValueError(f"stage {stage.name!r} fans out but is not job-scope")
         if (stage.route is None) != (stage.scope == JOB):
             raise ValueError(f"stage {stage.name!r}: exactly the section stages have a route")
-        for need in stage.needs:
+        if set(stage.needs) & set(stage.soft_needs):
+            raise ValueError(f"stage {stage.name!r} lists a need as both hard and soft")
+        for need in (*stage.needs, *stage.soft_needs):
             needed = self._lookup(stage, need)
             if needed is None:
                 raise ValueError(f"stage {stage.name!r} needs unknown stage {need!r}")
@@ -119,17 +128,39 @@ class Registry:
     def needs(
         self, stage: str, section: str | None, route: str | None = None
     ) -> list[tuple[str | None, str]]:
-        """The ``(section, stage)`` keys of the tasks that ``stage`` waits on."""
+        """The ``(section, stage)`` keys of the tasks that must be ``done`` before ``stage``."""
+        return self._keys(stage, section, route, soft=False)
+
+    def soft_needs(
+        self, stage: str, section: str | None, route: str | None = None
+    ) -> list[tuple[str | None, str]]:
+        """The keys of the tasks that must only have settled before ``stage``."""
+        return self._keys(stage, section, route, soft=True)
+
+    def _keys(
+        self, stage: str, section: str | None, route: str | None, soft: bool
+    ) -> list[tuple[str | None, str]]:
         this = self._stages[(route, stage)]
         keys = []
-        for need in this.needs:
+        for need in this.soft_needs if soft else this.needs:
             needed = self._lookup(this, need)
             keys.append((section if needed.scope == SECTION else None, need))
         return keys
 
 
 def default_registry() -> Registry:
-    from .stages import locate, register, render, segment, split, unrouted
+    from .stages import (
+        grid,
+        locate,
+        ocr,
+        questions,
+        register,
+        render,
+        segment,
+        split,
+        table_render,
+        unrouted,
+    )
 
     return Registry(
         [
@@ -139,7 +170,11 @@ def default_registry() -> Registry:
             # the question route: question sections and annotated_booklet answer sections
             locate.STAGE,
             render.STAGE,
-            # the table route (#46) goes here: grid -> ocr -> questions -> render
+            # the table route: table answer sections, scanned ones included
+            grid.STAGE,
+            ocr.STAGE,
+            questions.STAGE,
+            table_render.STAGE,
             unrouted.STAGE,
         ]
     )
