@@ -276,14 +276,14 @@ def list_papers(
 
 
 @router.post("/papers/upload-image")
-async def upload_image(
+def upload_image(
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(status_code=422, detail="Only image files are accepted")
-    data = await file.read()
+    data = file.file.read()
     return upload_single_image(data)
 
 

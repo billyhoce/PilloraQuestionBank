@@ -345,3 +345,41 @@ def test_worker_liveness_from_heartbeat(admin_client, db_session, fake_object_st
     assert listing["worker_alive"] is False and listing["heartbeat_age_s"] >= WORKER_STALE_SECONDS
     detail = admin_client.get(f"/api/import/jobs/{job_id}").json()
     assert detail["worker_alive"] is False and detail["status"] == "queued"
+
+
+async def test_slow_upload_does_not_block_the_event_loop(admin_client, fake_object_store):
+    """A slow S3 put runs in the thread pool, so a concurrent health check is answered meanwhile."""
+    import asyncio
+    import threading
+
+    import httpx
+
+    from app.main import app
+
+    in_put = threading.Event()
+    release = threading.Event()
+    real_put = fake_object_store.put
+
+    def slow_put(key, data, content_type="application/octet-stream"):
+        in_put.set()
+        assert release.wait(timeout=10)
+        real_put(key, data, content_type)
+
+    fake_object_store.put = slow_put
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="https://testserver", cookies=dict(admin_client.cookies)
+    ) as ac:
+        post = asyncio.create_task(
+            ac.post("/api/import/jobs", files={"file": ("RI_2024_Math_P1.pdf", make_pdf(), "application/pdf")})
+        )
+        try:
+            while not in_put.is_set():
+                await asyncio.sleep(0.01)
+            # The upload is stuck inside the store; the loop must still serve other requests.
+            health = await asyncio.wait_for(ac.get("/api/health"), timeout=5)
+            assert health.status_code == 200
+            assert not post.done()
+        finally:
+            release.set()
+        assert (await post).status_code == 201
