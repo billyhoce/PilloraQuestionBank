@@ -31,7 +31,7 @@ question by reading one file instead of three.
 
 | Doc | What's inside |
 |---|---|
-| [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Proposed: ingest bug fixes, per-job log tracing, retention + reconciler, direct-to-S3 upload, question/answer booklet pairing |
+| [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Proposed: ingest bug fixes, per-job log tracing, retention + reconciler, direct-to-S3 upload, question/answer booklet pairing, API auth hardening |
 
 ## Operations
 
