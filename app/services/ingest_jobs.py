@@ -12,6 +12,7 @@ import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
 from app.logger import log_job_event
+from app.services.ingest_events import add_event
 from app.models.orm import IngestJob, IngestTask, WorkerHeartbeat
 from app.storage.object_store import ObjectStore
 from app.worker.store import SqlStore
@@ -86,6 +87,11 @@ def create_job(
         job.tasks.append(IngestTask(section=None, stage="register", status="ready"))
         db.add(job)
         db.flush()
+        add_event(
+            db, job_id, "created", actor_user_id=admin.id, filename=filename,
+            size=len(pdf_bytes), sha256=job.sha256, page_count=page_count,
+        )
+        db.flush()
     except Exception:
         try:
             store.delete_prefix(job_prefix(job_id))
@@ -118,12 +124,14 @@ def record_filename_metadata(job: IngestJob, db: Session, extract_metadata) -> d
     return metadata
 
 
-def cancel_job(job: IngestJob) -> str:
+def cancel_job(job: IngestJob, db: Session | None = None, actor: Any = None) -> str:
     """Mark the job cancelled; returns the S3 prefix the caller deletes after commit."""
     if job.status in ("confirmed", "cancelled", "expired"):
         raise JobNotCancellableError(job.status)
     previous = job.status
     job.status = "cancelled"
+    if db is not None:
+        add_event(db, job.id, "cancelled", actor_user_id=getattr(actor, "id", None), previous_status=previous)
     log_job_event(job.id, "cancelled", previous_status=previous)
     return job_prefix(job.id)
 
@@ -175,7 +183,7 @@ def job_progress(job: IngestJob) -> dict:
     }
 
 
-def retry_job(job: IngestJob, db: Session) -> int:
+def retry_job(job: IngestJob, db: Session, actor: Any = None) -> int:
     """Return the job's failed and blocked tasks, and everything downstream of them, to ``ready``
     by running the pipeline's own ``Runner.retry`` over the ``ingest_task`` rows; the job's
     status is re-derived so the worker picks it up. Returns how many tasks were reopened."""
@@ -197,6 +205,11 @@ def retry_job(job: IngestJob, db: Session) -> int:
     db.flush()
     reopened = Runner(store, default_registry(), no_job_dir).retry(str(job.id))
     db.expire(job)  # the store updated the rows with bulk UPDATEs
+    add_event(
+        db, job.id, "retry", actor_user_id=getattr(actor, "id", None),
+        reopened=len(reopened), tasks=[f"{t.stage}:{t.section or '-'}" for t in reopened],
+    )
+    db.commit()  # the reopen committed in the store; the event is its own small transaction
     log_job_event(job.id, "retry", reopened=len(reopened), tasks=[f"{t.stage}:{t.section or '-'}" for t in reopened])
     return len(reopened)
 

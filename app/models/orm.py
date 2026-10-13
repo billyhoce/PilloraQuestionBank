@@ -482,6 +482,32 @@ class IngestJob(Base):
     )
 
 
+class IngestEvent(Base):
+    """Append-only audit trail of an ingest job (created, claimed, finished, retried, ...).
+
+    Task rows are overwritten on claim and reopen; the history lives here and is kept forever.
+    ``kind`` is a free string (see ``app/services/ingest_events.py``); ``data`` holds its details."""
+
+    __tablename__ = "ingest_event"
+    __table_args__ = (Index("ix_ingest_event_job_id_id", "job_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False
+    )
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_task.id", ondelete="SET NULL"), nullable=True
+    )
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
+    )
+    data: Mapped[dict] = mapped_column(_JSON, nullable=False, default=dict, server_default=text("'{}'"))
+
+
 class IngestTask(Base):
     """One unit of work in a job; ``section`` is NULL for job-level stages."""
 
