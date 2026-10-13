@@ -383,3 +383,66 @@ async def test_slow_upload_does_not_block_the_event_loop(admin_client, fake_obje
         finally:
             release.set()
         assert (await post).status_code == 201
+
+
+# --- per-job Claude cost (report["cost"]) --------------------------------------------------
+
+
+def test_record_usage_accumulates_cost_across_calls_and_logs_request_id(
+    db_session, admin_user, caplog, monkeypatch
+):
+    import logging
+
+    from app.ai import job_cost
+    from app.log_context import log_context
+
+    job = _job(db_session, admin_user, report={"filename_metadata": {"a": 1}})
+    monkeypatch.setattr(job_cost, "session_factory", lambda: (lambda: _Borrowed(db_session)))
+    usage = type("U", (), {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 50})()
+
+    caplog.set_level(logging.INFO, logger="pillora")
+    with log_context(job_id=str(job.id)):
+        job_cost.record_usage("ingest_segment", "claude-haiku-4-5", usage, "req_a")
+        job_cost.record_usage("extract_metadata", "claude-haiku-4-5-20251001", usage, "req_b")
+    job_cost.record_usage("label_question", "claude-haiku-4-5", usage, "req_c")  # no job: not counted
+
+    db_session.refresh(job)
+    cost = job.report["cost"]
+    assert cost["calls"] == 2
+    assert cost["input_tokens"] == 2000 and cost["output_tokens"] == 400 and cost["cache_hit"] == 100
+    assert cost["cost_usd"] == pytest.approx(2 * (1000 * 1.0 + 50 * 0.1 + 200 * 5.0) / 1e6)
+    assert job.report["filename_metadata"] == {"a": 1}
+    logged = {r.fields["anthropic_request_id"]: r for r in caplog.records if hasattr(r, "fields") and "anthropic_request_id" in r.fields}
+    assert set(logged) == {"req_a", "req_b", "req_c"}
+    assert logged["req_a"].job_id == str(job.id)
+
+
+class _Borrowed:
+    """Lets the cost writer use the test session without closing it."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        return self.db
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_metadata_call_cost_survives_the_report_write(db_session, admin_user, monkeypatch):
+    from app.ai import job_cost
+    from app.log_context import log_context
+
+    job = _job(db_session, admin_user)
+    monkeypatch.setattr(job_cost, "session_factory", lambda: (lambda: _Borrowed(db_session)))
+    usage = type("U", (), {"input_tokens": 10, "output_tokens": 5})()
+
+    def extractor(filename, db):
+        with log_context(job_id=str(job.id)):
+            job_cost.record_usage("extract_metadata", "claude-haiku-4-5-20251001", usage, "req_m")
+        return {"school_id": 1}
+
+    record_filename_metadata(job, db_session, extractor)
+    assert job.report["filename_metadata"] == {"school_id": 1}
+    assert job.report["cost"]["calls"] == 1

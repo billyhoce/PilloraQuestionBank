@@ -229,12 +229,12 @@ def test_segment_usage_is_logged_with_prices(caplog):
 
     assert "claude-haiku-4-5" in _PRICES
     seen = []
-    segment_request.usage_listener = lambda model, usage: seen.append((model, usage))
+    segment_request.usage_listener = lambda model, usage, rid: seen.append((model, usage, rid))
     try:
         usage = type("U", (), {"input_tokens": 10, "output_tokens": 5})()
-        segment_request._report_usage("claude-haiku-4-5", type("R", (), {"usage": usage})())
-        assert seen == [("claude-haiku-4-5", usage)]
-        segment_request.usage_listener = lambda model, usage: 1 / 0  # a bad listener cannot fail a request
+        segment_request._report_usage("claude-haiku-4-5", type("R", (), {"usage": usage, "_request_id": "req_1"})())
+        assert seen == [("claude-haiku-4-5", usage, "req_1")]
+        segment_request.usage_listener = lambda model, usage, rid: 1 / 0  # a bad listener cannot fail a request
         segment_request._report_usage("claude-haiku-4-5", type("R", (), {"usage": usage})())
     finally:
         segment_request.usage_listener = None

@@ -179,7 +179,9 @@ input and cache reads at 0.1×.
 
 Per-question labeling is roughly $0.001 with image input — order of magnitude, verify against the
 logs. `log_tokens` (`app/logger.py`) prints per-call token counts and a dollar cost to
-`logs/app.log`.
+`logs/app.log`, together with the Anthropic request id of the call. For ingest jobs the segmentation
+and filename-metadata calls are also summed into the job's `report["cost"]`
+(see [ingestion.md](./ingestion.md)); the question labeller's calls are logged only.
 
 ## SDK setup
 

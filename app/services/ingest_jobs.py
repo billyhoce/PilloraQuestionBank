@@ -118,6 +118,9 @@ def record_filename_metadata(job: IngestJob, db: Session, extract_metadata) -> d
     except Exception:
         log.exception("filename metadata extraction failed for job %s", job.id)
         metadata = {}
+    # The extraction adds its cost to ``report["cost"]`` from another session; re-read so the
+    # write below does not clobber it.
+    db.refresh(job)
     # Reassign rather than mutate: JSON columns are not change-tracked in place.
     job.report = {**(job.report or {}), "filename_metadata": metadata}
     db.flush()

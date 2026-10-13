@@ -176,7 +176,7 @@ expired, reconciler finding.
   because the history lives here.
 - Add an Alembic migration, and update [DATA_MODEL.md](../DATA_MODEL.md).
 
-### 1.6 Claude-call traceability and cost
+### 1.6 Claude-call traceability and cost — DONE
 
 - In `ingestion/ingester/request.py`, pass the response's request id (`response._request_id` /
   `response.id`) to `usage_listener` along with model and usage.

@@ -24,7 +24,7 @@ from ingester import request as segment_request
 from pipeline.config import PipelineConfig
 from question_extractor import ExtractConfig
 
-from app.logger import log_tokens
+from app.ai.job_cost import record_usage
 from app.logging_setup import configure_logging
 from app.worker.edges import Edges
 from app.worker.store import SqlStore
@@ -186,8 +186,11 @@ def main() -> int:
     from app.deps import get_metadata_extractor, get_object_store, get_pipeline_runner
 
     configure_logging()
-    # The segment stage's Messages API usage goes to the app log with the others' (and prices).
-    segment_request.usage_listener = lambda model, usage: log_tokens("ingest_segment", model, usage)
+    # The segment stage's Messages API usage goes to the app log with the others' (and prices),
+    # and into the job's report["cost"].
+    segment_request.usage_listener = lambda model, usage, request_id: record_usage(
+        "ingest_segment", model, usage, request_id
+    )
 
     settings = load_settings()
     settings.scratch_dir.mkdir(parents=True, exist_ok=True)

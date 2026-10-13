@@ -149,7 +149,7 @@ def label_question(
             tool_choice={"type": "tool", "name": "label_parts"},
         )
     log_event("label_question", "haiku", seconds=t_call.s)
-    log_tokens("label_question", MODEL, resp.usage)
+    log_tokens("label_question", MODEL, resp.usage, getattr(resp, "_request_id", None))
 
     # Check before touching content: a truncated tool call may not even carry a
     # usable input dict, and a partial parts list must never pass for a complete one.

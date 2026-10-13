@@ -114,7 +114,7 @@ class Edges:
             return failed("report wrote no proposal.json")
         proposal = artefacts.read_json(proposal_path)
         with self._factory() as db:
-            job = db.get(IngestJob, job_uuid)
+            job = db.get(IngestJob, job_uuid, with_for_update=True)  # cost writes lock the row too
             if job is None or job.status in API_OWNED:
                 return outcome  # cancelled while it ran: leave no objects behind
             pages = ctx.path(PAGES_DIR)
