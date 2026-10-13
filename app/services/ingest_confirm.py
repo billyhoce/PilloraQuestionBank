@@ -13,12 +13,13 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from app.logger import log, log_job_event
-from app.models.orm import IngestJob, Paper
+from app.models.orm import IngestJob, Paper, QuestionPage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
 from app.services.ingest_papers import set_metadata, set_status
+from app.services.paper_admin import apply_page_changes, commit_with_page_moves
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
 
@@ -146,7 +147,7 @@ def _record(job: IngestJob, key: str, outcome: str, paper_id: int | None) -> boo
     """Store one paper's outcome on the job; returns True when that settles the whole job."""
     done = {**outcomes(job), key: outcome}
     job.report = {**(job.report or {}), "review_outcome": done}
-    if paper_id is not None:
+    if paper_id is not None and paper_id not in (job.confirmed_paper_ids or []):
         job.confirmed_paper_ids = [*(job.confirmed_paper_ids or []), paper_id]
     papers = effective_proposal(job).get("papers", [])
     settled = bool(papers) and all(paper_key(p, i) in done for i, p in enumerate(papers))
@@ -216,3 +217,115 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin:
     if settled:
         _drop_job_objects(source_key, store)
     return settled
+
+
+# --- attaching an answer-only paper's answers to an existing paper -----------------------------
+
+ATTACH_MODES = ("append", "replace")
+
+
+def _question_number(value: Any) -> int | None:
+    """A proposal question number as the integer ``question.question_number`` holds: ``1``,
+    ``"1"`` and ``" 01 "`` all mean 1. A label that is not a plain number (``"1a"``) is None, so it
+    can never match and is reported back as unmatched."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def attach_answers(
+    job: IngestJob, key: str, paper_id: int, mode: str | None, admin: Any, db: Any, store: ObjectStore
+) -> dict:
+    """Attach the answer rectangles of answer-only proposal paper ``key`` to the existing paper
+    ``paper_id``, matching proposal questions to the paper's questions by number.
+
+    ``mode`` is ``append`` (new answer pages after the existing ones) or ``replace`` (they replace
+    the question's existing answer pages); ``None`` applies the default per question: replace when
+    it has no answer pages yet, else append. Answer numbers with no matching question are not
+    attached but returned in ``unmatched``. The crops are copied to their canonical keys before the
+    commit and the temp keys deleted after it (as in confirm); the page rows, the job's outcome, the
+    ``ingest_paper`` row and the event commit together, and a failure rolls everything back.
+
+    Returns ``{"attached": [numbers], "unmatched": [numbers], "modes": {number: mode},
+    "job_settled": bool}``."""
+    if mode is not None and mode not in ATTACH_MODES:
+        raise ReviewActionError(422, f"mode must be one of {', '.join(ATTACH_MODES)}")
+    db.refresh(job, with_for_update=True)  # serialise two clicks on the same paper
+    _check_open(job, key)
+    paper_data = _find_paper(job, key)
+    if paper_data.get("role") != "answer_only":
+        raise ReviewActionError(422, f"Paper {key!r} is not an answer-only paper; confirm it instead")
+    target = db.get(Paper, paper_id)
+    if target is None:
+        raise ReviewActionError(404, f"Paper {paper_id} does not exist")
+    by_number = {q.question_number: q for q in target.questions}
+
+    rects_by_number: dict[int, list[dict]] = {}  # matched question number -> its answer rects
+    unmatched: list[Any] = []
+    for q in paper_data.get("questions", []):
+        if not q.get("answer_rects"):
+            continue
+        number = _question_number(q["number"])
+        if number is None or number not in by_number:
+            unmatched.append(q["number"])
+        else:
+            rects_by_number.setdefault(number, []).extend(q["answer_rects"])
+    if not rects_by_number:
+        shown = ", ".join(str(n) for n in unmatched) or "none"
+        raise ReviewActionError(
+            422, f"None of this paper's answers match a question of paper {paper_id} (unmatched: {shown})"
+        )
+
+    numbers = sorted(rects_by_number)
+    cropped = {**paper_data, "questions": [
+        {"number": n, "question_rects": [], "answer_rects": rects_by_number[n]} for n in numbers
+    ]}
+    payload, temp_keys = build_confirm_payload(store.get(job.source_key), cropped, {})
+    job_id, source_key = job.id, job.source_key
+    modes: dict[int, str] = {}
+    removed_keys: list[str] = []
+    new_pairs: list[tuple[str, str]] = []
+    settled = False
+    try:
+        for number, pq in zip(numbers, payload["questions"]):
+            question = by_number[number]
+            existing = sorted(question.pages, key=lambda p: (p.page_type, p.page_order))
+            used = mode or ("append" if any(p.page_type == "answer" for p in existing) else "replace")
+            modes[number] = used
+            desired = [
+                {"id": p.id, "page_type": p.page_type, "page_order": p.page_order}
+                for p in existing if used == "append" or p.page_type != "answer"
+            ]
+            new_pages = pq["pages"]
+            desired += [
+                {k: p[k] for k in ("temp_key", "page_type", "page_order", "width_px", "height_px")}
+                for p in new_pages
+            ]
+            removed, pairs = apply_page_changes(paper_id, question, desired, db)
+            removed_keys.extend(removed)
+            new_pairs.extend(pairs)
+            for (_, canonical), p in zip(pairs, new_pages):  # provenance of the new answer pages
+                row = db.query(QuestionPage).filter(QuestionPage.image_key == canonical).one()
+                row.source_page, row.source_rect = p["source_page"], p["source_rect"]
+        settled = _record(job, key, "attached", paper_id)
+        set_status(db, job, key, "attached", paper_id)
+        add_event(
+            db, job_id, "paper_attached", actor_user_id=getattr(admin, "id", None), paper_id=paper_id,
+            paper_label=key, attached=numbers, unmatched=[str(n) for n in unmatched], job_settled=settled,
+        )
+        commit_with_page_moves(db, new_pairs, removed_keys)  # copies, commits, then settles S3
+    except Exception:
+        db.rollback()
+        _delete_quietly(temp_keys)
+        raise
+    log_job_event(
+        job_id, "paper_attached", paper_id=paper_id, paper_label=key, attached=numbers,
+        unmatched=[str(n) for n in unmatched], job_settled=settled,
+    )
+    if settled:
+        _drop_job_objects(source_key, store)
+    return {
+        "attached": numbers, "unmatched": unmatched,
+        "modes": {str(n): m for n, m in modes.items()}, "job_settled": settled,
+    }

@@ -25,6 +25,7 @@ PUT    /api/import/jobs/{id}/papers/{key}/metadata -- record the admin's sidebar
 POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
 POST   /api/import/jobs/{id}/confirm -- crop one reviewed paper into the bank (same response as /confirm)
 POST   /api/import/jobs/{id}/skip   -- skip one proposed paper
+POST   /api/import/jobs/{id}/attach -- attach an answer-only paper's answers to an existing paper
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
@@ -110,7 +111,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   `ObjectStore.presign` of `{job prefix}{page.image}`; `null` when the page has no image) and its
   `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
   `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
-  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `paper_metadata` (by paper `key`), `filename_metadata` (old jobs only), and per paper its `key` and `outcome` (`null`, `confirmed` or `skipped`). A job with
+  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `paper_metadata` (by paper `key`), `filename_metadata` (old jobs only), and per paper its `key` and `outcome` (`null`, `confirmed`, `skipped` or `attached`). A job with
   no proposal yet is a `409`.
 - `PUT /api/import/jobs/{id}/proposal` `{papers: [{questions, orphan_answers}, ...]}` — saves the
   admin's edits as `ingest_job.proposal_edited`; the generated `proposal` is never touched. Admin-only;
@@ -147,7 +148,7 @@ tests use the `fake_object_store` fixture.
 | `running` | A task is running, or some have finished and others are still to run |
 | `review_ready` | `report` is done and `ingest_job.proposal` is stored: a proposal is ready for the admin to review |
 | `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
-| `confirmed` | Every proposed paper was confirmed or skipped; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
+| `confirmed` | Every proposed paper was confirmed, skipped or attached; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
 | `expired` | Historical only: an earlier version of the daily sweep expired jobs left in `review_ready`/`failed` for 7 days. Nothing sets it any more; such rows (and their read-only handling) remain |
 
@@ -219,8 +220,8 @@ with each poll. A failed task also has a collapsed "Traceback" (the task's store
 `/admin/import/jobs/:jobId/review` (`ReviewPage`), linked as "Review" from each `review_ready` row of
 the job list. It shows one proposed paper at a time (tabs when there are several; a paper with
 `role: "answer_only"` (`label: null`) holds answers only: its list reads "Answer N" with the number of
-rectangles, and "Confirm paper" is replaced by a disabled "Attach to paper…", wired up by a later ticket;
-"Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
+rectangles, and the metadata sidebar is replaced by the attach panel (a paper-id field and "Attach to paper…",
+see [Attaching answers](#attaching-answers-to-an-existing-paper); "Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
 (`needs_review`) has an amber border and its reason as a tooltip. Centre: the clean page image with
 the question rectangles (blue), answer rectangles (green) and unmatched `orphan_answers` (grey,
 dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
@@ -319,7 +320,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   `ingest_event` audit table, see [DATA_MODEL.md](../DATA_MODEL.md), by `app/services/ingest_events.py`
   in the transaction of the change they describe, the task ones inside `SqlStore`), `ingest_job/proposal_stored` (the worker saved the
   proposal) and `proposal_saved` (the admin saved an edit), `paper_confirmed` (paper_id),
-  `paper_skipped`, `retry` (reopened tasks), `cancelled`, and (historical rows only) `expired`. The API-side events
+  `paper_skipped`, `paper_attached` (paper_id, attached and unmatched numbers), `retry` (reopened tasks), `cancelled`, and (historical rows only) `expired`. The API-side events
   go through `app.logger.log_job_event`. A stage that raises is logged at ERROR with the exception
   attached (`exc`), and the runner stores the last `PipelineConfig.traceback_chars` (4096)
   characters of the traceback on the task (`Outcome.traceback` -> `Store.fail` ->
@@ -534,3 +535,36 @@ lifecycle rule backs it up. A job whose proposal has no paper at all can only be
 locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. Because the paper and the
 job outcome commit together, a paper can never exist while its job still offers it, so a retry cannot
 duplicate it.
+
+### Attaching answers to an existing paper
+
+`POST /api/import/jobs/{id}/attach` `{key, paper_id, mode?}` (`attach_answers` in
+`app/services/ingest_confirm.py`) attaches an `answer_only` proposal paper's answers to an existing
+paper. Only an answer-only paper can be attached (`422` otherwise), the target must exist (`404`), and
+the usual `404`/`409` review rules apply.
+
+- **Matching** is by question number: a proposal number is read as an integer (`1`, `"1"`, `" 01 "`
+  all mean 1) and compared with `question.question_number`. Two proposal entries with the same number
+  have their rectangles merged. Answers whose number is not a plain integer (`"1a"`) or has no
+  question in the target paper are **not attached but returned** in `unmatched`; if nothing matches
+  at all the request is a `422` naming them, and nothing changes.
+- **Crops** reuse `build_confirm_payload` (same `render_crop`, same provenance: the new
+  `question_page` rows carry `source_page` / `source_rect`), and the page rows are written with
+  `paper_admin.apply_page_changes`, so `page_order` never collides.
+- **Mode** is `append` (new answer pages after the existing ones) or `replace` (a question's existing
+  answer pages are removed and the new ones take their place). Omitted, the server applies the default
+  per question: `replace` when the question has no answer pages yet, else `append`. The review page
+  needs no preview endpoint: it fetches the target with the existing `GET /api/papers/{id}`, and only
+  when a question that would receive answers already has answer pages does it ask, defaulting to
+  `append`; otherwise it sends no `mode`.
+- **Atomicity** follows confirm: crops go to `tmp/`, are copied to canonical keys before the commit
+  (`commit_with_page_moves`), the temp keys and the replaced answers' images are deleted only after it,
+  and a failure rolls back and removes any canonical copy (and the temp crops). The page rows,
+  `review_outcome[key] = "attached"` (`_record`, which also appends `paper_id` to
+  `confirmed_paper_ids`), the `ingest_paper` row (`status = attached`, `paper_id`) and a
+  `paper_attached` event commit in one transaction; a failure recording the outcome leaves the paper
+  unchanged. `attached` counts as decided, so a job whose papers are all confirmed, skipped or
+  attached settles (`confirmed`) and its prefix is dropped.
+- **Response**: `{attached: [numbers], unmatched: [numbers], modes: {number: mode}, job_settled,
+  job_status}`. The review page shows the attached and unmatched numbers; the full matching panel is a
+  later ticket.

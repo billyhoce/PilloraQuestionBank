@@ -9,11 +9,11 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
-      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
-    topics: { list: vi.fn() },
+    topics: { list: vi.fn() }, papers: { get: vi.fn() },
   },
 }))
 
@@ -294,7 +294,7 @@ describe('ReviewPage', () => {
       proposal: {
         ...REVIEW.proposal,
         papers: [{
-          label: null, role: 'answer_only', answer_label: 'a1',
+          label: null, role: 'answer_only', answer_label: 'a1', key: 'a1',
           pages: [page(2)],
           questions: [
             { number: 1, question_rects: [], answer_rects: [{ page: 2, x0: 10, y0: 20, x1: 60, y1: 120 }], flags: [] },
@@ -305,7 +305,7 @@ describe('ReviewPage', () => {
       },
     }
 
-    it('lists answers by question number and offers a disabled "Attach to paper..." instead of Confirm', async () => {
+    it('lists answers by question number and offers "Attach to paper..." (needs a paper id) instead of Confirm', async () => {
       api.import.review.mockResolvedValue(ANSWERS)
       renderPage()
       await screen.findByAltText('Page 2')
@@ -314,7 +314,36 @@ describe('ReviewPage', () => {
       expect(within(list).getByText('Answer 2')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /Confirm paper/ })).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Attach to paper…' })).toBeDisabled()
+      await userEvent.type(screen.getByLabelText('Paper id'), '7')
+      expect(screen.getByRole('button', { name: 'Attach to paper…' })).toBeEnabled()
       expect(screen.getByRole('button', { name: 'Skip this paper' })).toBeEnabled()
+    })
+
+    it('attaches without a prompt when no target question has answers, and shows unmatched numbers', async () => {
+      api.import.review.mockResolvedValue(ANSWERS)
+      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'question' }] }] })
+      api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [2], modes: { 1: 'replace' }, job_status: 'confirmed' })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.type(screen.getByLabelText('Paper id'), '7')
+      await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
+      expect(await screen.findByText(/Not attached.*: 2\./)).toBeInTheDocument()
+      expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 })
+    })
+
+    it('asks append or replace (default append) when a target question already has answers', async () => {
+      api.import.review.mockResolvedValue(ANSWERS)
+      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'answer' }] }] })
+      api.import.attachJobPaper.mockResolvedValue({ attached: [1, 2], unmatched: [], modes: {}, job_status: 'confirmed' })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.type(screen.getByLabelText('Paper id'), '7')
+      await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
+      expect(api.import.attachJobPaper).not.toHaveBeenCalled()
+      expect(await screen.findByLabelText('Add to the existing answers')).toBeChecked()
+      await userEvent.click(screen.getByLabelText('Replace the existing answers'))
+      await userEvent.click(screen.getByRole('button', { name: 'Attach answers' }))
+      await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mode: 'replace' }))
     })
   })
 })

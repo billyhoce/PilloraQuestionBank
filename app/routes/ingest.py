@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 import anthropic
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -22,7 +22,7 @@ from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
 from app.services.ingest_papers import get_row as get_paper_row, set_metadata as set_paper_metadata, sync_job_papers
-from app.services.ingest_confirm import ReviewActionError, confirm_job_paper, skip_job_paper
+from app.services.ingest_confirm import ReviewActionError, attach_answers, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
     InvalidPdfError,
     JobNotCancellableError,
@@ -663,3 +663,29 @@ def skip_job(
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)
     return {"job_status": "confirmed" if settled else "review_ready"}
+
+
+class JobAttachIn(BaseModel):
+    key: str
+    paper_id: int
+    mode: Optional[Literal["append", "replace"]] = None
+
+
+@router.post("/jobs/{job_id}/attach")
+def attach_job(
+    job_id: uuid.UUID,
+    payload: JobAttachIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Attach an answer-only paper's answers to an existing paper, matched by question number.
+    Omitting ``mode`` replaces a question's answers when it has none and appends otherwise.
+    Answers whose number matches no question are returned as ``unmatched``."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        result = attach_answers(job, payload.key, payload.paper_id, payload.mode, current_user, db, store)
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {**result, "job_status": "confirmed" if result["job_settled"] else "review_ready"}
