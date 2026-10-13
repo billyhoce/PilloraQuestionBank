@@ -266,6 +266,19 @@ IngestTask: {
   UNIQUE (job_id, stage) WHERE section IS NULL   -- partial index, see below
 }
 
+IngestEvent: {                -- append-only audit trail, kept indefinitely (never pruned)
+  id,
+  job_id (FK -> IngestJob, ON DELETE CASCADE),
+  task_id (nullable FK -> IngestTask, ON DELETE SET NULL),
+  at (timestamptz), kind (string(32)),
+  actor_user_id (nullable FK -> AppUser, ON DELETE SET NULL),  -- the admin; NULL for the worker/sweep
+  data (JSONB, default {}),
+  INDEX (job_id, id)
+}
+-- kind: created, task_claimed, task_finished (data.status done/skipped/failed, error, warnings,
+-- duration_ms, traceback), retry, cancelled, proposal_edited, paper_confirmed, paper_skipped,
+-- expired. Task rows are overwritten on claim/reopen; each attempt stays visible here.
+
 WorkerHeartbeat: {             -- singleton
   id (int, CHECK id = 1),
   seen_at, version, current_job_id (nullable FK -> IngestJob, ON DELETE SET NULL),

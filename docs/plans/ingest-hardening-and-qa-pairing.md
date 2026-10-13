@@ -167,7 +167,7 @@ expired, reconciler finding.
 - Store a truncated traceback (e.g. the last 4 KB) in a new `ingest_task.traceback` column so the UI
   can show it.
 
-### 1.5 Task attempt history
+### 1.5 Task attempt history (DONE)
 
 - New table `ingest_event(id, job_id FK, task_id NULL, at, kind, actor_user_id NULL, data JSONB)`.
 - Append a row on job created, task claimed, task finished/failed (status, error, warnings, duration),

@@ -22,6 +22,7 @@ from sqlalchemy import update as _update
 
 from app.logger import log_job_event
 from app.models.orm import IngestJob, WorkerHeartbeat
+from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
 
 log = logging.getLogger("pillora.worker")
@@ -90,6 +91,7 @@ def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: da
             ).rowcount
             if won:
                 expired.append(job_id)
+                add_event(db, job_id, "expired", at=now, reason="stale", max_age_days=EXPIRE_AFTER.days)
         db.commit()
     for job_id in expired:
         prefix = job_prefix(job_id)

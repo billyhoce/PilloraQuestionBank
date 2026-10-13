@@ -235,7 +235,9 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   [ARCHITECTURE.md](../ARCHITECTURE.md)). Each lifecycle event is exactly one INFO record carrying
   the `job_id`, with the event in `func`/`step` and its details as fields: `ingest_job/created`
   (filename, size, sha256, page_count, user_id), `ingest_task/claimed` and `ingest_task/finished`
-  (status, duration_s; logged by the runner), `ingest_job/proposal_stored` (the worker saved the
+  (status, duration_s; logged by the runner; the same transitions are also appended to the
+  `ingest_event` audit table, see [DATA_MODEL.md](../DATA_MODEL.md), by `app/services/ingest_events.py`
+  in the transaction of the change they describe, the task ones inside `SqlStore`), `ingest_job/proposal_stored` (the worker saved the
   proposal) and `proposal_saved` (the admin saved an edit), `paper_confirmed` (paper_id),
   `paper_skipped`, `retry` (reopened tasks), `cancelled`, `expired` (the sweep). The API-side events
   go through `app.logger.log_job_event`. A stage that raises is logged at ERROR with the exception

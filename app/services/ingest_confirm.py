@@ -16,6 +16,7 @@ from app.logger import log, log_job_event
 from app.models.orm import IngestJob, Paper
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
+from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
@@ -172,6 +173,10 @@ def confirm_job_paper(
         nonlocal settled
         paper.source_job_id = job_id
         settled = _record(job, key, "confirmed", paper.id)
+        add_event(
+            db, job_id, "paper_confirmed", actor_user_id=getattr(admin, "id", None),
+            paper_id=paper.id, paper_label=key, job_settled=settled,
+        )
 
     paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
     log_job_event(job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled)
@@ -180,13 +185,14 @@ def confirm_job_paper(
     return paper, settled
 
 
-def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore) -> bool:
+def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin: Any = None) -> bool:
     """Mark proposal paper ``key`` skipped. Returns whether that settles the job."""
     db.refresh(job, with_for_update=True)
     _check_open(job, key)
     _find_paper(job, key)
     job_id = job.id
     settled = _record(job, key, "skipped", None)
+    add_event(db, job_id, "paper_skipped", actor_user_id=getattr(admin, "id", None), paper_label=key, job_settled=settled)
     db.commit()
     log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)
     if settled:

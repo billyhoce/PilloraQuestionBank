@@ -15,6 +15,7 @@ from app.deps import (
     get_question_labeller,
 )
 from app.log_context import set_context
+from app.services.ingest_events import add_event
 from app.logger import Timer, log, log_event, log_job_event
 from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
@@ -446,7 +447,7 @@ def retry_ingest_job(
 ):
     job = _get_own_job(db, job_id, current_user)
     try:
-        reopened = retry_job(job, db)
+        reopened = retry_job(job, db, current_user)
     except JobNotRetryableError as e:
         raise HTTPException(status_code=409, detail=e.reason)
     db.refresh(job)
@@ -462,7 +463,7 @@ def cancel_ingest_job(
 ):
     job = _get_own_job(db, job_id, current_user)
     try:
-        prefix = cancel_job(job)
+        prefix = cancel_job(job, db, current_user)
     except JobNotCancellableError as e:
         raise HTTPException(status_code=409, detail=f"A {e.status} job cannot be cancelled")
     # Commit the status change before the irreversible S3 delete, as the paper
@@ -508,6 +509,7 @@ def save_proposal(
         raise HTTPException(status_code=409, detail="This job has no proposal to edit yet")
     except ProposalEditError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    add_event(db, job.id, "proposal_edited", actor_user_id=current_user.id)
     db.commit()
     log_job_event(job.id, "proposal_saved", edited=True)
     return {"saved": True}
@@ -583,7 +585,7 @@ def skip_job(
     """Skip one proposed paper; the job is ``confirmed`` once every paper is confirmed or skipped."""
     job = _get_own_job(db, job_id, current_user)
     try:
-        settled = skip_job_paper(job, payload.paper_label, db, store)
+        settled = skip_job_paper(job, payload.paper_label, db, store, current_user)
     except ReviewActionError as e:
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)

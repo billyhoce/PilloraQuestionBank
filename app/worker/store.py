@@ -41,6 +41,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.orm import IngestJob, IngestTask, WorkerHeartbeat
+from app.services.ingest_events import add_event
 
 # Job states the worker never moves a job out of (the API owns them) and
 # job states whose tasks it will pick up.
@@ -169,6 +170,10 @@ class SqlStore:
                 if won != 1:
                     db.rollback()
                     continue
+                add_event(
+                    db, row.job_id, "task_claimed", task_id=row.id, at=now,
+                    stage=row.stage, section=row.section, attempt=before.attempts + 1,
+                )
                 db.commit()
                 claimed = self._task(db.get(IngestTask, row.id, populate_existing=True))
                 self._current = (claimed.id, row.job_id)
@@ -222,7 +227,8 @@ class SqlStore:
 
     def _finish(self, db: Session, task_id: int, outcome: Outcome, fingerprint: str | None) -> bool:
         row = db.execute(
-            select(IngestTask.started_at).where(IngestTask.id == task_id, IngestTask.status == RUNNING)
+            select(IngestTask.started_at, IngestTask.job_id, IngestTask.stage, IngestTask.section, IngestTask.attempts)
+            .where(IngestTask.id == task_id, IngestTask.status == RUNNING)
         ).first()
         if row is None:
             return False
@@ -245,6 +251,14 @@ class SqlStore:
                 duration_ms=duration,
             )
         ).rowcount
+        if won == 1:
+            add_event(
+                db, row[1], "task_finished", task_id=task_id, at=now,
+                stage=row[2], section=row[3], attempt=row[4], status=outcome.status,
+                reason=outcome.reason, error=outcome.error, warnings=list(outcome.warnings),
+                needs_review=outcome.needs_review, duration_ms=duration,
+                traceback=outcome.traceback or None,
+            )
         return won == 1
 
     def _release(self, task_id: int) -> None:
@@ -308,6 +322,13 @@ class SqlStore:
                 ).rowcount
                 if won == 1:
                     changed.append(row)
+                    if values["status"] == FAILED:
+                        add_event(
+                            db, row.job_id, "task_finished", task_id=row.id, at=now,
+                            stage=row.stage, section=row.section, attempt=row.attempts,
+                            status=FAILED, error=values["error"], warnings=[], needs_review=True,
+                            duration_ms=None,
+                        )
             db.commit()
             return [self._task(db.get(IngestTask, r.id, populate_existing=True)) for r in changed]
 
