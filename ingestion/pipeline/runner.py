@@ -174,11 +174,15 @@ class Runner:
             return None
         with log_context(job_id=task.job_id, section=task.section, stage=task.stage,
                          task_attempt=task.attempts):
+            log.info("job %s %s %s: task claimed (attempt %d)", task.job_id, task.stage,
+                     task.section or "-", task.attempts,
+                     extra={"fields": {"func": "ingest_task", "step": "claimed"}})
             self._run_claimed(task)
         return task
 
     def _run_claimed(self, task: Task) -> None:
         """Run a claimed task, every log line of it stamped with the task's context."""
+        started = self._clock()
         self._refresh(task.job_id)
         stage, ctx = self._prepare(task, {t.key: t for t in self.store.tasks(task.job_id)})
         expected = self._fingerprint(stage, ctx)
@@ -199,6 +203,13 @@ class Runner:
             )
         else:
             outcome = self._execute(task, stage, ctx)
+        log.info(
+            "job %s %s %s: task finished %s in %.1fs", task.job_id, task.stage,
+            task.section or "-", outcome.status, self._clock() - started,
+            extra={"fields": {"func": "ingest_task", "step": "finished",
+                              "status": outcome.status,
+                              "duration_s": round(self._clock() - started, 3)}},
+        )
         if outcome.status == FAILED:
             self.store.fail(task.id, outcome)
         else:
@@ -269,7 +280,8 @@ class Runner:
         try:
             return fingerprint.compute(stage, ctx)
         except Exception:
-            log.debug(traceback.format_exc())
+            log.warning("could not fingerprint %s %s of job %s", stage.name, ctx.section or "-",
+                        ctx.job_id, exc_info=True)
             return None
 
     def _execute(self, task: Task, stage: Stage, ctx: StageContext) -> Outcome:
@@ -282,12 +294,15 @@ class Runner:
         )
         beat.start()
         started = self._clock()
+        trace = ""
         try:
             with collect_warnings() as collected:
                 try:
                     outcome = stage.run(ctx)
                 except Exception as exc:
-                    log.debug(traceback.format_exc())
+                    log.error("job %s %s %s: stage raised %s", task.job_id, task.stage,
+                              task.section or "-", type(exc).__name__, exc_info=True)
+                    trace = traceback.format_exc()[-self.config.traceback_chars:]
                     outcome = failed(f"{type(exc).__name__}: {exc}")
         finally:
             stopped.set()
@@ -295,13 +310,12 @@ class Runner:
         if outcome.status == FAILED:
             log.error("job %s %s %s failed: %s", task.job_id, task.stage, task.section or "-",
                       outcome.error)
-        log.info("job %s %s %s: %s in %.1fs", task.job_id, task.stage, task.section or "-",
-                 outcome.status, self._clock() - started)
         warnings = tuple(dict.fromkeys((*outcome.warnings, *collected)))
         return Outcome(
             status=outcome.status,
             reason=outcome.reason,
             error=outcome.error,
+            traceback=trace,
             needs_review=outcome.needs_review,
             warnings=warnings,
             sections=outcome.sections,

@@ -74,6 +74,8 @@ class Outcome:
     status: str
     reason: str = ""
     error: str = ""
+    traceback: str = ""
+    """The (truncated) traceback of the exception a failed stage raised; the runner fills it."""
     needs_review: bool = False
     warnings: tuple[str, ...] = ()
     sections: tuple[str, ...] = field(default=())

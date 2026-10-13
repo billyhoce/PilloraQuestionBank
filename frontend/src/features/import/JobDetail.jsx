@@ -47,7 +47,15 @@ export default function JobDetail({ jobId, version }) {
                 <ul className="list-disc pl-4">{t.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
               ) : '—'}
             </td>
-            <td className="py-1 break-words">{t.error || t.reason || '—'}</td>
+            <td className="py-1 break-words">
+              {t.error || t.reason || '—'}
+              {t.status === 'failed' && t.traceback ? (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-gray-500">Traceback</summary>
+                  <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2 text-[11px] text-gray-700">{t.traceback}</pre>
+                </details>
+              ) : null}
+            </td>
           </tr>
         ))}
       </tbody>

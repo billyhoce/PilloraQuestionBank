@@ -154,13 +154,13 @@ Claude call and resulting paper for it.
   `api` and `worker`, so `docker logs` holds a bounded, greppable history across restarts. A hosted log
   sink is optional and out of scope.
 
-### 1.3 Log the lifecycle events that are silent today
+### 1.3 Log the lifecycle events that are silent today (DONE)
 
 At INFO, with `job_id`: job created (filename, size, sha256, page count, user), task claimed, task
 finished (status, duration), proposal saved, paper confirmed (paper id), paper skipped, retry, cancel,
 expired, reconciler finding.
 
-### 1.4 Keep tracebacks
+### 1.4 Keep tracebacks (DONE)
 
 - In `runner.py:262,276`, log the exception at ERROR with `exc_info` instead of
   `log.debug(traceback.format_exc())`.

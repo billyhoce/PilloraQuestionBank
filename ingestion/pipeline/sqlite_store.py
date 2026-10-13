@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS ingest_task (
     attempts INTEGER NOT NULL DEFAULT 0,
     reason TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
+    traceback TEXT NOT NULL DEFAULT '',
     warnings TEXT NOT NULL DEFAULT '[]',
     needs_review INTEGER NOT NULL DEFAULT 0,
     fingerprint TEXT,
@@ -62,7 +63,7 @@ CREATE INDEX IF NOT EXISTS ingest_task_status ON ingest_task (status);
 """
 
 _COLUMNS = (
-    "id, job_id, section, stage, status, attempts, reason, error, warnings, "
+    "id, job_id, section, stage, status, attempts, reason, error, traceback, warnings, "
     "needs_review, fingerprint, lease_until, started_at, finished_at, duration_ms"
 )
 
@@ -89,6 +90,7 @@ def _task(row: sqlite3.Row) -> Task:
         attempts=row["attempts"],
         reason=row["reason"],
         error=row["error"],
+        traceback=row["traceback"],
         warnings=tuple(json.loads(row["warnings"])),
         needs_review=bool(row["needs_review"]),
         fingerprint=row["fingerprint"],
@@ -114,6 +116,9 @@ class SQLiteStore:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.executescript(_SCHEMA)
+            # A pipeline.db made before the traceback column existed.
+            if "traceback" not in {r["name"] for r in self._db.execute("PRAGMA table_info(ingest_task)")}:
+                self._db.execute("ALTER TABLE ingest_task ADD COLUMN traceback TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         with self._lock:
@@ -136,7 +141,7 @@ class SQLiteStore:
                 now = self._clock()
                 self._db.execute(
                     "UPDATE ingest_task SET status = ?, attempts = attempts + 1, "
-                    "reason = '', error = '', warnings = '[]', needs_review = 0, "
+                    "reason = '', error = '', traceback = '', warnings = '[]', needs_review = 0, "
                     "fingerprint = NULL, started_at = ?, finished_at = NULL, duration_ms = NULL, "
                     "lease_until = ? WHERE id = ?",
                     (
@@ -207,14 +212,15 @@ class SQLiteStore:
             started = _moment(row["started_at"])
             duration = int((now - started).total_seconds() * 1000) if started else None
             self._db.execute(
-                "UPDATE ingest_task SET status = ?, reason = ?, error = ?, warnings = ?, "
-                "needs_review = ?, fingerprint = ?, lease_until = NULL, finished_at = ?, "
+                "UPDATE ingest_task SET status = ?, reason = ?, error = ?, traceback = ?, "
+                "warnings = ?, needs_review = ?, fingerprint = ?, lease_until = NULL, finished_at = ?, "
                 "duration_ms = ? "
                 "WHERE id = ?",
                 (
                     outcome.status,
                     outcome.reason,
                     outcome.error,
+                    outcome.traceback,
                     json.dumps(list(outcome.warnings)),
                     int(outcome.needs_review),
                     fingerprint if outcome.status == DONE else None,
@@ -269,7 +275,7 @@ class SQLiteStore:
         with self._lock:
             for task_id in task_ids:
                 self._db.execute(
-                    "UPDATE ingest_task SET status = ?, attempts = 0, reason = '', error = '', "
+                    "UPDATE ingest_task SET status = ?, attempts = 0, reason = '', error = '', traceback = '', "
                     "lease_until = NULL, finished_at = NULL WHERE id = ? AND status IN "
                     f"({', '.join(repr(s) for s in (DONE, SKIPPED, FAILED, BLOCKED))})",
                     (PENDING, task_id),

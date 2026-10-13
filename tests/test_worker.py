@@ -24,6 +24,7 @@ class Fake:
     def __init__(self, factory, fail_segment=False):
         self.factory = factory
         self.fail_segment = fail_segment
+        self.raise_in_segment = False
         self.seen: list[tuple[str, str]] = []
         self.on_report = None
 
@@ -39,6 +40,8 @@ class Fake:
 
         def segment(ctx):
             self.seen.append(("segment", self._status(ctx)))
+            if self.raise_in_segment:
+                raise RuntimeError("kaboom")
             return failed("not segmented: nothing found") if self.fail_segment else done(needs_review=True, warnings=("check q1",))
 
         def split(ctx):

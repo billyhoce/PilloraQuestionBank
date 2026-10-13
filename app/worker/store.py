@@ -156,6 +156,7 @@ class SqlStore:
                         attempts=IngestTask.attempts + 1,
                         reason="",
                         error="",
+                        traceback=None,
                         warnings=[],
                         needs_review=False,
                         fingerprint=None,
@@ -235,6 +236,7 @@ class SqlStore:
                 status=outcome.status,
                 reason=outcome.reason,
                 error=outcome.error,
+                traceback=outcome.traceback or None,
                 warnings=list(outcome.warnings),
                 needs_review=outcome.needs_review,
                 fingerprint=fingerprint if outcome.status == DONE else None,
@@ -316,7 +318,7 @@ class SqlStore:
             db.execute(
                 update(IngestTask)
                 .where(IngestTask.id.in_(list(task_ids)), IngestTask.status.in_(_FINISHED))
-                .values(status=PENDING, attempts=0, reason="", error="", lease_until=None, finished_at=None)
+                .values(status=PENDING, attempts=0, reason="", error="", traceback=None, lease_until=None, finished_at=None)
             )
             db.commit()
 
@@ -416,6 +418,7 @@ class SqlStore:
             attempts=row.attempts,
             reason=row.reason or "",
             error=row.error or "",
+            traceback=row.traceback or "",
             warnings=tuple(row.warnings or ()),
             needs_review=bool(row.needs_review),
             fingerprint=row.fingerprint,

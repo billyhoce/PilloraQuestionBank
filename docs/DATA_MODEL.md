@@ -257,7 +257,9 @@ IngestTask: {
   section (string(8), nullable), -- NULL for job-level stages
   stage (string(16)),
   status ENUM(pending, ready, running, done, skipped, failed, blocked),  -- default pending
-  attempts (int), reason, error (text), warnings (JSONB, default []),
+  attempts (int), reason, error (text),
+  traceback (text, nullable),  -- last ~4 KB of the traceback of the exception a failed stage raised
+  warnings (JSONB, default []),
   needs_review (bool), fingerprint (string(64), nullable),
   lease_until, started_at, finished_at (timestamptz, nullable), duration_ms (int, nullable),
   UNIQUE (job_id, section, stage),

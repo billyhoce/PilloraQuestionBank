@@ -119,6 +119,21 @@ describe('AutoImport', () => {
     expect(api.import.getJob).toHaveBeenCalledWith('j2')
   })
 
+  it('shows the traceback of a failed task, and none for other tasks', async () => {
+    api.import.getJob.mockResolvedValue({
+      ...JOBS[0],
+      tasks: [
+        { id: 1, stage: 'register', section: null, status: 'done', duration_ms: 10, warnings: [], reason: '', error: '', traceback: '' },
+        { id: 2, stage: 'segment', section: null, status: 'failed', duration_ms: null, warnings: [], reason: '', error: 'KeyError: x', traceback: 'Traceback (most recent call last):\n  File "s.py", line 3\nKeyError: x' },
+      ],
+    })
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    await userEvent.click(await screen.findByRole('button', { name: 'second.pdf' }))
+    await userEvent.click(await screen.findByText('Traceback'))
+    expect(screen.getByText(/File "s.py", line 3/)).toBeInTheDocument()
+    expect(screen.getAllByText('Traceback')).toHaveLength(1)
+  })
+
   describe('polling and worker state', () => {
     afterEach(() => vi.useRealTimers())
 

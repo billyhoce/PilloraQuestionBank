@@ -144,7 +144,7 @@ count, a "Needs review" marker, created time, and Retry and Cancel buttons. The 
 none is and on unmount; Refresh is still there. While a job is active and `worker_alive` is false
 the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
 lists every task with its section, status, duration, warnings and reason or error, and refreshes
-with each poll.
+with each poll. A failed task also has a collapsed "Traceback" (the task's stored `traceback`).
 
 ### Review page
 
@@ -231,6 +231,19 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   defaulting to the ingestion config. `INGEST_FIXTURES_DIR` is for development only: a folder of
   `<paper>.segments.json` plans (named after the uploaded filename) copied beside the scratch
   `source.pdf` so the `segment` stage uses them instead of the Messages API.
+- **Lifecycle logging and tracebacks.** Every log line is JSON with the job id (see
+  [ARCHITECTURE.md](../ARCHITECTURE.md)). Each lifecycle event is exactly one INFO record carrying
+  the `job_id`, with the event in `func`/`step` and its details as fields: `ingest_job/created`
+  (filename, size, sha256, page_count, user_id), `ingest_task/claimed` and `ingest_task/finished`
+  (status, duration_s; logged by the runner), `ingest_job/proposal_stored` (the worker saved the
+  proposal) and `proposal_saved` (the admin saved an edit), `paper_confirmed` (paper_id),
+  `paper_skipped`, `retry` (reopened tasks), `cancelled`, `expired` (the sweep). The API-side events
+  go through `app.logger.log_job_event`. A stage that raises is logged at ERROR with the exception
+  attached (`exc`), and the runner stores the last `PipelineConfig.traceback_chars` (4096)
+  characters of the traceback on the task (`Outcome.traceback` -> `Store.fail` ->
+  `ingest_task.traceback`; the pipeline's SQLite store has the same column). It is returned as
+  `traceback` in each task of `GET /api/import/jobs/{id}` and cleared when the task is claimed
+  again or reopened by a retry. A failure a stage *reports* (`failed(...)`) has no traceback.
 - **Token logging.** The segment stage's Messages API usage reaches `app.logger.log_tokens` through
   `ingester.request.usage_listener` (set by the worker). Prices for `claude-haiku-4-5` and
   `claude-opus-5` (the retry model) are in `_PRICES`.

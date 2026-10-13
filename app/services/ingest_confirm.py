@@ -12,7 +12,7 @@ from typing import Any
 import fitz  # PyMuPDF
 from PIL import Image
 
-from app.logger import log
+from app.logger import log, log_job_event
 from app.models.orm import IngestJob, Paper
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
@@ -174,6 +174,7 @@ def confirm_job_paper(
         settled = _record(job, key, "confirmed", paper.id)
 
     paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
+    log_job_event(job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled)
     if settled:
         _drop_job_objects(job_id, store)
     return paper, settled
@@ -187,6 +188,7 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore) -> boo
     job_id = job.id
     settled = _record(job, key, "skipped", None)
     db.commit()
+    log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)
     if settled:
         _drop_job_objects(job_id, store)
     return settled
