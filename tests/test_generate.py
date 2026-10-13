@@ -952,6 +952,40 @@ def test_generate_paper_returns_pdf(public_client, sample_paper, db_session, ref
     assert len(resp.content) > 0
 
 
+def test_generate_paper_increments_the_users_counter(
+    public_client, public_user, sample_paper, db_session, reference_data
+):
+    """The count shown on User Management. Incremented only after the PDF renders,
+    so a failed generation doesn't inflate it."""
+    assert public_user.papers_generated == 0
+    ids = _question_ids(db_session, sample_paper)
+
+    with patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"):
+        for _ in range(2):
+            resp = public_client.post(
+                "/api/generate/paper", json={"question_ids": ids, "variant": "question"}
+            )
+            assert resp.status_code == 200
+
+    db_session.flush()
+    db_session.refresh(public_user)
+    assert public_user.papers_generated == 2
+
+
+def test_generate_paper_does_not_count_a_failed_render(
+    public_client, public_user, sample_paper, db_session, reference_data
+):
+    ids = _question_ids(db_session, sample_paper)
+    with patch("app.routes.generate.LayoutEngine.render", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            public_client.post(
+                "/api/generate/paper", json={"question_ids": ids, "variant": "question"}
+            )
+
+    # The increment sits after render(), so the route never reached it.
+    assert public_user.papers_generated == 0
+
+
 def test_generate_paper_empty_question_ids_returns_422(public_client):
     resp = public_client.post("/api/generate/paper", json={"question_ids": [], "variant": "question"})
     assert resp.status_code == 422

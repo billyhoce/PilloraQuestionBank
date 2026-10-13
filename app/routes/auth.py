@@ -15,6 +15,7 @@ from app.services.auth import (
     create_access_token,
     decode_access_token,
     hash_password,
+    normalize_email,
     verify_password,
 )
 from app.services.google_oauth import GoogleOAuthError
@@ -68,7 +69,9 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 def _set_session_cookie(response: Response, user: User) -> None:
     """Issue the session JWT. Shared by password login and the Google callback so
-    both paths produce an identical session."""
+    both paths produce an identical session — which is also why the last-login
+    stamp lives here rather than in each caller."""
+    user.last_login_at = datetime.now(UTC)
     token = create_access_token({"sub": str(user.id)})
     response.set_cookie(
         key=_COOKIE_NAME,
@@ -82,8 +85,27 @@ def _set_session_cookie(response: Response, user: User) -> None:
 
 @router.post("/register", status_code=201, response_model=UserResponse)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    email = normalize_email(payload.email)
+
+    # An admin may have pre-created this address so its premium access is ready
+    # before the customer signs up. That row has no credentials, so registering
+    # *claims* it — a plain 409 here would leave the invited user unable to
+    # create an account at all. Its role and premium school levels survive.
+    existing = db.query(User).filter(User.email == email).first()
+    if existing is not None:
+        if not existing.is_invited:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        existing.password_hash = hash_password(payload.password)
+        # Never overwrite a name the admin already recorded.
+        if not existing.first_name:
+            existing.first_name = payload.first_name
+        if not existing.last_name:
+            existing.last_name = payload.last_name
+        db.flush()
+        return existing
+
     user = User(
-        email=payload.email,
+        email=email,
         first_name=payload.first_name,
         last_name=payload.last_name,
         password_hash=hash_password(payload.password),
@@ -94,6 +116,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     try:
         db.flush()
     except IntegrityError:
+        # Lost a race with a concurrent registration for the same address.
         db.rollback()
         raise HTTPException(status_code=409, detail="Email already registered")
     return user
@@ -101,13 +124,15 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    user = db.query(User).filter(User.email == normalize_email(payload.email)).first()
 
     # An account created through Google has no password to check, so the generic
     # 401 below would just look like a forgotten password and send the user
     # round in circles. Point them at the button instead. This does disclose
     # that the address has a Google account — a deliberate trade for an
     # otherwise dead-end login, and only for accounts that have *no* password.
+    # An unclaimed invite has neither a password nor a google_sub, so it falls
+    # through to the generic 401 below and stays undisclosed.
     if user is not None and not user.password_hash and user.google_sub:
         raise HTTPException(
             status_code=409,
@@ -177,7 +202,7 @@ def _oauth_error(code: str) -> RedirectResponse:
 def _resolve_google_user(db: Session, profile: dict) -> User:
     """Find, link, or create the account behind a verified Google profile."""
     sub = profile["sub"]
-    email = profile["email"]
+    email = normalize_email(profile["email"])
     given_name = (profile.get("given_name") or "").strip()[:100]
     family_name = (profile.get("family_name") or "").strip()[:100]
 
@@ -194,7 +219,9 @@ def _resolve_google_user(db: Session, profile: dict) -> User:
         return user
 
     # Google verified ownership of this address, so it is safe to attach to an
-    # existing password account. The account keeps its role.
+    # existing account. It keeps its role and its premium school levels — which
+    # is also how an admin-created invite is claimed: the pre-made row has no
+    # google_sub, matches here on email, and simply gains one.
     user = db.query(User).filter(User.email == email).first()
     if user is not None:
         user.google_sub = sub

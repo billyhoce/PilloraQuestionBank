@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import premiumLocked from '../../assets/premium-locked.svg'
 import { api } from '../../api/client'
 import { useAuth } from '../../context/AuthContext'
+import ProtectedImage from '../ProtectedImage'
 import Spinner from '../Spinner'
 import ErrorBanner from '../ErrorBanner'
 import TagCombobox from '../TagCombobox'
@@ -208,7 +209,7 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
                     <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Question</h3>
                     <div className="space-y-2">
                       {detail.question_pages.map(p => (
-                        <img key={p.id} src={p.url} alt={`Q page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
+                        <ProtectedImage key={p.id} src={p.url} alt={`Q page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
                       ))}
                     </div>
                   </section>
@@ -217,7 +218,7 @@ export default function QuestionDetailModal({ item, onClose, onTagsChanged }) {
                       <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Answer</h3>
                       <div className="space-y-2">
                         {detail.answer_pages.map(p => (
-                          <img key={p.id} src={p.url} alt={`A page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
+                          <ProtectedImage key={p.id} src={p.url} alt={`A page ${p.page_order}`} className="w-full border border-gray-200 rounded" />
                         ))}
                       </div>
                     </section>

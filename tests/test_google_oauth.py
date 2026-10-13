@@ -358,3 +358,66 @@ def test_linked_account_wrong_password_stays_a_generic_401(
     )
     assert resp.status_code == 401
     assert "Google" not in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Claiming an admin-created invite
+#
+# This is the whole reason pre-adding a user needs no OAuth-specific code:
+# _resolve_google_user already falls through google_sub -> email -> create, and
+# the email branch happens to be exactly what claims a credential-less row.
+# ---------------------------------------------------------------------------
+
+
+def test_callback_claims_a_pending_invite_and_keeps_its_premium(
+    client, db_session, google_configured, google_profile, reference_data
+):
+    from tests.conftest import _create_invited_user, _grant_premium
+
+    google_profile["email"] = "invited@test.com"
+    invited = _create_invited_user(db_session, "invited@test.com")
+    _grant_premium(db_session, invited, reference_data["school_level"])
+    invited_id = invited.id
+
+    state = _start_flow(client)
+    assert _callback(client, state).status_code == 307
+
+    matches = db_session.query(User).filter(User.email == "invited@test.com").all()
+    assert len(matches) == 1, "must claim the invite, not create a second account"
+    assert matches[0].id == invited_id
+    assert matches[0].google_sub == "google-sub-123"
+    assert [sl.name for sl in matches[0].premium_school_levels] == ["Secondary"]
+    # Google supplies the names the admin never had.
+    assert matches[0].first_name == "Grace"
+    assert matches[0].password_hash is None, "claiming via Google adds no password"
+
+
+def test_callback_claims_an_invite_stored_in_a_different_case(
+    client, db_session, google_configured, google_profile
+):
+    """Google's email claim is canonical lower-case. Before normalization an
+    invite typed `Invited@Test.com` produced a second, unentitled account."""
+    from app.services.auth import normalize_email
+    from tests.conftest import _create_invited_user
+
+    google_profile["email"] = "Mixed.Case@Example.COM"
+    invited = _create_invited_user(db_session, normalize_email("MIXED.case@example.com"))
+    invited_id = invited.id
+
+    state = _start_flow(client)
+    assert _callback(client, state).status_code == 307
+
+    matches = db_session.query(User).filter(User.email == "mixed.case@example.com").all()
+    assert len(matches) == 1
+    assert matches[0].id == invited_id
+
+
+def test_callback_stamps_last_login_at(
+    client, db_session, google_configured, google_profile
+):
+    state = _start_flow(client)
+    assert _callback(client, state).status_code == 307
+
+    db_session.flush()
+    user = db_session.query(User).filter(User.email == "grace@example.com").one()
+    assert user.last_login_at is not None

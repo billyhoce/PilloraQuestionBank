@@ -12,9 +12,15 @@ JWT in an httpOnly cookie.
 ## Endpoints
 
 ```
-POST   /api/auth/register       -- public registration (always role "public").
+POST   /api/auth/register       -- public registration (normally role "public").
                                    Body: { first_name, last_name, email, password }.
                                    Names are trimmed; blank or >100 chars -> 422.
+                                   If the address is an unclaimed admin-created
+                                   invite (no password, no google_sub) this
+                                   *claims* that row instead of 409-ing, keeping
+                                   its role and premium school levels and filling
+                                   in only the names it doesn't already have.
+                                   An address with any credential still -> 409.
 POST   /api/auth/login          -- sets JWT in httpOnly cookie. Unknown email and wrong
                                    password are one generic 401. An account created with
                                    Google (no password on file) instead gets 409 with a
@@ -45,12 +51,29 @@ Both are browser navigations, not XHR — the frontend links to `/api/auth/googl
 Failures redirect rather than returning JSON because the user is mid-redirect in a browser, where a
 JSON body would be a dead end.
 
+## Email normalization
+
+Every address is stored and looked up through `normalize_email` (`app/services/auth.py`), which
+lower-cases and trims. It is applied on registration, on the login lookup, on the Google callback and
+when an admin pre-creates a user; migration `e6f7a8b9c0d1` folded the pre-existing rows.
+
+Pydantic's `EmailStr` does **not** fold case, and Google's OIDC `email` claim is canonical
+lower-case — so before this, one person could end up with two accounts, and an invite typed
+`Billy@Gmail.com` would never match the Google sign-in that created a second, unentitled row.
+
+Gmail's dot and `+` aliases are deliberately **not** folded: they are provider-specific, and treating
+`a.b@` and `ab@` as one address would be wrong for every other provider. The consequence — an invite
+typed with an alias never matches — is surfaced in the invite form's help text instead. See
+[users-and-premium.md](./users-and-premium.md#what-can-go-wrong-with-google-and-what-we-do-about-it).
+
 ## Security
 
 - **Passwords:** bcrypt via `bcrypt.gensalt()` (default cost factor 12).
 - **Auth tokens:** JWT (`python-jose`, HS256) in an `httpOnly`, `secure`, `samesite=lax` cookie
   named `access_token`, 7-day expiry. `JWT_SECRET_KEY` comes from env and falls back to an insecure
-  default — it **must** be set in production.
+  default — it **must** be set in production. `_set_session_cookie` also stamps `last_login_at`;
+  putting it there rather than in each caller is what keeps the password path and the Google callback
+  from drifting apart.
 - **Admin routes:** the `require_admin` dependency (`app/routes/auth.py`) checks
   `user.role == "admin"` and returns `403` otherwise. Applied to all reference-data writes, all
   `/api/import/*`, and the `/api/users` routes.
@@ -85,7 +108,9 @@ Google verification review.
   reports `email_verified`**. An unverified address is rejected outright
   (`google_email_unverified`), since it is not proof of identity and would otherwise be a route to
   hijacking an existing account. A verified match attaches `google_sub` to the existing row and
-  preserves its `role` **and its premium school levels**. [DATA_MODEL.md](../DATA_MODEL.md) tabulates the three password/Google
+  preserves its `role` **and its premium school levels**. That email branch is also what claims an
+  admin-created invite, which is why pre-adding a user needed no OAuth-specific code at all.
+  [DATA_MODEL.md](../DATA_MODEL.md) tabulates the four password/Google
   combinations a `User` row can be in.
 - **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts.
   `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise. Password
@@ -94,7 +119,9 @@ Google verification review.
   forgotten password and loop them. This is a **deliberate user-enumeration trade-off**: it confirms
   the address has a Google account. It is the only such disclosure — it fires only when the account
   has *no* password at all, so an account with both a password and a Google link (and every unknown
-  email) still returns the single generic `401`.
+  email) still returns the single generic `401`. The branch requires a `google_sub`, so an
+  **unclaimed invite** — which has neither credential — falls through to the generic `401` and stays
+  undisclosed.
 
 ## UI
 

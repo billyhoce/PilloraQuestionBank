@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import ProtectedImage from '../ProtectedImage'
 import premiumLocked from '../../assets/premium-locked.svg'
 import { formatTopic } from '../../utils/topicFormat'
 import { isLocked, requiredSchoolLevel, subscribeHref } from '../../utils/premium'
@@ -25,7 +26,7 @@ export default function QuestionCard({ item, onClick, selectable = false, select
           className="w-full h-full object-contain"
         />
       ) : first_page_url ? (
-        <img
+        <ProtectedImage
           src={first_page_url}
           alt={title}
           loading="lazy"

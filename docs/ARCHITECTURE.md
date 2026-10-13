@@ -32,13 +32,14 @@ Infrastructure detail (Cloudflare, CI/CD, provisioning) is in [DEPLOYMENT.md](./
 
 ```
 app/
-├── routes/         # FastAPI route handlers — auth.py, reference.py, ingest.py, questions.py,
-│                   #   papers.py, generate.py, generation_config.py
+├── routes/         # FastAPI route handlers — auth.py, users.py, reference.py, ingest.py,
+│                   #   questions.py, papers.py, generate.py, generation_config.py, site_config.py
 ├── schemas/        # Pydantic request/response models — auth.py, reference.py, questions.py, generate.py
 ├── models/         # SQLAlchemy ORM models — orm.py
 ├── services/       # business logic — auth.py, google_oauth.py, ingest.py, generate.py
 │                   #   (question selection), question_query.py (filter/eager-load),
 │                   #   question_serialization.py, question_parts.py, generation_config.py,
+│                   #   site_config.py (site-wide settings + About HTML sanitizer),
 │                   #   premium.py (who may open which premium paper)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), rich_text.py, sample_data.py (synthetic fixtures)
@@ -102,10 +103,11 @@ production) — same code path, no special-casing.
 frontend/src/
 ├── api/            # client.js (fetch wrapper + friendlyMessage) and per-resource modules
 ├── components/     # shared UI — AppShell, NavBar, UserMenu, QuestionCard, QuestionDetailModal,
-│                   #   PartsEditor, TopicCombobox, InfoTooltip, ErrorBanner, RichTextEditor
+│                   #   PartsEditor, TopicCombobox, InfoTooltip, ErrorBanner, ProtectedImage,
+│                   #   RichContentEditor
 │   ├── browse/     #   FilterBar, TopicMultiSelect
-│   └── generate/   #   autocreate panel, selection cart
-├── context/        # AuthContext
+│   └── generate/   #   autocreate panel, selection cart, RichTextEditor (PDF-safe subset)
+├── context/        # AuthContext, SiteConfigContext
 ├── features/       # import/, papers/, reference/, users/
 ├── hooks/          # useQuestionSearch.js — the shared question-search state machine
 ├── pages/          # route-level pages, incl. admin/
@@ -134,15 +136,18 @@ exports `filtersToListArgs`, which Generate's "Select All" reuses for its one-of
 |---|---|---|---|
 | `/login` | Login | Public | [auth](./features/auth.md) |
 | `/register` | Register | Public | [auth](./features/auth.md) |
-| `/` or `/browse` | Browse / Filter questions | Authenticated | [browse](./features/browse.md) |
-| `/questions/:id` | Question detail (all pages) | Authenticated | [browse](./features/browse.md) |
+| `/` | Browse / Filter questions | Public | [browse](./features/browse.md) |
+| `/about` | About page (admins edit it in place) | Public | [site-config](./features/site-config.md) |
 | `/generate` | Paper generation | Authenticated | [paper-generation](./features/paper-generation.md) |
 | `/subscribe` | Subscribe — one plan per school level (payment stub) | Authenticated | [users-and-premium](./features/users-and-premium.md) |
 | `/admin/import` | Import flow | Admin | [ingestion](./features/ingestion.md) |
 | `/admin/reference` | Reference data CRUD | Admin | [reference-data](./features/reference-data.md) |
 | `/admin/papers` | Papers list + editor | Admin | [ingestion](./features/ingestion.md) |
-| `/admin/users` | User management (roles + premium access) | Admin | [users-and-premium](./features/users-and-premium.md) |
+| `/admin/users` | User management (users, invites, premium, site settings) | Admin | [users-and-premium](./features/users-and-premium.md) |
 | `/admin/generation-config` | Generation config | Admin | [generation-config](./features/generation-config.md) |
+
+**There is no question-detail route.** Opening a question renders `<QuestionDetailModal />` over
+whichever page you were on (Browse or Generate), so the detail view has no URL of its own.
 
 ### Navigation (app shell)
 
@@ -152,7 +157,7 @@ and `/register` stay outside the shell. The menubar is always fully visible for 
 there is no "Admin" button to unlock it:
 
 - **Everyone:** Question Bank (`/`), Generate Paper (`/generate` — signed-out clicks land on
-  `/login` via `ProtectedRoute`).
+  `/login` via `ProtectedRoute`), About (`/about`, public like `/`).
 - **Admins additionally:** Reference, Import, Papers, User Management, Generation Config.
 - **Normal (`public`) users:** a **⭐ Go Premium** link to `/subscribe` at the top right.
 - **Top right:** signed-in users get an account button (`<UserMenu />`) with **Log out** (closes on
@@ -177,4 +182,16 @@ instead. Keyword search matches the `T{n}` token too.
 **Images are presigned, never proxied.** There is no `/api/questions/:id/image/:page` endpoint;
 every image reaches the browser as a presigned S3 URL embedded in the JSON response. The premium
 paywall works by *withholding* that URL — see
-[users-and-premium.md](./features/users-and-premium.md).
+[users-and-premium.md](./features/users-and-premium.md). The `protect_images` toggle is a
+**client-side deterrent only** and does not change this: the URL is still in the response and the
+Network tab. See [site-config.md](./features/site-config.md).
+
+**Two rich-text editors, deliberately.** `components/generate/RichTextEditor.jsx` is cut down to what
+`app/pdf/rich_text.py` can draw into a PDF (bold/italic/underline/link); `components/RichContentEditor.jsx`
+carries the full set (headings, lists, colour, font size) for the browser-rendered About page.
+Widening the former would let an admin author markup the PDF silently strips —
+see [site-config.md](./features/site-config.md).
+
+**App-wide state is two contexts.** `AuthContext` (the session, via `api.auth.me()`) and
+`SiteConfigContext` (the public `GET /api/site-config`, fetched once). Everything else is fetched per
+page. Both are mounted in `App.jsx`, `SiteConfigProvider` inside `AuthProvider`.
