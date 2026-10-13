@@ -40,7 +40,7 @@ def build_review(job: IngestJob, store: ObjectStore) -> dict[str, Any]:
     proposal = job.proposal_edited if job.proposal_edited is not None else job.proposal
     if proposal is None:
         raise NoProposalError()
-    prefix = job_prefix(job.id)
+    prefix = job_prefix(job.source_key)
     papers = []
     done = (job.report or {}).get("review_outcome") or {}
     for index, paper in enumerate(proposal.get("papers", [])):

@@ -76,9 +76,9 @@ def test_only_stale_review_ready_and_failed_jobs_expire(env):
         (stale_confirmed, "confirmed"), (stale_cancelled, "cancelled"),
     ]:
         assert status_of(factory, untouched) == status
-    assert sorted(objects.deleted_prefixes) == sorted(job_prefix(i) for i in (stale_review, stale_failed))
-    assert not any(k.startswith(job_prefix(stale_review)) for k in objects.objects)
-    assert any(k.startswith(job_prefix(fresh_review)) for k in objects.objects)
+    assert sorted(objects.deleted_prefixes) == sorted(job_prefix(f"tmp/ingest/{i}/source.pdf") for i in (stale_review, stale_failed))
+    assert not any(k.startswith(job_prefix(f"tmp/ingest/{stale_review}/source.pdf")) for k in objects.objects)
+    assert any(k.startswith(job_prefix(f"tmp/ingest/{fresh_review}/source.pdf")) for k in objects.objects)
     assert not (scratch / str(stale_review)).exists()
     assert (scratch / str(fresh_review)).exists()
 
