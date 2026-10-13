@@ -305,7 +305,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
    - Set status `queued` and insert the `register` task. Inserting the task row is still what enqueues
      the job.
    - Log a "job created" event.
-4. **PDF validation** (page count, password, sha256) moves from `create_job` into the `register` stage
+4. **PDF validation — DONE** (page count, password, sha256) moves from `create_job` into the `register` stage
    (`app/worker/edges.py` `after_register`, or a pre-register check). A bad PDF becomes a failed job
    with a clear reason instead of an immediate 422. `ingest_job.page_count` / `sha256` are filled in by
    the worker.

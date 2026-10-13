@@ -57,8 +57,8 @@ def test_create_job(admin_client, db_session, admin_user, fake_object_store):
     assert job.created_by == admin_user.id
     assert job.filename == "RI_2024_Math_P1.pdf"
     assert job.source_key == key
-    assert job.sha256 == hashlib.sha256(pdf).hexdigest()
-    assert job.page_count == 3
+    # the upload does not read the PDF: the worker's register task fills these in
+    assert job.sha256 is None and job.page_count is None
     assert job.report is None
     [task] = job.tasks
     assert (task.section, task.stage, task.status) == (None, "register", "ready")
@@ -70,12 +70,14 @@ def test_non_pdf_rejected(admin_client, db_session, fake_object_store):
     assert fake_object_store.objects == {}
 
 
-def test_pdf_content_type_but_garbage_bytes_rejected(
+def test_pdf_content_type_but_garbage_bytes_still_creates_a_job(
     admin_client, db_session, fake_object_store
 ):
-    assert upload(admin_client, b"definitely not a pdf").status_code == 422
-    assert db_session.query(IngestJob).count() == 0
-    assert fake_object_store.objects == {}
+    """Validation is the worker's job now: the upload accepts the bytes, register fails them."""
+    resp = upload(admin_client, b"definitely not a pdf")
+    assert resp.status_code == 201
+    assert db_session.query(IngestJob).count() == 1
+    assert len(fake_object_store.objects) == 1
 
 
 def test_list_is_all_admins_jobs_newest_first_and_filters(
@@ -129,7 +131,7 @@ def test_list_filters_by_paper_id(admin_client, db_session, admin_user, fake_obj
 def test_get_job_with_tasks(admin_client, fake_object_store):
     job_id = upload(admin_client).json()["job_id"]
     body = admin_client.get(f"/api/import/jobs/{job_id}").json()
-    assert body["id"] == job_id and body["status"] == "queued" and body["page_count"] == 3
+    assert body["id"] == job_id and body["status"] == "queued" and body["page_count"] is None
     assert [(t["stage"], t["section"], t["status"]) for t in body["tasks"]] == [("register", None, "ready")]
     assert admin_client.get(f"/api/import/jobs/{uuid.uuid4()}").status_code == 404
 

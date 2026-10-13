@@ -15,7 +15,7 @@ from tests.test_ingest_confirm import env, paper, proposal  # noqa: F401  (the c
 from tests.test_ingest_jobs import _seed_failed_job, upload
 from tests.test_ingest_review import PROPOSAL, edit_body, make_job, rect
 from tests.test_worker import Fake, drain
-from tests.worker_support import make_job as make_worker_job
+from tests.worker_support import PDF_BYTES, make_job as make_worker_job
 from tests.worker_support import make_session_factory, make_user
 
 
@@ -55,8 +55,8 @@ def test_created_cancelled_retried(admin_client, db_session, admin_user, fake_ob
     job_id = upload(admin_client).json()["job_id"]
     [created] = events(records, job_id)["created"]
     assert created.fields["filename"] == "RI_2024_Math_P1.pdf"
-    assert created.fields["page_count"] == 3 and created.fields["size"] > 0
-    assert len(created.fields["sha256"]) == 64 and created.fields["user_id"] == admin_user.id
+    assert created.fields["size"] > 0 and created.fields["user_id"] == admin_user.id
+    assert "sha256" not in created.fields and "page_count" not in created.fields
 
     _seed_failed_job(db_session, job_id)
     assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 200
@@ -92,7 +92,7 @@ def worker_env(tmp_path):
     user = make_user(factory)
     objects = FakeObjectStore()
     job = make_worker_job(factory, user)
-    objects.put(f"tmp/ingest/{job}/source.pdf", b"%PDF source")
+    objects.put(f"tmp/ingest/{job}/source.pdf", PDF_BYTES)
     fake = Fake(factory)
 
     def worker():

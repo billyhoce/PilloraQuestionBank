@@ -13,7 +13,7 @@ from tests.test_ingest_confirm import env, paper, proposal  # noqa: F401  (the c
 from tests.test_ingest_jobs import _seed_failed_job, upload
 from tests.test_ingest_review import edit_body, make_job, rect
 from tests.test_worker import Fake, drain
-from tests.worker_support import make_job as make_worker_job
+from tests.worker_support import PDF_BYTES, make_job as make_worker_job
 from tests.worker_support import make_session_factory, make_user
 
 
@@ -27,7 +27,7 @@ def test_created_retry_cancel(admin_client, db_session, admin_user, fake_object_
     job_id = upload(admin_client).json()["job_id"]
     names, [created] = kinds(db_session, job_id)
     assert names == ["created"] and created.actor_user_id == admin_user.id
-    assert created.data["filename"] == "RI_2024_Math_P1.pdf" and created.data["page_count"] == 3
+    assert created.data["filename"] == "RI_2024_Math_P1.pdf" and "page_count" not in created.data and "sha256" not in created.data
 
     _seed_failed_job(db_session, job_id)
     assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 200
@@ -64,7 +64,7 @@ def worker_env(tmp_path):
     user = make_user(factory)
     objects = FakeObjectStore()
     job = make_worker_job(factory, user)
-    objects.put(f"tmp/ingest/{job}/source.pdf", b"%PDF source")
+    objects.put(f"tmp/ingest/{job}/source.pdf", PDF_BYTES)
     fake = Fake(factory)
 
     def worker():

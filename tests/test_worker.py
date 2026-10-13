@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.models.orm import IngestJob, IngestTask
 from app.worker.main import Worker, WorkerSettings, load_settings
 from tests.conftest import FakeObjectStore
-from tests.worker_support import make_job, make_session_factory, make_user
+from tests.worker_support import PDF_BYTES, LOCKED_PDF_BYTES, make_job, make_session_factory, make_user
 
 PROPOSAL = {"papers": [{"label": "q1", "questions": []}], "unrouted": [], "warnings": []}
 
@@ -34,8 +34,10 @@ class Fake:
 
     def registry(self):
         def register(ctx):
-            assert ctx.source.read_bytes() == b"%PDF source"  # fetched from S3 into scratch
+            assert ctx.source.read_bytes() == PDF_BYTES  # fetched from S3 into scratch
             self.seen.append(("register", self._status(ctx)))
+            # what the real register stage records in job.json
+            (ctx.job_dir / "job.json").write_text(json.dumps({"page_count": 2, "sha256": "ab" * 32}))
             return done()
 
         def segment(ctx):
@@ -86,7 +88,7 @@ def setup(tmp_path):
         return {"year": 2024}
 
     job = make_job(factory, user)  # as the API makes it: just the `register` task
-    objects.put(f"tmp/ingest/{job}/source.pdf", b"%PDF source")
+    objects.put(f"tmp/ingest/{job}/source.pdf", PDF_BYTES)
     fake = Fake(factory)
 
     def worker(fake=fake):
@@ -268,3 +270,35 @@ def test_segment_usage_is_logged_with_prices(caplog):
     finally:
         segment_request.usage_listener = None
     log_tokens("ingest_segment", "claude-haiku-4-5", usage)  # does not raise
+
+
+def test_register_fills_in_page_count_and_sha256(setup):
+    factory, job, _, _, _, make_worker, _ = setup
+    assert job_row(factory, job).page_count == 1  # make_job's placeholder
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    row = job_row(factory, job)
+    assert row.page_count == 2 and row.sha256 == "ab" * 32
+
+
+@pytest.mark.parametrize(
+    "data, reason",
+    [
+        (b"definitely not a pdf", "The file is not a readable PDF"),
+        (LOCKED_PDF_BYTES, "The PDF is password protected"),
+    ],
+)
+def test_a_bad_pdf_fails_the_job_with_a_reason_and_is_not_retried(setup, data, reason):
+    factory, job, objects, _, fake, make_worker, _ = setup
+    objects.put(f"tmp/ingest/{job}/source.pdf", data)
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    row = job_row(factory, job)
+    assert row.status == "failed"
+    assert row.error == f"register failed: {reason}"
+    assert fake.seen == []  # the register stage itself never ran
+    with factory() as db:
+        [task] = db.scalars(select(IngestTask)).all()
+        assert task.status == "failed" and task.attempts == 1

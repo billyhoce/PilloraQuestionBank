@@ -9,8 +9,11 @@ stages of the registry (:func:`wrap_registry`) and by resolving each job's scrat
   that lost the folder the booklet is back before any stage (or the fingerprint check) reads it.
   Artefacts that were lost with the folder are not fetched: ``Runner.revalidate`` finds their
   outputs missing and the tasks run again (slower, never wrong);
-* ``register`` -- after the stage, the filename-metadata extraction (it needs the app's
-  reference data), stored in ``ingest_job.report["filename_metadata"]``;
+* ``register`` -- before the stage, the PDF check (:func:`check_pdf`): a corrupt, password-protected
+  or empty booklet fails the task with a readable reason (a failed task is not retried on its own,
+  so it ends as a ``failed`` job whose ``error`` says why). After the stage, the job's ``page_count``
+  and ``sha256`` (read from ``job.json``, which ``register`` wrote) and the filename-metadata
+  extraction (it needs the app's reference data), stored in ``ingest_job.report["filename_metadata"]``;
 * ``report`` -- after the stage, the review images ``pages/pNN.webp`` are uploaded to
   ``tmp/ingest/{job_id}/pages/`` and the proposal and the run summary are stored on the job row.
   The images are uploaded here rather than at ``render`` because the job-level ``pages/`` folder
@@ -33,6 +36,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import fitz  # PyMuPDF
 from pipeline import artefacts
 from pipeline.outcome import DONE, FAILED, Outcome, StageContext, failed
 from pipeline.registry import Registry, Stage
@@ -51,6 +55,19 @@ FAILED_JOB_STATUSES = ("failed",)
 
 PAGES_DIR = "pages"
 FIXTURE_SUFFIX = ".segments.json"
+
+
+def check_pdf(path: Path) -> str | None:
+    """Why ``path`` is not a usable PDF (a readable reason), or ``None`` when it is."""
+    try:
+        with fitz.open(path) as doc:
+            if doc.needs_pass:
+                return "The PDF is password protected"
+            if doc.page_count < 1:
+                return "The PDF has no pages"
+    except Exception:
+        return "The file is not a readable PDF"
+    return None
 
 
 class Edges:
@@ -106,6 +123,13 @@ class Edges:
             artefacts.write_bytes(target, fixture.read_bytes())
 
     # --- the stages' hooks --------------------------------------------------
+    def before_register(self, ctx: StageContext) -> Outcome | None:
+        reason = check_pdf(ctx.source)
+        if reason is None:
+            return None
+        log.warning("job %s: rejected source PDF: %s", ctx.job_id, reason)
+        return failed(reason, needs_review=False)
+
     def after_register(self, ctx: StageContext, outcome: Outcome) -> Outcome:
         # POST /api/import/jobs creates only the ``register`` task (the API does not know the
         # pipeline); the rest of the job-scope chain is created here, as ``Runner.submit`` does
@@ -114,9 +138,21 @@ class Edges:
         with self._factory() as db:
             job = db.get(IngestJob, uuid.UUID(ctx.job_id))
             if job is not None:
+                self._record_identity(ctx, db, job)
                 record_filename_metadata(job, db, self._extract_metadata)
                 db.commit()
         return outcome
+
+    def _record_identity(self, ctx: StageContext, db: Session, job: IngestJob) -> None:
+        """Fill the job's ``page_count`` and ``sha256`` from the ``job.json`` ``register`` wrote."""
+        path = ctx.path(artefacts.JOB_NAME)
+        if not path.is_file():
+            return
+        info = artefacts.read_json(path)
+        job.page_count = info.get("page_count")
+        job.sha256 = info.get("sha256")
+        db.flush()  # the filename extraction that follows refreshes the row
+        log_job_event(job.id, "registered", sha256=job.sha256, page_count=job.page_count)
 
     def after_report(self, ctx: StageContext, outcome: Outcome) -> Outcome:
         job_uuid = uuid.UUID(ctx.job_id)
@@ -214,26 +250,45 @@ class Edges:
     def hooks(self) -> dict[str, Callable[[StageContext, Outcome], Outcome]]:
         return {"register": self.after_register, "report": self.after_report}
 
+    def before_hooks(self) -> dict[str, Callable[[StageContext], Outcome | None]]:
+        return {"register": self.before_register}
+
     def wrap_registry(self, registry: Registry) -> Registry:
         self._job_stages = [stage.name for stage in registry.job_stages()]
-        return wrap_registry(registry, self.hooks())
+        return wrap_registry(registry, self.hooks(), self.before_hooks())
 
 
-def _wrap(stage: Stage, hook: Callable[[StageContext, Outcome], Outcome]) -> Stage:
+def _wrap(
+    stage: Stage,
+    hook: Callable[[StageContext, Outcome], Outcome] | None,
+    before: Callable[[StageContext], Outcome | None] | None = None,
+) -> Stage:
     inner = stage.run
 
     def run(ctx: StageContext) -> Outcome:
+        if before is not None:
+            refusal = before(ctx)
+            if refusal is not None:
+                return refusal
         outcome = inner(ctx)
-        return outcome if outcome.status == FAILED else hook(ctx, outcome)
+        return outcome if hook is None or outcome.status == FAILED else hook(ctx, outcome)
 
     return replace(stage, run=run)
 
 
-def wrap_registry(registry: Registry, hooks: dict[str, Callable[[StageContext, Outcome], Outcome]]) -> Registry:
-    """A registry whose job-scope stages named in ``hooks`` run the hook after they succeed."""
+def wrap_registry(
+    registry: Registry,
+    hooks: dict[str, Callable[[StageContext, Outcome], Outcome]],
+    before: dict[str, Callable[[StageContext], Outcome | None]] | None = None,
+) -> Registry:
+    """A registry whose job-scope stages named in ``hooks`` run the hook after they succeed, and
+    those named in ``before`` run that check first (an outcome it returns replaces the stage's run)."""
+    before = before or {}
     return Registry(
         [
-            _wrap(s, hooks[s.name]) if s.route is None and s.name in hooks else s
+            _wrap(s, hooks.get(s.name), before.get(s.name))
+            if s.route is None and (s.name in hooks or s.name in before)
+            else s
             for s in registry.stages()
         ]
     )

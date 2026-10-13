@@ -399,10 +399,8 @@ def create_ingest_job(
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
     pdf_bytes = file.file.read()
-    try:
-        job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
-    except InvalidPdfError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    # The bytes are not inspected here: the worker's ``register`` task fails a bad PDF with a reason.
+    job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
     set_context(job_id=str(job.id), user_id=str(current_user.id))
     return {"job_id": str(job.id)}
 

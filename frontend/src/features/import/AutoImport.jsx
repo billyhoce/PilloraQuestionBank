@@ -234,6 +234,9 @@ export default function AutoImport() {
                       <div className="text-xs text-amber-700">Worker offline</div>
                     )}
                     {job.needs_review && <div className="text-xs text-amber-700">Needs review</div>}
+                    {job.status === 'failed' && job.error && (
+                      <div className="text-xs text-red-600 break-words">{job.error}</div>
+                    )}
                   </td>
                   <td className="px-3 py-2 min-w-40">
                     {job.stage && <div className="text-xs text-gray-600">{job.stage}</div>}
