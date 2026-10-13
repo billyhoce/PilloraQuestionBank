@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
@@ -75,7 +75,10 @@ export default function AutoImport() {
   const [term, setTerm] = useState('')
   const [filter, setFilter] = useState({})
   const [awaiting, setAwaiting] = useState(false)
+  const [unmatched, setUnmatched] = useState(false)
   const statusFilter = awaiting ? AWAITING_QUERY : undefined
+  // The search term's filter plus, when ticked, jobs with answers not yet matched to a question paper.
+  const query = useMemo(() => (unmatched ? { ...filter, unmatched_answers: true } : filter), [filter, unmatched])
 
   const applyList = useCallback(res => {
     setJobs(res.jobs)
@@ -86,19 +89,19 @@ export default function AutoImport() {
 
   const refresh = useCallback(async () => {
     try {
-      applyList(await api.import.listJobs(statusFilter, filter))
+      applyList(await api.import.listJobs(statusFilter, query))
     } catch (e) {
       setListError(e.message)
     }
-  }, [applyList, filter, statusFilter])
+  }, [applyList, query, statusFilter])
 
   useEffect(() => {
     let live = true
-    api.import.listJobs(statusFilter, filter)
+    api.import.listJobs(statusFilter, query)
       .then(res => { if (live) applyList(res) })
       .catch(e => { if (live) setListError(e.message) })
     return () => { live = false }
-  }, [applyList, filter, statusFilter])
+  }, [applyList, query, statusFilter])
 
   // Poll every POLL_MS while any job is queued or running; stops when none is, and on unmount.
   const anyActive = !!jobs && jobs.some(j => ACTIVE.includes(j.status))
@@ -215,6 +218,10 @@ export default function AutoImport() {
         <input type="checkbox" checked={awaiting} onChange={e => setAwaiting(e.target.checked)} />
         Awaiting review
       </label>
+      <label className="flex items-center gap-2 mb-2 text-sm text-gray-700">
+        <input type="checkbox" checked={unmatched} onChange={e => setUnmatched(e.target.checked)} />
+        Unmatched answers
+      </label>
       {parsed === null && (
         <p className="mb-2 text-xs text-gray-500">Enter a job id (UUID) or a numeric paper id.</p>
       )}
@@ -228,7 +235,7 @@ export default function AutoImport() {
       {jobs === null && !listError ? (
         <Spinner />
       ) : jobs && jobs.length === 0 ? (
-        <p className="text-sm text-gray-500">{filter.job_id || filter.paper_id || awaiting ? 'No jobs match.' : 'No import jobs yet.'}</p>
+        <p className="text-sm text-gray-500">{filter.job_id || filter.paper_id || awaiting || unmatched ? 'No jobs match.' : 'No import jobs yet.'}</p>
       ) : jobs ? (
         <table className="w-full text-sm bg-white border border-gray-200 rounded">
           <thead>

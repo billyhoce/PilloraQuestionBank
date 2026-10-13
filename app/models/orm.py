@@ -532,6 +532,9 @@ class IngestPaper(Base):
     matched_ingest_paper_id: Mapped[int | None] = mapped_column(
         ForeignKey("ingest_paper.id", ondelete="SET NULL"), nullable=True
     )
+    matched_ingest_paper: Mapped["IngestPaper | None"] = relationship(
+        "IngestPaper", foreign_keys=[matched_ingest_paper_id], remote_side="IngestPaper.id", post_update=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

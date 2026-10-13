@@ -8,7 +8,7 @@ import {
   deleteRect, getRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 import { startManualImport } from './manualHandoff'
-import AttachPanel from './AttachPanel'
+import MatchPanel from './MatchPanel'
 import MetadataSidebar from './MetadataSidebar'
 import TopicReview from './TopicReview'
 import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
@@ -160,6 +160,8 @@ export default function ReviewPage() {
   const [confirmError, setConfirmError] = useState(null)
   // After a confirm: the created paper's questions, awaiting the topic-review step.
   const [topicStep, setTopicStep] = useState(null)
+  // Papers linked to a paper of another job, by paper key: { filename, paper_key, ... }.
+  const [matches, setMatches] = useState({})
 
   useEffect(() => {
     let live = true
@@ -167,6 +169,7 @@ export default function ReviewPage() {
       .then(r => {
         if (!live) return
         setReview(r)
+        setMatches(r.matches ?? {})
         // Open on the first paper still undecided.
         const first = r.proposal.papers.findIndex(p => !p.outcome)
         if (first > 0) setPaperIdx(first)
@@ -311,6 +314,16 @@ export default function ReviewPage() {
       setConfirmError(e.message)
     } finally {
       setConfirming(false)
+    }
+  }
+
+  async function unlinkPaper() {
+    const key = paper.key
+    try {
+      await api.import.unmatchJobPaper(jobId, key)
+      setMatches(m => ({ ...m, [key]: null }))
+    } catch (e) {
+      setConfirmError(e.message)
     }
   }
 
@@ -557,11 +570,21 @@ export default function ReviewPage() {
                   A paper without questions cannot be imported; skip it.
                 </p>
               )}
+              {!answerOnly && matches[paper.key] && (
+                <p role="status" className="w-52 mb-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
+                  Linked to {matches[paper.key].filename} {matches[paper.key].paper_key}.{' '}
+                  <button type="button" onClick={unlinkPaper} className="text-blue-700 hover:underline">Unlink</button>
+                </p>
+              )}
               {answerOnly ? (
-                <AttachPanel
+                <MatchPanel
                   key={paper.key}
                   jobId={jobId}
                   paper={paper}
+                  metadata={metadata}
+                  refs={refs}
+                  link={matches[paper.key] ?? null}
+                  onLink={link => setMatches(m => ({ ...m, [paper.key]: link }))}
                   onFlush={async () => { if (timer.current) await flush() }}
                   onAttached={jobStatus => decided('attached', jobStatus)}
                   onSkip={handleSkipPaper}

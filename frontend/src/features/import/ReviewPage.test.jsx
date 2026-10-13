@@ -9,11 +9,11 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
-      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), pendingPapers: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
-    topics: { list: vi.fn() }, papers: { get: vi.fn() },
+    topics: { list: vi.fn() }, papers: { get: vi.fn(), list: vi.fn() },
   },
 }))
 
@@ -67,6 +67,8 @@ beforeEach(() => {
   api.examTypes.list.mockResolvedValue([{ id: 5, name: 'EOY' }])
   api.schoolLevels.list.mockResolvedValue([{ id: 9, name: 'Secondary' }])
   api.topics.list.mockResolvedValue([])
+  api.papers.list.mockResolvedValue({ total: 0, items: [] })
+  api.import.pendingPapers.mockResolvedValue([])
 })
 
 describe('ReviewPage', () => {
@@ -344,6 +346,77 @@ describe('ReviewPage', () => {
       await userEvent.click(screen.getByLabelText('Replace the existing answers'))
       await userEvent.click(screen.getByRole('button', { name: 'Attach answers' }))
       await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mode: 'replace' }))
+    })
+
+    describe('Match to paper', () => {
+      const META = { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' }
+      const CONFIRMED = { id: 7, year: 2024, paper_number: '1', school_name: 'RI', level_name: 'Sec 3', subject_name: 'Math' }
+      const PENDING = {
+        ingest_paper_id: 31, job_id: 'j2', filename: 'questions.pdf', paper_key: 'q1', metadata: META,
+        preview: {
+          url: 'https://s3/other-p3.webp', number: 1,
+          page: { page: 3, width_pt: 100, height_pt: 200, width_px: 200, height_px: 400 },
+          rect: { page: 3, x0: 10, y0: 20, x1: 60, y1: 120 },
+        },
+      }
+      const withMeta = () => api.import.review.mockResolvedValue({ ...ANSWERS, paper_metadata: { a1: META } })
+
+      it('lists confirmed and pending candidates for the pre-filled metadata filters', async () => {
+        withMeta()
+        api.papers.list.mockResolvedValue({ total: 1, items: [CONFIRMED, { ...CONFIRMED, id: 8, paper_number: '2' }] })
+        api.import.pendingPapers.mockResolvedValue([PENDING])
+        renderPage()
+        const list = await screen.findByRole('region', { name: 'Candidates' })
+        expect(await within(list).findByText('Paper 7')).toBeInTheDocument()
+        expect(within(list).queryByText('Paper 8')).not.toBeInTheDocument() // other paper number
+        expect(within(list).getByText('Pending: questions.pdf')).toBeInTheDocument()
+        expect(api.papers.list).toHaveBeenLastCalledWith(expect.objectContaining({
+          subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: '2024',
+        }))
+        expect(api.import.pendingPapers).toHaveBeenLastCalledWith(expect.objectContaining({ subject_id: 1, year: '2024', paper_number: '1', exclude_job_id: 'j1' }))
+      })
+
+      it('previews the candidate first question beside this paper first answer, and attaches', async () => {
+        withMeta()
+        api.papers.list.mockResolvedValue({ total: 1, items: [CONFIRMED] })
+        api.papers.get.mockResolvedValue({
+          questions: [{ question_number: 1, pages: [{ page_type: 'question', page_order: 1, url: 'https://s3/q1.webp' }] }],
+        })
+        api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [], modes: {}, job_status: 'review_ready' })
+        renderPage()
+        await userEvent.click(await screen.findByText('Paper 7'))
+        const preview = await screen.findByRole('region', { name: 'Preview' })
+        expect(await within(preview).findByAltText('Candidate first question')).toHaveAttribute('src', 'https://s3/q1.webp')
+        expect(within(preview).getByAltText("This paper's first answer")).toHaveAttribute('src', 'https://s3/p2.webp')
+        expect(screen.getByLabelText('Paper id')).toHaveValue(7)
+        await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
+        await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 }))
+        expect(await screen.findByText(/Attached answers for question 1 to paper 7/)).toBeInTheDocument()
+      })
+
+      it('previews a pending question paper from its review page image and links instead of attaching', async () => {
+        withMeta()
+        api.import.pendingPapers.mockResolvedValue([PENDING])
+        api.import.matchJobPaper.mockResolvedValue({ matches: { filename: 'questions.pdf', paper_key: 'q1', ingest_paper_id: 31, job_id: 'j2' } })
+        api.import.unmatchJobPaper.mockResolvedValue(null)
+        renderPage()
+        await userEvent.click(await screen.findByText('Pending: questions.pdf'))
+        const preview = await screen.findByRole('region', { name: 'Preview' })
+        expect(within(preview).getByAltText('Candidate first question')).toHaveAttribute('src', 'https://s3/other-p3.webp')
+        expect(screen.queryByRole('button', { name: 'Attach to paper…' })).not.toBeInTheDocument()
+        await userEvent.click(screen.getByRole('button', { name: 'Link to this paper' }))
+        expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31)
+        expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
+        await userEvent.click(screen.getByRole('button', { name: 'Unlink' }))
+        expect(api.import.unmatchJobPaper).toHaveBeenCalledWith('j1', 'a1')
+        await waitFor(() => expect(screen.queryByText(/Linked to questions\.pdf/)).not.toBeInTheDocument())
+      })
+
+      it('shows an existing link on load', async () => {
+        api.import.review.mockResolvedValue({ ...ANSWERS, matches: { a1: { filename: 'questions.pdf', paper_key: 'q1' } } })
+        renderPage()
+        expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
+      })
     })
   })
 })

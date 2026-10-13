@@ -16,7 +16,7 @@ DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and
 
 POST   /api/import/uploads          -- (Auto-detect) create an `awaiting_upload` job + presigned S3 POST for one PDF
 POST   /api/import/jobs/{id}/uploaded -- the browser finished its S3 POST: verify the object, queue the job
-GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first, with progress + worker_alive
+GET    /api/import/jobs?status=&unmatched_answers= -- every admin's jobs, newest first, with progress + worker_alive; `unmatched_answers=true` keeps jobs with a pending answer-only paper linked to no question paper
 GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
 POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
 GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
@@ -26,6 +26,9 @@ POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Ma
 POST   /api/import/jobs/{id}/confirm -- crop one reviewed paper into the bank (same response as /confirm)
 POST   /api/import/jobs/{id}/skip   -- skip one proposed paper
 POST   /api/import/jobs/{id}/attach -- attach an answer-only paper's answers to an existing paper
+GET    /api/import/papers/pending   -- pending question papers of other review-ready jobs (match-panel candidates), metadata-filtered
+POST   /api/import/jobs/{id}/papers/{key}/match -- link an answer-only paper to a pending question paper of another job
+DELETE /api/import/jobs/{id}/papers/{key}/match -- remove that link
 DELETE /api/import/jobs/{id}        -- cancel a job
 ```
 
@@ -220,8 +223,8 @@ with each poll. A failed task also has a collapsed "Traceback" (the task's store
 `/admin/import/jobs/:jobId/review` (`ReviewPage`), linked as "Review" from each `review_ready` row of
 the job list. It shows one proposed paper at a time (tabs when there are several; a paper with
 `role: "answer_only"` (`label: null`) holds answers only: its list reads "Answer N" with the number of
-rectangles, and the metadata sidebar is replaced by the attach panel (a paper-id field and "Attach to paper…",
-see [Attaching answers](#attaching-answers-to-an-existing-paper); "Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
+rectangles, and the metadata sidebar is replaced by the "Match to paper…" panel (see
+[Matching by hand](#matching-an-answer-only-paper-by-hand); "Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
 (`needs_review`) has an amber border and its reason as a tooltip. Centre: the clean page image with
 the question rectangles (blue), answer rectangles (green) and unmatched `orphan_answers` (grey,
 dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
@@ -566,5 +569,36 @@ the usual `404`/`409` review rules apply.
   unchanged. `attached` counts as decided, so a job whose papers are all confirmed, skipped or
   attached settles (`confirmed`) and its prefix is dropped.
 - **Response**: `{attached: [numbers], unmatched: [numbers], modes: {number: mode}, job_settled,
-  job_status}`. The review page shows the attached and unmatched numbers; the full matching panel is a
-  later ticket.
+  job_status}`. The review page shows the attached and unmatched numbers.
+
+### Matching an answer-only paper by hand
+
+The review page's **Match to paper…** panel (`MatchPanel.jsx`, which replaced the bare attach panel)
+finds the paper an answer-only paper belongs to.
+
+- **Filters** (subject, stream, level, school, exam type, year, paper number) start from the paper's
+  own metadata (`paper_metadata[key]`) and re-run the search on every change.
+- **Candidates**: confirmed papers from `GET /api/papers` (which has no paper-number filter, so the
+  panel narrows by it client-side) and pending question papers from `GET /api/import/papers/pending`.
+  The latter returns the `ingest_paper` rows with `role = question`, `status = pending` of other
+  `review_ready` jobs (`exclude_job_id` drops the current one) whose metadata equals every given
+  filter (`school_id`, `year`, `level_id`, `subject_id`, `exam_type_id`, `stream_id`, `paper_number`),
+  newest job first. Each has `ingest_paper_id`, `job_id`, `filename`, `paper_key`, `metadata` and a
+  `preview`: the first question's first rectangle with its review page image URL and sizes.
+- **Preview**: the selected candidate's first question beside this paper's first answer. A confirmed
+  candidate shows its first question page image (from `GET /api/papers/{id}`); a pending one shows
+  the rectangle cut out of its review page image (`RectPreview`, via `rectToPx`).
+- **Confirmed candidate -> Attach**: selecting one fills the paper id; the button is the
+  [attach flow](#attaching-answers-to-an-existing-paper) unchanged, including the append/replace
+  prompt. The paper id can also be typed.
+- **Pending candidate -> Link**: there is no paper to attach to yet, so the button links the two
+  ingest papers: `POST /api/import/jobs/{id}/papers/{key}/match {ingest_paper_id}` sets
+  `matched_ingest_paper_id` on both rows (a row's earlier link is released; `422` unless this paper is
+  an answer-only paper and the target a pending question paper of another review-ready job).
+  `DELETE` on the same path unlinks both sides. The review response carries `matches`
+  (`{paper key: {ingest_paper_id, job_id, filename, paper_key}}`); both review pages show
+  "Linked to <filename> <key>" with an Unlink button. Confirming the question paper to pull in the
+  linked answers is not built yet.
+- **Job list**: the "Unmatched answers" checkbox sends `unmatched_answers=true`, keeping jobs with
+  at least one `answer_only` paper that is `pending` and has no `matched_ingest_paper_id`. It combines
+  with the other filters.

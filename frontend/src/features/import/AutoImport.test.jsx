@@ -73,6 +73,19 @@ describe('AutoImport', () => {
     await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, {}))
   })
 
+  it('the Unmatched answers filter combines with the other filters', async () => {
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    await screen.findByText('second.pdf')
+    await userEvent.click(screen.getByLabelText('Unmatched answers'))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, { unmatched_answers: true }))
+    await userEvent.type(screen.getByLabelText('Search jobs by job id or paper id'), '42{enter}')
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, { paper_id: '42', unmatched_answers: true }))
+    await userEvent.click(screen.getByLabelText('Awaiting review'))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith('review_ready,failed', { paper_id: '42', unmatched_answers: true }))
+    await userEvent.click(screen.getByLabelText('Unmatched answers'))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith('review_ready,failed', { paper_id: '42' }))
+  })
+
   it('lists jobs with filename and status; only live jobs can be cancelled', async () => {
     render(<MemoryRouter><AutoImport /></MemoryRouter>)
     expect(await screen.findByText('second.pdf')).toBeInTheDocument()
