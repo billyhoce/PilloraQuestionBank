@@ -116,7 +116,8 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   labels, `unrouted` or warnings. Validation (`422` with a readable message, nothing stored): every
   rectangle has exactly `page,x0,y0,x1,y1`, its page is one of that paper's `pages[]`, `x0<x1`,
   `y0<y1` and it lies inside `[0,width_pt]×[0,height_pt]`; question numbers are positive integers
-  unique within a paper; a question has at least one question rectangle. Question numbers stay
+  unique within a paper; a question has at least one question rectangle, except in an `answer_only`
+  paper (empty `question_rects`, since the answers are its questions; rectangle checks are unchanged). Question numbers stay
   integers (the proposal's type). The next `GET .../review` returns the edit (`edited: true`).
 - `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` (booklet pages, 1-based,
   inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
@@ -213,7 +214,9 @@ with each poll. A failed task also has a collapsed "Traceback" (the task's store
 
 `/admin/import/jobs/:jobId/review` (`ReviewPage`), linked as "Review" from each `review_ready` row of
 the job list. It shows one proposed paper at a time (tabs when there are several; a paper with
-`label: null` is an answer-only paper). Left: a strip of the paper's pages — a flagged page
+`role: "answer_only"` (`label: null`) holds answers only: its list reads "Answer N" with the number of
+rectangles, and "Confirm paper" is replaced by a disabled "Attach to paper…", wired up by a later ticket;
+"Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
 (`needs_review`) has an amber border and its reason as a tooltip. Centre: the clean page image with
 the question rectangles (blue), answer rectangles (green) and unmatched `orphan_answers` (grey,
 dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
@@ -493,7 +496,9 @@ exam_type_id, year, paper_number, is_premium}` (admin, any admin's job; `201`):
 
 1. The job must be `review_ready` and the paper undecided, else `409`; an unknown label is `404`; a
    stream/level from different school levels is `422`, as in `/confirm`. A paper with **no questions**
-   (an unrouted question section whose answers are all orphans) is `422` — it can only be skipped.
+   (an unrouted question section whose answers are all orphans) is `422` — it can only be skipped. So is
+   an **`answer_only`** paper (`role` on the proposal paper; a proposal without `role` is a `question` paper): `422`
+   pointing to attaching it to its question paper, or skipping it.
 2. `app/services/ingest_confirm.py::build_confirm_payload` opens `source.pdf`, and for each rectangle
    of the *edited* proposal (else the original) renders `page.get_pixmap(dpi=300, clip=rect)`,
    `standardize`s it (wider than 1760 px is scaled down), encodes WebP and uploads it with `put_image`

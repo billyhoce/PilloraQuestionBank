@@ -177,6 +177,7 @@ are PDF points on that page, image paths are relative to the job folder.
   "papers": [
     {
       "label": "q1",
+      "role": "question",
       "answer_label": "a1",
       "answer_template": "table",
       "pages": [
@@ -258,6 +259,12 @@ are PDF points on that page, image paths are relative to the job folder.
   page as filed, which is what the review image shows and what a crop of the source PDF needs: the
   rectangle's corners are rotated back about the page centre, the axis-aligned bounding box taken,
   and clipped to the page. Every rectangle in the proposal lies inside its page.
+- **Role.** Every paper has a `role`: `question` (a question section, with or without answers) or
+  `answer_only` (an answer section with no question section). An answer-only paper has no
+  `orphan_answers`: each numbered answer rectangle becomes a question of its own, with empty
+  `question_rects`, so the answers keep their numbers for a later attach (docs/adr/0002-qa-booklet-pairing.md).
+  A question section with no answer section adds a warning, both on its paper and at the top level, so a
+  question-only booklet is flagged rather than silent. A proposal without `role` is a `question` paper.
 - **Flags.** A question's `flags` are, without repetition: `page N: <reason>` for each page it
   touches that the extractor flagged for review (an answer page's reasons are added to the question
   it answers), `pixel_ink` (a rectangle whose bounds came from the pixels, not the text layer) and
@@ -268,7 +275,7 @@ are PDF points on that page, image paths are relative to the job folder.
   whose answer section was still gets a paper: no `questions`, the answer rectangles in
   `orphan_answers` and a paper warning naming why (the scanned booklets whose answer key reads but
   whose question paper cannot be located). An answer section with no question section (an answer-only
-  upload) is a paper with `label: null` and a top-level warning. A paper none of whose sections was
+  upload) is a paper with `label: null`, `role: "answer_only"` and a top-level warning. A paper none of whose sections was
   extracted is omitted.
 
 `report` declares the section manifests, the review folders and the plan as inputs and

@@ -169,6 +169,10 @@ def confirm_job_paper(
     db.refresh(job, with_for_update=True)  # serialise two clicks on the same paper
     _check_open(job, key)
     paper_data = _find_paper(job, key)
+    if paper_data.get("role") == "answer_only":
+        raise ReviewActionError(
+            422, f"Paper {key!r} holds answers only and cannot be confirmed as a paper; attach it to its question paper (or skip it)"
+        )
     if not paper_data.get("questions"):
         raise ReviewActionError(422, f"Paper {key!r} has no questions to import; skip it instead")
     payload, _ = build_confirm_payload(store.get(job.source_key), paper_data, metadata)

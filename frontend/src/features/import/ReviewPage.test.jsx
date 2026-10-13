@@ -260,4 +260,33 @@ describe('ReviewPage', () => {
       expect(await screen.findByText('Paper q1 was already confirmed')).toBeInTheDocument()
     })
   })
+  describe('an answer-only paper', () => {
+    const ANSWERS = {
+      ...REVIEW,
+      proposal: {
+        ...REVIEW.proposal,
+        papers: [{
+          label: null, role: 'answer_only', answer_label: 'a1',
+          pages: [page(2)],
+          questions: [
+            { number: 1, question_rects: [], answer_rects: [{ page: 2, x0: 10, y0: 20, x1: 60, y1: 120 }], flags: [] },
+            { number: 2, question_rects: [], answer_rects: [{ page: 2, x0: 10, y0: 120, x1: 60, y1: 180 }], flags: [] },
+          ],
+          orphan_answers: [], warnings: [],
+        }],
+      },
+    }
+
+    it('lists answers by question number and offers a disabled "Attach to paper..." instead of Confirm', async () => {
+      api.import.review.mockResolvedValue(ANSWERS)
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const list = screen.getByRole('complementary', { name: 'Questions' })
+      expect(within(list).getByText('Answer 1')).toBeInTheDocument()
+      expect(within(list).getByText('Answer 2')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Confirm paper/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Attach to paper…' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Skip this paper' })).toBeEnabled()
+    })
+  })
 })

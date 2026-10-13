@@ -190,6 +190,16 @@ def test_answer_only_paper_is_identified_by_its_answer_label(admin_client, db_se
     assert admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "a1"}).status_code == 201
 
 
+def test_answer_only_role_cannot_be_confirmed_but_can_be_skipped(admin_client, db_session, env, mock_s3):
+    setup, meta = env
+    answers = {**paper(None, "a1", questions=[q(1, [], [r(3)])]), "role": "answer_only"}
+    job = setup(prop=proposal(answers))
+    resp = admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "a1"})
+    assert resp.status_code == 422 and "attach" in resp.json()["detail"]
+    assert db_session.query(Paper).count() == 0
+    assert admin_client.post(f"/api/import/jobs/{job.id}/skip", json={"paper_label": "a1"}).json()["job_status"] == "confirmed"
+
+
 def test_paper_without_questions_can_only_be_skipped(admin_client, db_session, env, mock_s3):
     setup, meta = env
     job = setup(prop=proposal(paper(questions=[], orphans=[r(3)])))

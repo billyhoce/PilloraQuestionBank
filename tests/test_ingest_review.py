@@ -195,3 +195,40 @@ def test_put_wrong_paper_count_and_status(admin_client, db_session, admin_user, 
     other = make_job(db_session, admin_user, status="running")
     assert admin_client.put(f"/api/import/jobs/{other.id}/proposal", json=edit_body()).status_code == 409
     assert admin_client.put(f"/api/import/jobs/{uuid.uuid4()}/proposal", json=edit_body()).status_code == 404
+
+
+# --- answer-only papers --------------------------------------------------------------------
+
+ANSWER_ONLY = {
+    "papers": [{
+        "label": None, "role": "answer_only", "answer_label": "a1", "answer_template": "table",
+        "pages": [page(2)],
+        "questions": [{"number": 3, "question_rects": [], "answer_rects": [rect(2)], "flags": []}],
+        "orphan_answers": [], "warnings": [],
+    }],
+    "unrouted": [], "warnings": [],
+}
+
+
+def test_put_accepts_empty_question_rects_for_an_answer_only_paper(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user, proposal=ANSWER_ONLY)
+    body = {"papers": [{"questions": ANSWER_ONLY["papers"][0]["questions"], "orphan_answers": []}]}
+    assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=body).status_code == 200
+    db_session.refresh(job)
+    assert job.proposal_edited["papers"][0]["role"] == "answer_only"
+
+
+def test_answer_only_paper_rectangle_checks_stay_strict(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user, proposal=ANSWER_ONLY)
+    bad = {"number": 3, "question_rects": [], "flags": [],
+           "answer_rects": [{"page": 2, "x0": 72.0, "y0": 100.0, "x1": 700.0, "y1": 160.0}]}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json={"papers": [{"questions": [bad], "orphan_answers": []}]})
+    assert r.status_code == 422 and "outside page 2" in r.json()["detail"]
+
+
+def test_a_question_paper_and_a_roleless_old_proposal_still_need_question_rects(admin_client, db_session, admin_user, fake_object_store):
+    old = {"papers": [{k: v for k, v in ANSWER_ONLY["papers"][0].items() if k != "role"}], "unrouted": [], "warnings": []}
+    job = make_job(db_session, admin_user, proposal=old)
+    body = {"papers": [{"questions": ANSWER_ONLY["papers"][0]["questions"], "orphan_answers": []}]}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=body)
+    assert r.status_code == 422 and "at least one rectangle" in r.json()["detail"]

@@ -13,8 +13,16 @@ are PDF points on that booklet page in its original, unstraightened frame.
 
 Rectangles are never dropped. A question's rectangles go under its ``question_rects``;
 an answer rectangle goes to the question with the same number, or under
-``orphan_answers`` when there is none; so every rectangle of every extracted section's
+``orphan_answers`` when there is none (in an answer-only paper there is no question to
+match, so each answer number becomes a question of its own); so every rectangle of every extracted section's
 manifest is in the proposal exactly once.
+
+A paper has a ``role``. ``question`` is the usual paper (a question section, usually with
+its answer section). ``answer_only`` is an answer section with no question section of its
+own, such as answers uploaded apart from the questions: its answer rectangles keep their
+question numbers, as questions with empty ``question_rects``, so a later step can attach
+them to the question paper they belong to. A question section with no answer section is
+flagged by a warning.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ from question_extractor.render import REVIEW_SUBDIR, review_filename
 from . import artefacts
 
 PAGES_DIR = "pages"
+ROLE_QUESTION = "question"
+ROLE_ANSWER_ONLY = "answer_only"
 
 
 def page_image(page: int) -> str:
@@ -117,6 +127,8 @@ def build(
         a = next((x for x in answers if x.index == q.index and x.label not in taken), None)
         if a is not None:
             taken.add(a.label)
+        elif q.label in loaded:
+            warnings.append(f"{q.label}: question section has no answer section with index {q.index}")
         if q.label not in loaded and not (a is not None and a.label in loaded):
             continue  # nothing of this paper was extracted: it is in ``unrouted``
         papers.append(_paper(job_dir, staging, q.label, a, loaded, by_label, tolerance))
@@ -197,7 +209,12 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
                         flags.append(flag)
             if is_answer:
                 target = questions.get(number)
-                if target is None:
+                if target is None and q_label is None:
+                    # An answer-only paper: the answers are the questions, kept by number.
+                    questions[number] = {
+                        "number": number, "question_rects": [], "answer_rects": rects, "flags": flags,
+                    }
+                elif target is None:
                     orphans.extend(rects)
                 else:
                     target["answer_rects"].extend(rects)
@@ -210,8 +227,13 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
     # The answer section's questions were read after the question section's in the loop
     # above, so every question of the paper is known when an answer rectangle looks for it.
     pages.sort(key=lambda p: p["page"])
+    if a_label is None:
+        warnings.append(f"{q_label}: no answer section in this booklet; the paper has question pages only")
+    if q_label is None:
+        warnings.append(f"{a_label}: answer-only paper; its answers keep their question numbers and need attaching to a question paper")
     return {
         "label": q_label,
+        "role": ROLE_QUESTION if q_label is not None else ROLE_ANSWER_ONLY,
         "answer_label": a_label,
         "answer_template": answer.template if answer is not None else None,
         "pages": pages,

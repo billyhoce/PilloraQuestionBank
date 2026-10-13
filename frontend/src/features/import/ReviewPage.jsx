@@ -12,6 +12,9 @@ import MetadataSidebar from './MetadataSidebar'
 import TopicReview from './TopicReview'
 import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
 
+// Proposals from before roles existed have no `role`: they are question papers.
+const isAnswerOnly = paper => paper?.role === 'answer_only'
+
 function paperTitle(paper, i) {
   return paper.label ? `${paper.label}${paper.answer_label ? ` / ${paper.answer_label}` : ''}` : `Answers ${paper.answer_label ?? i + 1}`
 }
@@ -193,6 +196,7 @@ export default function ReviewPage() {
 
   const papers = review?.proposal.papers ?? []
   const paper = papers[paperIdx]
+  const answerOnly = isAnswerOnly(paper)
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
 
   function choosePaper(i) {
@@ -202,7 +206,7 @@ export default function ReviewPage() {
   }
 
   function chooseQuestion(k) {
-    setSel({ list: 'question', q: k, i: 0 })
+    setSel({ list: isAnswerOnly(paper) ? 'answer' : 'question', q: k, i: 0 })
     const p = firstPageOf(paper.questions[k])
     if (p != null) setPageNo(p)
   }
@@ -458,8 +462,13 @@ export default function ReviewPage() {
                           onClick={() => chooseQuestion(k)}
                           className="flex-1 text-left text-sm"
                         >
-                          <span className="font-medium">Question {q.number}</span>
-                          {q.answer_rects.length === 0 && <span className="text-xs text-gray-500"> (no answer)</span>}
+                          <span className="font-medium">{answerOnly ? 'Answer' : 'Question'} {q.number}</span>
+                          {answerOnly && (
+                            <span className="text-xs text-gray-500">
+                              {' '}({q.answer_rects.length} rectangle{q.answer_rects.length === 1 ? '' : 's'})
+                            </span>
+                          )}
+                          {!answerOnly && q.answer_rects.length === 0 && <span className="text-xs text-gray-500"> (no answer)</span>}
                           {q.flags.map(f => (
                             <span key={f} className="block text-xs text-amber-800">{f}</span>
                           ))}
@@ -505,6 +514,11 @@ export default function ReviewPage() {
             <p role="status" className="w-52 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
           ) : (
             <div className="shrink-0">
+              {answerOnly && (
+                <p className="w-52 mb-2 text-xs text-gray-600">
+                  These are answers only, with no question paper in this booklet. Attach them to the paper they belong to.
+                </p>
+              )}
               {paper.questions.length === 0 && (
                 <p className="w-52 mb-2 text-xs text-amber-800">
                   A paper without questions cannot be imported; skip it.
@@ -520,9 +534,11 @@ export default function ReviewPage() {
                 onCancel={handleSkipPaper}
                 loading={confirming}
                 error={confirmError}
-                confirmLabel="Confirm paper →"
+                confirmLabel={answerOnly ? 'Attach to paper…' : 'Confirm paper →'}
                 cancelLabel="Skip this paper"
-                canConfirm={paper.questions.length > 0}
+                // An answer-only paper cannot be confirmed as a paper of its own: its answers are
+                // attached to a question paper instead (a later step wires the button up).
+                canConfirm={!answerOnly && paper.questions.length > 0}
               />
             </div>
           )}
