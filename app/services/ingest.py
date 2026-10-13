@@ -7,7 +7,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
-from app.logger import Timer, log
+from app.logger import Timer, log, log_event
 from app.models.orm import Paper, Question, QuestionPage, QuestionPart
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
@@ -77,9 +77,9 @@ def upload_pages(
             i += 1
 
         n = len(pages)
-        log.info(f"{'upload_pages':<22}| rasterize | {t_raster:.3f}s  ({n} pages)")
-        log.info(f"{'upload_pages':<22}| img_proc  | {t_proc:.3f}s  ({n} pages)")
-        log.info(f"{'upload_pages':<22}| s3_upload | {t_s3:.3f}s  ({n} pages)")
+        log_event("upload_pages", "rasterize", seconds=round(t_raster, 3), pages=n)
+        log_event("upload_pages", "img_proc", seconds=round(t_proc, 3), pages=n)
+        log_event("upload_pages", "s3_upload", seconds=round(t_s3, 3), pages=n)
 
         with Timer() as t_meta:
             suggested = (
@@ -87,9 +87,9 @@ def upload_pages(
                 if suggested_metadata is not None
                 else extract_metadata(filename, db)
             )
-        log.info(f"{'upload_pages':<22}| ai_extract| {t_meta.s}")
+        log_event("upload_pages", "ai_extract", seconds=t_meta.s)
 
-    log.info(f"{'upload_pages':<22}| TOTAL     | {t_total.s}")
+    log_event("upload_pages", "total", seconds=t_total.s)
     return {"pages": pages, "suggested_metadata": suggested}
 
 
@@ -177,7 +177,7 @@ def confirm_import(
         try:
             delete_object(temp_key)
         except Exception:
-            log.warning(f"{'confirm_import':<22}| temp_delete_failed | key={temp_key}", exc_info=True)
+            log.warning("confirm_import/temp_delete_failed key=%s", temp_key, exc_info=True)
 
     return paper
 

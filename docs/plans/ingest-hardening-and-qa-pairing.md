@@ -124,7 +124,7 @@ This is the same failure family as B1.
 **Goal:** given a job UUID, which the admin can see in the UI, show every log line, task attempt,
 Claude call and resulting paper for it.
 
-### 1.1 Stamp context on every log record
+### 1.1 Stamp context on every log record (DONE)
 
 - Add `app/log_context.py` (a contextvar holding `job_id`, `section`, `stage`, `task_attempt`) and a
   `logging.Filter` that copies it onto each record.
@@ -140,7 +140,7 @@ Claude call and resulting paper for it.
 - In the API, set `job_id` in the job routes (`/jobs/{id}/…`) and add a request-id middleware: an
   `X-Request-ID` header is generated if absent, echoed in the response and put on every record.
 
-### 1.2 One log format, to stdout, in both containers
+### 1.2 One log format, to stdout, in both containers (DONE)
 
 - Replace the file handler in `app/logger.py` with a stdout handler and a **JSON formatter**
   (`python-json-logger`, or a ~20-line formatter). Fields: `ts, level, logger, msg, job_id, section,

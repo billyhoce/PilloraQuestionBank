@@ -1,26 +1,12 @@
 import logging
-import os
 import time
-from logging.handlers import RotatingFileHandler
-
-os.makedirs("logs", exist_ok=True)
 
 log = logging.getLogger("pillora")
-log.setLevel(logging.INFO)
 
-_handler = RotatingFileHandler(
-    "logs/app.log",
-    maxBytes=10 * 1024 * 1024,  # 10 MB
-    backupCount=5,
-    encoding="utf-8",
-)
-_handler.setFormatter(
-    logging.Formatter(
-        fmt="%(asctime)s.%(msecs)03d | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-)
-log.addHandler(_handler)
+
+def log_event(func: str, step: str, level: int = logging.INFO, **fields) -> None:
+    """One structured line: ``msg`` is ``func/step`` and the fields ride as JSON keys."""
+    log.log(level, "%s/%s", func, step, extra={"fields": {"func": func, "step": step, **fields}})
 
 
 class Timer:
@@ -32,8 +18,9 @@ class Timer:
         self.elapsed = time.perf_counter() - self._start
 
     @property
-    def s(self) -> str:
-        return f"{self.elapsed:.3f}s"
+    def s(self) -> float:
+        """Elapsed seconds, rounded to the millisecond (a number, for structured fields)."""
+        return round(self.elapsed, 3)
 
 
 # USD per million tokens. Cache writes bill at 1.25x input, cache reads at 0.1x.
@@ -74,11 +61,11 @@ def log_tokens(func: str, model: str, usage) -> None:
     cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
     ch = getattr(usage, "cache_read_input_tokens", 0) or 0
 
-    token_str = f"in={inp} out={out}"
+    fields = {"model": model, "input_tokens": inp, "output_tokens": out}
     if cw:
-        token_str += f" cache_write={cw}"
+        fields["cache_write"] = cw
     if ch:
-        token_str += f" cache_hit={ch}"
+        fields["cache_hit"] = ch
 
     prices = _PRICES.get(model)
     if prices:
@@ -88,6 +75,6 @@ def log_tokens(func: str, model: str, usage) -> None:
             + ch * prices["cache_hit"]
             + out * prices["output"]
         ) / 1_000_000
-        token_str += f" cost=${cost:.6f}"
+        fields["cost_usd"] = round(cost, 6)
 
-    log.info(f"{func:<22}| tokens  | {token_str}")
+    log_event(func, "tokens", **fields)

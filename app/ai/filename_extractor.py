@@ -1,6 +1,6 @@
 import anthropic
 
-from app.logger import Timer, log, log_tokens
+from app.logger import Timer, log_event, log_tokens
 from app.models.orm import ExamType, Level, School, Subject
 
 _EMPTY: dict = {
@@ -148,11 +148,11 @@ def extract_metadata(filename: str, db) -> dict:
                         }
                     ],
                 )
-            log.info(f"{'extract_metadata':<22}| haiku     | {t_call.s}")
+            log_event("extract_metadata", "haiku", seconds=t_call.s)
             log_tokens("extract_metadata", "claude-haiku-4-5-20251001", resp.usage)
             extracted = resp.content[0].input  # dict — no JSON parsing needed
             result = resolve_metadata(extracted, ref_data)
         except Exception:
             result = dict(_EMPTY)
-    log.info(f"{'extract_metadata':<22}| TOTAL     | {t_total.s}")
+    log_event("extract_metadata", "total", seconds=t_total.s)
     return result

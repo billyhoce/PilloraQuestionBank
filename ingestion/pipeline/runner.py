@@ -19,6 +19,7 @@ claim.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -27,6 +28,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from question_extractor.logcontext import log_context
 from question_extractor.warnscope import collect_warnings
 
 from . import fingerprint
@@ -164,11 +166,19 @@ class Runner:
     def run_one(self) -> Task | None:
         """Claim one ready task, run it, record it. ``None`` when nothing is ready."""
         for stale in self.store.reset_stale(self.config.retry_limit):
-            log.warning("task %s %s: lease expired (%s)", stale.stage, stale.section, stale.status)
+            log.warning("job %s task %s %s: lease expired (%s)", stale.job_id, stale.stage,
+                        stale.section, stale.status)
             self._refresh(stale.job_id)
         task = self.store.claim_ready(self.config.lease_seconds)
         if task is None:
             return None
+        with log_context(job_id=task.job_id, section=task.section, stage=task.stage,
+                         task_attempt=task.attempts):
+            self._run_claimed(task)
+        return task
+
+    def _run_claimed(self, task: Task) -> None:
+        """Run a claimed task, every log line of it stamped with the task's context."""
         self._refresh(task.job_id)
         stage, ctx = self._prepare(task, {t.key: t for t in self.store.tasks(task.job_id)})
         expected = self._fingerprint(stage, ctx)
@@ -179,7 +189,8 @@ class Runner:
         )
         if unchanged:
             # What the claim returns of the last run is what is still on disk: keep it.
-            log.info("%s %s: unchanged, not run again", task.stage, task.section or "-")
+            log.info("job %s %s %s: unchanged, not run again", task.job_id, task.stage,
+                     task.section or "-")
             outcome = Outcome(
                 DONE,
                 reason=UNCHANGED,
@@ -201,7 +212,6 @@ class Runner:
                 spawn=() if unchanged else self._fan_out(task, stage, outcome),
             )
         self._refresh(task.job_id)
-        return task
 
     def run(self, *, watch: bool = False) -> int:
         """Drain the queue; with ``watch`` keep polling for new work. Returns tasks run."""
@@ -265,7 +275,11 @@ class Runner:
     def _execute(self, task: Task, stage: Stage, ctx: StageContext) -> Outcome:
         ctx.job_dir.mkdir(parents=True, exist_ok=True)
         stopped = threading.Event()
-        beat = threading.Thread(target=self._heartbeats, args=(task.id, stopped), daemon=True)
+        beat = threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(self._heartbeats, task.id, stopped),
+            daemon=True,
+        )
         beat.start()
         started = self._clock()
         try:
@@ -279,9 +293,10 @@ class Runner:
             stopped.set()
             beat.join()
         if outcome.status == FAILED:
-            log.error("%s %s failed: %s", task.stage, task.section or "-", outcome.error)
-        log.info("%s %s: %s in %.1fs", task.stage, task.section or "-", outcome.status,
-                 self._clock() - started)
+            log.error("job %s %s %s failed: %s", task.job_id, task.stage, task.section or "-",
+                      outcome.error)
+        log.info("job %s %s %s: %s in %.1fs", task.job_id, task.stage, task.section or "-",
+                 outcome.status, self._clock() - started)
         warnings = tuple(dict.fromkeys((*outcome.warnings, *collected)))
         return Outcome(
             status=outcome.status,
@@ -396,7 +411,8 @@ class Runner:
         tasks = sorted(tasks, key=lambda t: t.id)
         if tasks:
             for task in tasks:
-                log.info("%s %s: %s, back to the queue", task.stage, task.section or "-", why)
+                log.info("job %s %s %s: %s, back to the queue", task.job_id, task.stage,
+                         task.section or "-", why)
             self.store.reopen([t.id for t in tasks])
             self._refresh(job_id)
         return tasks

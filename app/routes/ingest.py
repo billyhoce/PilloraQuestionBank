@@ -14,7 +14,8 @@ from app.deps import (
     get_object_store,
     get_question_labeller,
 )
-from app.logger import Timer, log
+from app.log_context import set_context
+from app.logger import Timer, log, log_event
 from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
@@ -136,7 +137,7 @@ def upload_pdf(
     with Timer() as t:
         pdf_bytes = file.file.read()
         result = upload_pages(pdf_bytes, file.filename or "", db)
-    log.info(f"{'upload_pdf':<22}| TOTAL     | {t.s}")
+    log_event("upload_pdf", "total", seconds=t.s)
     return result
 
 
@@ -209,7 +210,7 @@ def ai_topics(
                 .filter(Question.id == payload.question_id)
                 .first()
             )
-        log.info(f"{'ai_topics':<22}| db_query  | {t_db.s}")
+        log_event("ai_topics", "db_query", seconds=t_db.s)
 
         if question is None:
             raise HTTPException(status_code=404, detail="Question not found")
@@ -223,7 +224,7 @@ def ai_topics(
                 .order_by(Topic.topic_number)
                 .all()
             )
-        log.info(f"{'ai_topics':<22}| db_topics | {t_topics.s}")
+        log_event("ai_topics", "db_topics", seconds=t_topics.s)
 
         topics = [
             {
@@ -244,7 +245,7 @@ def ai_topics(
             with Timer() as _t:
                 raw_list.append(fetch_bytes(p.image_key))
             t_s3 += _t.elapsed
-        log.info(f"{'ai_topics':<22}| s3_fetch  | {t_s3:.3f}s  ({n} pages)")
+        log_event("ai_topics", "s3_fetch", seconds=round(t_s3, 3), pages=n)
 
         t_ds = 0.0
         image_bytes_list = []
@@ -252,32 +253,32 @@ def ai_topics(
             with Timer() as _t:
                 image_bytes_list.append(downscale_for_ai(raw))
             t_ds += _t.elapsed
-        log.info(f"{'ai_topics':<22}| downscale | {t_ds:.3f}s  ({n} pages)")
+        log_event("ai_topics", "downscale", seconds=round(t_ds, 3), pages=n)
 
         try:
             with Timer() as t_label:
                 result = label_question(question, topics, image_bytes_list)
-            log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
+            log_event("ai_topics", "ai_label", seconds=t_label.s)
         except TruncatedResponseError as e:
-            log.error(f"{'ai_topics':<22}| truncated | question_id={payload.question_id} {e}")
+            log.error("ai_topics/truncated question_id=%s: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=502,
                 detail="The AI response was cut off — please retry this question.",
             )
         except anthropic.RateLimitError as e:
-            log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
+            log.error("ai_topics/rate_limit question_id=%s: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=429,
                 detail="AI topic labeling is rate limited — please retry in a moment.",
             )
         except anthropic.APIError as e:
-            log.error(f"{'ai_topics':<22}| api_error | question_id={payload.question_id} {e}")
+            log.error("ai_topics/api_error question_id=%s: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=503,
                 detail="AI topic labeling is temporarily unavailable — please retry.",
             )
 
-    log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
+    log_event("ai_topics", "total", seconds=t_total.s)
     return {"parts": result["parts"]}
 
 
@@ -380,6 +381,7 @@ def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    set_context(job_id=str(job.id), user_id=str(user.id))
     return job
 
 
@@ -397,6 +399,7 @@ def create_ingest_job(
         job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
     except InvalidPdfError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    set_context(job_id=str(job.id), user_id=str(current_user.id))
     return {"job_id": str(job.id)}
 
 
@@ -467,7 +470,7 @@ def cancel_ingest_job(
     try:
         store.delete_prefix(prefix)
     except Exception:
-        log.error(f"{'cancel_ingest_job':<22}| s3_delete | prefix={prefix}")
+        log.error("cancel_ingest_job/s3_delete failed prefix=%s", prefix)
     return None
 
 

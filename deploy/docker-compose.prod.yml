@@ -18,6 +18,12 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
+    # Bounded, greppable history across restarts: `docker logs <container> | grep <job id>`.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else sys.exit(1)"]
       interval: 30s
@@ -37,3 +43,9 @@ services:
     cpus: "1.0"
     mem_limit: 6g
     restart: unless-stopped
+    # Bounded, greppable history across restarts: `docker logs <container> | grep <job id>`.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

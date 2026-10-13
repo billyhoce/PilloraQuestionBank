@@ -2,7 +2,7 @@ import base64
 
 import anthropic
 
-from app.logger import Timer, log, log_tokens
+from app.logger import Timer, log_event, log_tokens
 
 MODEL = "claude-haiku-4-5-20251001"
 
@@ -148,7 +148,7 @@ def label_question(
             tools=[LABEL_PARTS_TOOL],
             tool_choice={"type": "tool", "name": "label_parts"},
         )
-    log.info(f"{'label_question':<22}| haiku     | {t_call.s}")
+    log_event("label_question", "haiku", seconds=t_call.s)
     log_tokens("label_question", MODEL, resp.usage)
 
     # Check before touching content: a truncated tool call may not even carry a
