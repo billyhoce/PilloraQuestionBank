@@ -135,6 +135,34 @@ def fill_cover_pages(segments: tuple[Segment, ...]) -> tuple[Segment, ...]:
     )
 
 
+def pair_segments(segments) -> list[tuple[Segment | None, Segment | None]]:
+    """The booklet's papers as ``(question, answer)`` segment pairs, in proposal order.
+
+    The one place that decides which segments make a paper, so the proposal and anything that
+    keys data per paper before the proposal exists (the webapp's per-paper metadata) agree.
+    An answer section takes the question section with the same ``index``; a question with no
+    such answer is ``(q, None)``, and an answer no question claimed is ``(None, a)`` (an
+    answer-only paper), after all the question papers.
+    """
+    questions = [s for s in segments if s.kind == "question"]
+    answers = [s for s in segments if s.kind == "answer"]
+    taken: set[str] = set()
+    pairs: list[tuple[Segment | None, Segment | None]] = []
+    for q in questions:
+        a = next((x for x in answers if x.index == q.index and x.label not in taken), None)
+        if a is not None:
+            taken.add(a.label)
+        pairs.append((q, a))
+    pairs.extend((None, a) for a in answers if a.label not in taken)
+    return pairs
+
+
+def paper_key(question: Segment | None, answer: Segment | None) -> str:
+    """A paper's key: its question label (``q1``), else its answer label (``a1``) when answer-only.
+    The proposal's ``label`` / ``answer_label`` give the same key (``app.services.ingest_confirm``)."""
+    return (question or answer).label
+
+
 @dataclass(frozen=True)
 class Attempt:
     """One request to one model, and whether its answer was accepted."""

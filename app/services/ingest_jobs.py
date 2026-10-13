@@ -118,26 +118,29 @@ def finish_upload(job: IngestJob, admin: Any, db: Session, store: ObjectStore) -
     return job
 
 
-def record_filename_metadata(job: IngestJob, db: Session, extract_metadata) -> dict:
-    """Run the filename extraction for ``job`` and store it in ``report["filename_metadata"]``.
+def extract_paper_metadata_safely(extract_metadata, filename: str, db: Session, cover: bytes | None) -> dict:
+    """One paper's metadata; never raises. A failed call with a cover falls back to the filename
+    alone, and a failure there to empty metadata, so metadata never fails the segment task."""
+    for attempt in ((cover, None) if cover is not None else (None,)):
+        try:
+            return extract_metadata(filename, db, cover=attempt)
+        except Exception:
+            log.exception("paper metadata extraction failed (cover=%s)", attempt is not None)
+    return {}
 
-    Called by the worker's ``register`` task (not by the POST, which must return fast). The
-    review/confirm step reads the result to pre-fill the metadata sidebar. Any failure falls back
-    to empty metadata so the job still proceeds. ``extract_metadata`` is injected (see
-    ``app.deps.get_metadata_extractor``) so tests need no Claude call.
+
+def record_paper_metadata(job: IngestJob, db: Session, papers: dict[str, dict]) -> None:
+    """Merge ``papers`` (paper key to metadata) into ``report["paper_metadata"]``.
+
+    Called by the worker's ``segment`` task, after the extractions (each adds its cost to
+    ``report["cost"]`` from another session, so this holds the row lock only for the write).
+    Locks the job row and re-reads it so the write does not clobber that cost, and commits.
     """
-    try:
-        metadata = extract_metadata(job.filename, db)
-    except Exception:
-        log.exception("filename metadata extraction failed for job %s", job.id)
-        metadata = {}
-    # The extraction adds its cost to ``report["cost"]`` from another session; re-read so the
-    # write below does not clobber it.
-    db.refresh(job)
-    # Reassign rather than mutate: JSON columns are not change-tracked in place.
-    job.report = {**(job.report or {}), "filename_metadata": metadata}
-    db.flush()
-    return metadata
+    db.get(IngestJob, job.id, with_for_update=True, populate_existing=True)
+    report = dict(job.report or {})
+    report["paper_metadata"] = {**(report.get("paper_metadata") or {}), **papers}
+    job.report = report  # reassign: JSON columns are not change-tracked in place
+    db.commit()
 
 
 def cancel_job(job: IngestJob, db: Session | None = None, actor: Any = None) -> str:

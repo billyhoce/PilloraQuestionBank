@@ -12,8 +12,11 @@ stages of the registry (:func:`wrap_registry`) and by resolving each job's scrat
 * ``register`` -- before the stage, the PDF check (:func:`check_pdf`): a corrupt, password-protected
   or empty booklet fails the task with a readable reason (a failed task is not retried on its own,
   so it ends as a ``failed`` job whose ``error`` says why). After the stage, the job's ``page_count``
-  and ``sha256`` (read from ``job.json``, which ``register`` wrote) and the filename-metadata
-  extraction (it needs the app's reference data), stored in ``ingest_job.report["filename_metadata"]``;
+  and ``sha256`` (read from ``job.json``, which ``register`` wrote);
+* ``segment`` -- after the stage, each paper's metadata is read from its own cover (one Claude call
+  per segment pair, :func:`ingester.segments.pair_segments`; it needs the app's reference data) and
+  stored in ``ingest_job.report["paper_metadata"][paper_key]``, the key the proposal uses for that
+  paper. A failed call falls back to the filename alone, then to empty metadata: it never fails the task;
 * ``report`` -- after the stage, the review images ``pages/pNN.webp`` are uploaded to
   ``tmp/ingest/{job_id}/pages/`` and the proposal and the run summary are stored on the job row.
   The images are uploaded here rather than at ``render`` because the job-level ``pages/`` folder
@@ -37,6 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import fitz  # PyMuPDF
+from ingester.segments import SEGMENTS_NAME, paper_key, pair_segments, read_plan
 from pipeline import artefacts
 from pipeline.outcome import DONE, FAILED, Outcome, StageContext, failed
 from pipeline.registry import Registry, Stage
@@ -45,7 +49,13 @@ from sqlalchemy.orm import Session
 
 from app.logger import log_job_event
 from app.models.orm import IngestJob
-from app.services.ingest_jobs import job_prefix, record_filename_metadata, source_key_for
+from app.services.ingest_jobs import (
+    extract_paper_metadata_safely,
+    job_prefix,
+    record_paper_metadata,
+    source_key_for,
+)
+from app.services.ingest_review import extract_pages
 from app.storage.object_store import ObjectStore
 from app.worker.store import API_OWNED, SOURCE_NAME, SqlStore
 
@@ -139,7 +149,6 @@ class Edges:
             job = db.get(IngestJob, uuid.UUID(ctx.job_id))
             if job is not None:
                 self._record_identity(ctx, db, job)
-                record_filename_metadata(job, db, self._extract_metadata)
                 db.commit()
         return outcome
 
@@ -151,8 +160,46 @@ class Edges:
         info = artefacts.read_json(path)
         job.page_count = info.get("page_count")
         job.sha256 = info.get("sha256")
-        db.flush()  # the filename extraction that follows refreshes the row
         log_job_event(job.id, "registered", sha256=job.sha256, page_count=job.page_count)
+
+    def after_segment(self, ctx: StageContext, outcome: Outcome) -> Outcome:
+        """Read each paper's metadata from its own cover and store it by paper key."""
+        path = ctx.path(SEGMENTS_NAME)
+        if not path.is_file():
+            return outcome
+        try:
+            plan = read_plan(path, pdf=ctx.source)
+        except (OSError, ValueError, KeyError):
+            log.warning("job %s: unreadable segments.json; no paper metadata", ctx.job_id)
+            return outcome
+        job_uuid = uuid.UUID(ctx.job_id)
+        with self._factory() as db:
+            job = db.get(IngestJob, job_uuid)
+            if job is None or job.status in API_OWNED:
+                return outcome
+            source = ctx.source.read_bytes()
+            papers: dict[str, dict] = {}
+            for question, answer in pair_segments(plan.segments):
+                key = paper_key(question, answer)
+                cover = self._cover_pdf(source, question or answer, job_uuid)
+                papers[key] = extract_paper_metadata_safely(self._extract_metadata, job.filename, db, cover)
+                log_job_event(
+                    job_uuid, "paper_metadata", paper=key, cover=cover is not None,
+                    fields=sorted(k for k, v in papers[key].items() if v is not None),
+                )
+            if papers:
+                record_paper_metadata(job, db, papers)
+        return outcome
+
+    @staticmethod
+    def _cover_pdf(source: bytes, section, job_uuid: uuid.UUID) -> bytes | None:
+        """The section's cover pages as a PDF, else its first page; ``None`` if they cannot be cut."""
+        pages = list(section.cover_pages) or [section.first_page]
+        try:
+            return extract_pages(source, pages)
+        except Exception:
+            log.warning("job %s: could not cut the cover of %s", job_uuid, section.label)
+            return None
 
     def after_report(self, ctx: StageContext, outcome: Outcome) -> Outcome:
         job_uuid = uuid.UUID(ctx.job_id)
@@ -248,7 +295,7 @@ class Edges:
         }
 
     def hooks(self) -> dict[str, Callable[[StageContext, Outcome], Outcome]]:
-        return {"register": self.after_register, "report": self.after_report}
+        return {"register": self.after_register, "segment": self.after_segment, "report": self.after_report}
 
     def before_hooks(self) -> dict[str, Callable[[StageContext], Outcome | None]]:
         return {"register": self.before_register}

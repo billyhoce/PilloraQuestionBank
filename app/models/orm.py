@@ -474,7 +474,8 @@ class IngestJob(Base):
     )
     proposal: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
     proposal_edited: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
-    # Run report; the worker's ``register`` task stores ``filename_metadata`` here.
+    # Run report; the worker's ``segment`` task stores ``paper_metadata`` (by paper key) here;
+    # jobs from before that have ``filename_metadata``.
     report: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
     # Debug bundle copied at report time, once the scratch folder is gone: {"segments": <segments.json>,
     # "ingest": <ingest.json>}. The only trace of the pipeline's artefacts a settled job keeps.

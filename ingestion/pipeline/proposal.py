@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pymupdf
 from ingester.router import EXTRACTED, SectionReport
-from ingester.segments import SegmentPlan
+from ingester.segments import SegmentPlan, pair_segments
 from question_extractor.render import REVIEW_SUBDIR, review_filename
 
 from . import artefacts
@@ -119,24 +119,19 @@ def build(
         )
 
     # Pair by the segment index: "an answer paper takes its question paper's index".
-    questions = [s for s in segments if s.kind == "question"]
-    answers = [s for s in segments if s.kind == "answer"]
-    taken: set[str] = set()
     papers: list[dict] = []
-    for q in questions:
-        a = next((x for x in answers if x.index == q.index and x.label not in taken), None)
-        if a is not None:
-            taken.add(a.label)
-        elif q.label in loaded:
-            warnings.append(f"{q.label}: question section has no answer section with index {q.index}")
-        if q.label not in loaded and not (a is not None and a.label in loaded):
-            continue  # nothing of this paper was extracted: it is in ``unrouted``
-        papers.append(_paper(job_dir, staging, q.label, a, loaded, by_label, tolerance))
-    for a in answers:  # an answer paper with no question paper of its own
-        if a.label in taken or a.label not in loaded:
-            continue
-        warnings.append(f"{a.label}: answer section has no question section with index {a.index}")
-        papers.append(_paper(job_dir, staging, None, a, loaded, by_label, tolerance))
+    for q, a in pair_segments(segments):
+        if q is not None:
+            if a is None and q.label in loaded:
+                warnings.append(f"{q.label}: question section has no answer section with index {q.index}")
+            if q.label not in loaded and not (a is not None and a.label in loaded):
+                continue  # nothing of this paper was extracted: it is in ``unrouted``
+            papers.append(_paper(job_dir, staging, q.label, a, loaded, by_label, tolerance))
+        else:  # an answer paper with no question paper of its own
+            if a.label not in loaded:
+                continue
+            warnings.append(f"{a.label}: answer section has no question section with index {a.index}")
+            papers.append(_paper(job_dir, staging, None, a, loaded, by_label, tolerance))
 
     unrouted = [
         {

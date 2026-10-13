@@ -3,6 +3,7 @@
 import json
 import uuid
 
+import fitz
 import pytest
 from pipeline.config import PipelineConfig
 from pipeline.outcome import done, failed
@@ -14,6 +15,17 @@ from app.models.orm import IngestJob, IngestTask
 from app.worker.main import Worker, WorkerSettings, load_settings
 from tests.conftest import FakeObjectStore
 from tests.worker_support import PDF_BYTES, LOCKED_PDF_BYTES, make_job, make_session_factory, make_user
+
+def _segment(label, first, last, cover=()):
+    kind = "question" if label[0] == "q" else "answer"
+    return {
+        "label": label, "kind": kind, "index": int(label[1:]), "first_page": first, "last_page": last,
+        "cover_pages": list(cover),
+    }
+
+
+# q1 (cover = page 1) with its answer, and an answer-only a2
+PLAN = {"pdf": "source.pdf", "paper": "x", "page_count": 2, "segments": [_segment("q1", 2, 2, cover=[1]), _segment("a1", 2, 2), _segment("a2", 1, 1)]}
 
 PROPOSAL = {"papers": [{"label": "q1", "questions": []}], "unrouted": [], "warnings": []}
 
@@ -27,6 +39,7 @@ class Fake:
         self.raise_in_segment = False
         self.seen: list[tuple[str, str]] = []
         self.on_report = None
+        self.plan = PLAN
 
     def _status(self, ctx):
         with self.factory() as db:
@@ -44,6 +57,7 @@ class Fake:
             self.seen.append(("segment", self._status(ctx)))
             if self.raise_in_segment:
                 raise RuntimeError("kaboom")
+            (ctx.job_dir / "segments.json").write_text(json.dumps(self.plan))
             return failed("not segmented: nothing found") if self.fail_segment else done(needs_review=True, warnings=("check q1",))
 
         def split(ctx):
@@ -83,8 +97,12 @@ def setup(tmp_path):
     objects = FakeObjectStore()
     metadata_calls = []
 
-    def extract(filename, db):
-        metadata_calls.append(filename)
+    def extract(filename, db, cover=None):
+        pages = None
+        if cover is not None:
+            with fitz.open(stream=cover, filetype="pdf") as doc:
+                pages = doc.page_count
+        metadata_calls.append((filename, pages))
         return {"year": 2024}
 
     job = make_job(factory, user)  # as the API makes it: just the `register` task
@@ -124,15 +142,50 @@ def test_job_goes_queued_running_review_ready_with_the_proposal(setup):
     assert row.status == "review_ready" and row.error is None
     assert row.proposal == PROPOSAL
     assert [s for _, s in fake.seen] == ["running", "running", "running"]
-    # the run summary is merged with the filename metadata, not written over it
-    assert row.report["filename_metadata"] == {"year": 2024}
-    assert metadata_calls == ["RI_2024_Math_P1.pdf"]
+    # the run summary is merged with the per-paper metadata, not written over it; register no
+    # longer reads the filename on its own: each paper's call carries it as a hint
+    assert "filename_metadata" not in row.report
+    assert row.report["paper_metadata"] == {"q1": {"year": 2024}, "a2": {"year": 2024}}
+    # q1 sends its cover page (1 page), the answer-only a2 its first page (1 page)
+    assert metadata_calls == [("RI_2024_Math_P1.pdf", 1), ("RI_2024_Math_P1.pdf", 1)]
     assert set(row.report["timing_ms"]) == {"register", "segment", "split"}
     assert row.report["warnings"] == ["check q1"] and row.report["needs_review"] is True
     # the review images are in S3 next to the source
     assert objects.objects[f"tmp/ingest/{job}/pages/p01.webp"] == b"webp"
     with factory() as db:
         assert {t.status for t in db.scalars(select(IngestTask))} == {"done"}
+
+
+def test_a_failing_metadata_call_never_fails_the_segment_task(setup):
+    factory, job, objects, _, fake, _, tmp_path = setup
+    calls = []
+
+    def flaky(filename, db, cover=None):
+        calls.append(cover is not None)
+        raise RuntimeError("claude down")
+
+    settings = WorkerSettings(scratch_dir=tmp_path / "scratch", poll_seconds=0.01)
+    worker = Worker(factory, objects, flaky, fake.runner_factory(), settings)
+    worker.start()
+    drain(worker)
+    row = job_row(factory, job)
+    assert row.status == "review_ready"
+    assert row.report["paper_metadata"] == {"q1": {}, "a2": {}}
+    assert calls == [True, False, True, False]  # the cover, then the filename alone, per paper
+
+
+def test_paper_metadata_keys_match_the_proposal_papers(tmp_path):
+    from ingester.segments import Segment, pair_segments, paper_key
+    from app.services.ingest_confirm import paper_key as proposal_key
+
+    segs = [
+        Segment("q1", "question", 1, 1, 2), Segment("a1", "answer", 1, 3, 3),
+        Segment("a2", "answer", 2, 4, 4), Segment("q3", "question", 3, 5, 6),
+    ]
+    keys = [paper_key(q, a) for q, a in pair_segments(segs)]
+    assert keys == ["q1", "q3", "a2"]
+    papers = [{"label": q and q.label, "answer_label": a and a.label} for q, a in pair_segments(segs)]
+    assert keys == [proposal_key(p, i) for i, p in enumerate(papers)]
 
 
 def test_report_keeps_a_debug_bundle_and_releases_scratch(setup):

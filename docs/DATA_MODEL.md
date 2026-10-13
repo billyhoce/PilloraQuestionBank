@@ -244,8 +244,9 @@ IngestJob: {
   status ENUM(awaiting_upload, queued, running, review_ready, failed, confirmed, cancelled, expired),  -- default queued
   proposal (JSONB, nullable),    -- the pipeline's proposed split
   proposal_edited (JSONB, nullable),  -- the admin's edits to it
-  report (JSONB, nullable),      -- run report; `filename_metadata` holds the filename-extraction
-                                 -- result, written by the worker's `register` task (pre-fills the metadata sidebar);
+  report (JSONB, nullable),      -- run report; `paper_metadata` maps each proposal paper's key to the
+                                 -- metadata read from its cover, written by the worker's `segment` task (pre-fills
+                                 -- the metadata sidebar; old jobs have `filename_metadata` instead);
                                  -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped"
                                  -- (written by the confirm/skip endpoints; the job is `confirmed` once all are set)
   debug (JSONB, nullable),       -- debug bundle copied at report time: {"segments": segments.json, "ingest": ingest.json};

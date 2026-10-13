@@ -84,16 +84,29 @@ paper is always one (subject, stream) — so the same cached system block is reu
 question in the paper. The block is marked `cache_control: { type: "ephemeral" }`; cache hits are
 dramatically cheaper than fresh tokens.
 
-## Filename metadata extraction
+## Paper metadata extraction
 
-**Trigger:** during PDF upload, after the file is received. The backend extracts metadata suggestions
-from the filename and returns them with the page images; the frontend pre-fills the metadata
-sidebar.
+**Trigger:** two callers share one extractor (`extract_paper_metadata` in
+`app/ai/filename_extractor.py`).
 
-**Model:** **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`), text-only — fast and cheap.
+- **Auto-import (ingest worker):** the `segment` task's `after_segment` hook runs it **once per
+  paper** of the booklet (per question/answer segment pair, as the proposal pairs them), and stores
+  each result in `ingest_job.report["paper_metadata"][paper_key]`, where the key is the paper's
+  question label (`q1`), or its answer label (`a1`) for an answer-only paper — the same key as the
+  proposal's paper (both come from `ingester.segments.pair_segments`). The paper's **cover pages**
+  (the segment's `cover_pages`) are cut out of the booklet and sent as a PDF `document` block;
+  with none, the first page of the section (the answer section for an answer-only paper). The job's
+  filename goes along as a hint. The review page pre-fills each paper from its own entry. Jobs from
+  before this have one `report["filename_metadata"]` (a filename-only guess for the whole booklet)
+  and the review page falls back to it for a paper with no entry.
+- **Manual import (PDF upload):** filename only, no cover; the frontend pre-fills the sidebar.
 
-**Prompt:** send the filename string; ask for school name, year, subject, level, exam type and paper
-number as JSON. `resolve_metadata` then maps each name to an existing reference-table ID by **exact,
+**Model:** **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`), forced tool call, `max_tokens` 512.
+Cost and request ids are recorded through `record_usage` (into the job's `report["cost"]`).
+
+**Prompt:** the cover (when given) plus the filename; ask for school name, year, subject, level,
+**stream**, exam type and paper number. `resolve_metadata` then maps each name to an existing
+reference-table ID (`school_id`, `subject_id`, `level_id`, `stream_id`, `exam_type_id`) by **exact,
 case-insensitive name match** — unmatched fields are left blank for the user to fill.
 
 ```json
@@ -102,12 +115,16 @@ case-insensitive name match** — unmatched fields are left blank for the user t
   "year": 2024,
   "subject": "Mathematics",
   "level": "Sec 3",
+  "stream": "Express",
   "exam_type": "EOY",
   "paper_number": "1"
 }
 ```
 
-Any field can be `null` if the filename doesn't contain that information.
+Any field can be `null` if the cover and filename don't say. **Failures never fail the job:** a
+failed call with a cover is retried on the filename alone, and a failure there stores empty
+metadata for that paper (the worker also guards the call, so an injected extractor that raises
+yields `{}`).
 
 ## Persisting the review
 
@@ -179,7 +196,7 @@ input and cache reads at 0.1×.
 | Call | Model | Input | Volume / year | Cost / year |
 |---|---|---|---|---|
 | Part splitting + topic labeling | Haiku 4.5 (vision) | ~1 image + cached topic list | ~9,600 questions | ~$10 |
-| Filename extraction | Haiku 4.5 (text) | filename string | ~640 papers | negligible (<$1) |
+| Paper metadata extraction | Haiku 4.5 (text + cover PDF) | cover page(s) + filename | ~640 papers | small (<$1 per 100 papers) |
 
 Per-question labeling is roughly $0.001 with image input — order of magnitude, verify against the
 logs. `log_tokens` (`app/logger.py`) prints per-call token counts and a dollar cost to

@@ -230,7 +230,7 @@ def fake_metadata_extractor():
         result = {"school_id": None, "year": 2024, "paper_number": "1"}
         calls: list = []
 
-        def __call__(self, filename, db):
+        def __call__(self, filename, db, cover=None):
             self.calls.append(filename)
             return self.result
 

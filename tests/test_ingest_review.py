@@ -69,6 +69,36 @@ def test_review_has_presigned_urls_and_pixel_sizes(admin_client, db_session, adm
     assert body["proposal"]["papers"][0]["questions"][0]["flags"] == ["pixel_ink"]
 
 
+def test_review_returns_each_papers_metadata_and_the_filename_fallback(
+    admin_client, db_session, admin_user, fake_object_store
+):
+    job = make_job(db_session, admin_user)
+    job.report = {"paper_metadata": {"q1": {"year": 2024, "stream_id": 3}}}
+    db_session.commit()
+    body = admin_client.get(f"/api/import/jobs/{job.id}/review").json()
+    assert body["paper_metadata"] == {"q1": {"year": 2024, "stream_id": 3}}
+    assert body["proposal"]["papers"][0]["key"] == "q1"
+    assert body["filename_metadata"] == {}
+
+    old = make_job(db_session, admin_user)  # a job from before per-paper metadata
+    old.report = {"filename_metadata": {"year": 2022}}
+    db_session.commit()
+    body = admin_client.get(f"/api/import/jobs/{old.id}/review").json()
+    assert body["paper_metadata"] == {} and body["filename_metadata"] == {"year": 2022}
+
+
+def test_extract_pages_joins_separate_runs():
+    from app.services.ingest_review import extract_pages
+
+    doc = fitz.open()
+    for _ in range(6):
+        doc.new_page()
+    data = doc.tobytes()
+    for pages, count in (([2], 1), ([1, 2, 3], 3), ([5, 1, 2], 3), ([3, 3], 1)):
+        with fitz.open(stream=extract_pages(data, pages), filetype="pdf") as out:
+            assert out.page_count == count
+
+
 def test_review_prefers_edited_proposal(admin_client, db_session, admin_user, fake_object_store):
     edited = {**PROPOSAL, "papers": [{**PROPOSAL["papers"][0], "label": "edited"}]}
     job = make_job(db_session, admin_user, edited=edited)

@@ -7,6 +7,7 @@ from app.ai.filename_extractor import (
     _EXTRACTION_TOOL,
     build_system_prompt,
     extract_metadata,
+    extract_paper_metadata,
     resolve_metadata,
 )
 
@@ -21,7 +22,9 @@ def _make_ref_data():
     subject = MagicMock(); subject.name = "Math"; subject.id = 2
     level = MagicMock(); level.name = "Sec 3"; level.id = 3
     exam_type = MagicMock(); exam_type.name = "EOY"; exam_type.id = 4
+    stream = MagicMock(); stream.name = "Express"; stream.id = 5
     return {
+        "streams": [stream],
         "schools": [school],
         "subjects": [subject],
         "levels": [level],
@@ -69,7 +72,7 @@ def test_build_system_prompt_contains_exam_type_names():
 
 
 def test_build_system_prompt_empty_ref_data_shows_none():
-    ref_data = {"schools": [], "subjects": [], "levels": [], "exam_types": []}
+    ref_data = {"schools": [], "subjects": [], "levels": [], "streams": [], "exam_types": []}
     prompt = build_system_prompt(ref_data)
     assert "(none)" in prompt
 
@@ -158,7 +161,24 @@ def test_resolve_returns_required_keys():
          "exam_type": None, "paper_number": None},
         _make_ref_data(),
     )
-    assert set(result.keys()) == {"school_id", "subject_id", "level_id", "exam_type_id", "year", "paper_number"}
+    assert set(result.keys()) == {
+        "school_id", "subject_id", "level_id", "stream_id", "exam_type_id", "year", "paper_number"
+    }
+
+
+def test_resolve_stream_case_insensitive_and_unknown():
+    base = {"school": None, "year": None, "subject": None, "level": None, "exam_type": None, "paper_number": None}
+    assert resolve_metadata({**base, "stream": "express"}, _make_ref_data())["stream_id"] == 5
+    assert resolve_metadata({**base, "stream": "Normal (Tech)"}, _make_ref_data())["stream_id"] is None
+    assert resolve_metadata(base, _make_ref_data())["stream_id"] is None
+
+
+def test_system_prompt_lists_streams():
+    assert "Express" in build_system_prompt(_make_ref_data())
+
+
+def test_tool_schema_requires_stream():
+    assert "stream" in _EXTRACTION_TOOL["input_schema"]["required"]
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +273,55 @@ def test_extract_metadata_api_error_returns_empty(mock_cls, mock_fetch):
 
     assert isinstance(result, dict)
     assert all(v is None for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# extract_paper_metadata — the cover as a document block
+# ---------------------------------------------------------------------------
+
+_ALL_NULL = {"school": None, "year": None, "subject": None, "level": None,
+             "stream": None, "exam_type": None, "paper_number": None}
+
+
+@patch("app.ai.filename_extractor._fetch_reference_data")
+@patch("app.ai.filename_extractor.anthropic.Anthropic")
+def test_cover_is_sent_as_a_pdf_document_block_with_the_filename_hint(mock_cls, mock_fetch):
+    mock_fetch.return_value = _make_ref_data()
+    client = mock_cls.return_value
+    client.messages.create.return_value = _make_mock_response(
+        {**_ALL_NULL, "school": "Raffles Institution", "stream": "Express", "year": 2024}
+    )
+
+    result = extract_paper_metadata("RI_2024.pdf", db=MagicMock(), cover=b"%PDF-cover")
+
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["max_tokens"] > 256
+    doc, text = kwargs["messages"][0]["content"]
+    assert doc["type"] == "document" and doc["source"]["media_type"] == "application/pdf"
+    import base64
+    assert base64.b64decode(doc["source"]["data"]) == b"%PDF-cover"
+    assert "RI_2024.pdf" in text["text"]
+    assert (result["school_id"], result["stream_id"], result["year"]) == (1, 5, 2024)
+
+
+@patch("app.ai.filename_extractor._fetch_reference_data")
+@patch("app.ai.filename_extractor.anthropic.Anthropic")
+def test_without_a_cover_only_the_filename_is_sent(mock_cls, mock_fetch):
+    mock_fetch.return_value = _make_ref_data()
+    client = mock_cls.return_value
+    client.messages.create.return_value = _make_mock_response(_ALL_NULL)
+    extract_paper_metadata("scan.pdf", db=MagicMock())
+    assert isinstance(client.messages.create.call_args.kwargs["messages"][0]["content"], str)
+
+
+@patch("app.ai.filename_extractor._fetch_reference_data")
+@patch("app.ai.filename_extractor.anthropic.Anthropic")
+def test_a_failed_cover_call_is_retried_on_the_filename_alone(mock_cls, mock_fetch):
+    mock_fetch.return_value = _make_ref_data()
+    client = mock_cls.return_value
+    client.messages.create.side_effect = [
+        Exception("bad pdf"), _make_mock_response({**_ALL_NULL, "year": 2021}),
+    ]
+    result = extract_paper_metadata("RI_2021.pdf", db=MagicMock(), cover=b"%PDF")
+    assert result["year"] == 2021
+    assert isinstance(client.messages.create.call_args.kwargs["messages"][0]["content"], str)

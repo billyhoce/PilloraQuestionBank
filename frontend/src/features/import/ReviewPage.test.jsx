@@ -233,6 +233,22 @@ describe('ReviewPage', () => {
       expect(await screen.findByRole('button', { name: /Confirm & Save Topics/ })).toBeInTheDocument()
     })
 
+    it('pre-fills each paper from its own cover metadata, not the filename', async () => {
+      const q1 = { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' }
+      const q2 = { ...q1, stream_id: 9, year: 2023, paper_number: '2' }
+      api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1, q2 } })
+      api.import.confirmJobPaper.mockResolvedValue({ paper_id: 7, job_status: 'review_ready', questions: [] })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('tab', { name: /q2 \/ a2/ }))
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(api.import.confirmJobPaper).toHaveBeenCalledWith('j1', {
+        paper_label: 'q2', ...q2, year: 2023, paper_number: '2', is_premium: true,
+      })
+    })
+
     it('skipping the last undecided paper leaves for the import page', async () => {
       api.import.review.mockResolvedValue({
         ...TWO,
