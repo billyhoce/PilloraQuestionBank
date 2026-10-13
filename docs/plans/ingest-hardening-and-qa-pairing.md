@@ -368,7 +368,16 @@ and after, then diff.
   take the fallback. The committed fixtures are read raw (never through the fallback), so their
   `cover_pages` were written once by running `fill_cover_pages` over them.
 
-### 4.3 Metadata from cover pages, per paper
+### 4.3 Metadata from cover pages, per paper — DONE (stored in `report["paper_metadata"]`)
+
+As built: `extract_paper_metadata(filename, db, cover=None)` in `app/ai/filename_extractor.py` (the
+file keeps its name; `extract_metadata` stays as an alias for the Manual flow's filename-only
+call). `Edges.after_segment` pairs the segments with `ingester.segments.pair_segments` (the
+same function `pipeline/proposal.py` pairs with, so a key cannot drift from the proposal's
+`label` / `answer_label`), cuts each paper's cover pages (an answer-only paper: the answer section's;
+none: the section's first page) with `ingest_review.extract_pages` (runs of `extract_page_range`), and
+stores `report["paper_metadata"][paper_key]` under the job-row lock. `after_register` no longer extracts
+anything. 4.4 will move the results into `ingest_paper`.
 
 - Generalise `app/ai/filename_extractor.py` into `extract_paper_metadata(filename, db, cover=None)`.
   It sends the cover pages as a `document` block, a sub-PDF cut with `extract_page_range`. If there are

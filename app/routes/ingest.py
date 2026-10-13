@@ -571,7 +571,9 @@ def manual_pages(
         raise HTTPException(status_code=422, detail=str(e))
     except InvalidPdfError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    metadata = (job.report or {}).get("filename_metadata")
+    report = job.report or {}
+    # An old job has one filename guess; a newer one has one entry per paper (take the first).
+    metadata = report.get("filename_metadata") or next(iter((report.get("paper_metadata") or {}).values()), None)
     return upload_pages(pdf, job.filename, db, suggested_metadata=metadata)
 
 

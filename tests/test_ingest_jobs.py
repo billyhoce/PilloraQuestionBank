@@ -10,7 +10,7 @@ from unittest.mock import patch
 from sqlalchemy.exc import IntegrityError
 
 from app.models.orm import IngestJob, IngestTask, Paper
-from app.services.ingest_jobs import record_filename_metadata
+from app.services.ingest_jobs import extract_paper_metadata_safely, record_paper_metadata
 
 
 def make_pdf(pages: int = 3) -> bytes:
@@ -310,28 +310,45 @@ def _job(db_session, admin_user, report=None):
     return job
 
 
-def test_record_filename_metadata_stores_result(db_session, admin_user, fake_metadata_extractor):
+def test_record_paper_metadata_stores_results_by_paper_key(db_session, admin_user):
     job = _job(db_session, admin_user)
-    out = record_filename_metadata(job, db_session, fake_metadata_extractor)
+    record_paper_metadata(job, db_session, {"q1": {"year": 2024}, "a2": {"year": 2023}})
+    assert db_session.get(IngestJob, job.id).report == {
+        "paper_metadata": {"q1": {"year": 2024}, "a2": {"year": 2023}}
+    }
+
+
+def test_record_paper_metadata_merges_into_existing_report(db_session, admin_user):
+    job = _job(db_session, admin_user, report={"warnings": ["x"], "filename_metadata": {"a": 1}})
+    record_paper_metadata(job, db_session, {"q1": {"year": 2024}})
+    assert job.report == {
+        "warnings": ["x"], "filename_metadata": {"a": 1}, "paper_metadata": {"q1": {"year": 2024}},
+    }
+
+
+def test_extract_paper_metadata_safely_passes_the_cover(db_session, fake_metadata_extractor):
+    out = extract_paper_metadata_safely(fake_metadata_extractor, "f.pdf", db_session, b"%PDF")
     assert out == fake_metadata_extractor.result
-    assert fake_metadata_extractor.calls == ["RI_2024_Math_P1.pdf"]
-    assert db_session.get(IngestJob, job.id).report == {"filename_metadata": fake_metadata_extractor.result}
+    assert fake_metadata_extractor.calls == ["f.pdf"]
 
 
-def test_record_filename_metadata_merges_into_existing_report(db_session, admin_user, fake_metadata_extractor):
-    job = _job(db_session, admin_user, report={"warnings": ["x"]})
-    record_filename_metadata(job, db_session, fake_metadata_extractor)
-    assert job.report == {"warnings": ["x"], "filename_metadata": fake_metadata_extractor.result}
+def test_extract_paper_metadata_safely_falls_back_to_filename_then_empty(db_session):
+    seen = []
 
+    def cover_breaks(filename, db, cover=None):
+        seen.append(cover)
+        if cover is not None:
+            raise RuntimeError("claude down")
+        return {"year": 2024}
 
-def test_record_filename_metadata_falls_back_to_empty_on_error(db_session, admin_user):
-    job = _job(db_session, admin_user)
+    assert extract_paper_metadata_safely(cover_breaks, "f.pdf", db_session, b"%PDF") == {"year": 2024}
+    assert seen == [b"%PDF", None]
 
-    def boom(filename, db):
+    def boom(filename, db, cover=None):
         raise RuntimeError("claude down")
 
-    assert record_filename_metadata(job, db_session, boom) == {}
-    assert job.report == {"filename_metadata": {}}
+    assert extract_paper_metadata_safely(boom, "f.pdf", db_session, b"%PDF") == {}
+    assert extract_paper_metadata_safely(boom, "f.pdf", db_session, None) == {}
 
 
 # --- retry, progress and worker liveness -----------------------------------
@@ -501,7 +518,7 @@ class _Borrowed:
         return False
 
 
-def test_metadata_call_cost_survives_the_report_write(db_session, admin_user, monkeypatch):
+def test_metadata_call_cost_survives_the_paper_metadata_write(db_session, admin_user, monkeypatch):
     from app.ai import job_cost
     from app.log_context import log_context
 
@@ -509,13 +526,14 @@ def test_metadata_call_cost_survives_the_report_write(db_session, admin_user, mo
     monkeypatch.setattr(job_cost, "session_factory", lambda: (lambda: _Borrowed(db_session)))
     usage = type("U", (), {"input_tokens": 10, "output_tokens": 5})()
 
-    def extractor(filename, db):
+    def extractor(filename, db, cover=None):
         with log_context(job_id=str(job.id)):
             job_cost.record_usage("extract_metadata", "claude-haiku-4-5-20251001", usage, "req_m")
         return {"school_id": 1}
 
-    record_filename_metadata(job, db_session, extractor)
-    assert job.report["filename_metadata"] == {"school_id": 1}
+    metadata = extract_paper_metadata_safely(extractor, job.filename, db_session, b"%PDF")
+    record_paper_metadata(job, db_session, {"q1": metadata})
+    assert job.report["paper_metadata"] == {"q1": {"school_id": 1}}
     assert job.report["cost"]["calls"] == 1
 
 

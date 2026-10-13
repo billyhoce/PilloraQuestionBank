@@ -68,11 +68,14 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   `register failed: <reason>`, which the job list shows under the status. After `register`
   succeeds, `after_register` copies `page_count` and `sha256` from its `job.json` onto the job row
   (both are `NULL` until then, and stay `NULL` for a rejected PDF) and logs `ingest_job/registered`.
-- **Filename metadata** is not extracted in the request. The worker runs the existing filename
-  extraction ([ai-labelling.md](./ai-labelling.md#filename-metadata-extraction)) as part of the
-  `register` task, via `record_filename_metadata` in `app/services/ingest_jobs.py`, and stores the
-  result in `report.filename_metadata` (merged into any existing report; empty metadata on error)
-  so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
+- **Paper metadata** is not extracted in the request. The worker's `segment` task reads each paper's
+  metadata from its own cover ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)): the
+  `after_segment` hook (`app/worker/edges.py`) calls the extractor once per segment pair, with the
+  cover pages cut from the booklet (`extract_pages` in `app/services/ingest_review.py`), and merges
+  the results into `report.paper_metadata[paper_key]` (`record_paper_metadata` in
+  `app/services/ingest_jobs.py`; the key is the proposal paper's `key`). A failure falls back to a
+  filename-only call, then to `{}` for that paper; it never fails the task. `register` extracts
+  nothing. Old jobs keep their `report.filename_metadata`. The extractor stays in `app/` because it
   needs the DB reference data (`ingestion/` never imports `app`).
 - `GET /api/import/jobs?status=&job_id=&paper_id=` — **every admin's jobs**, newest first, optionally
   narrowed by `status` (one value, or several comma-separated, e.g. `review_ready,failed`), by `job_id` (a UUID), or by `paper_id` (the job that confirmed that paper:
@@ -106,7 +109,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   `ObjectStore.presign` of `{job prefix}{page.image}`; `null` when the page has no image) and its
   `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
   `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
-  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `filename_metadata`, and per paper its `key` and `outcome` (`null`, `confirmed` or `skipped`). A job with
+  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `paper_metadata` (by paper `key`), `filename_metadata` (old jobs only), and per paper its `key` and `outcome` (`null`, `confirmed` or `skipped`). A job with
   no proposal yet is a `409`.
 - `PUT /api/import/jobs/{id}/proposal` `{papers: [{questions, orphan_answers}, ...]}` — saves the
   admin's edits as `ingest_job.proposal_edited`; the generated `proposal` is never touched. Admin-only;
@@ -121,8 +124,8 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   integers (the proposal's type). The next `GET .../review` returns the edit (`edited: true`).
 - `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` (booklet pages, 1-based,
   inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
-  Manual flow's own renderer), using the job's stored `filename_metadata` instead of a second Claude
-  call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
+  Manual flow's own renderer), using the job's stored metadata (`filename_metadata`, else the first paper's
+  `paper_metadata`) instead of a second Claude call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
 - `POST /api/import/jobs/{id}/confirm` and `/skip` — see [Confirming a paper](#confirming-a-paper).
 - `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
   job prefix (`ingest/{id}/`) (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
@@ -283,11 +286,11 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   before any stage reads it. Artefacts lost with the folder are **not** re-downloaded: their tasks'
   outputs are missing, so on start `Runner.revalidate` reopens them and they run again (slower, not
   wrong); with the folder intact, fingerprints keep finished tasks as they are. After `register`
-  succeeds the job's page count and sha256 are recorded and the filename metadata is extracted (`report["filename_metadata"]`). After `report`
+  succeeds the job's page count and sha256 are recorded; after `segment` each paper's metadata is extracted (`report["paper_metadata"]`). After `report`
   succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
   `ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
   (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
-  `report` next to `filename_metadata`, and `segments.json` and `ingest.json` are copied into the
+  `report` next to `paper_metadata`, and `segments.json` and `ingest.json` are copied into the
   `ingest_job.debug` JSONB column (`{"segments": …, "ingest": …}`, a few KB). Once the runner has
   recorded `report` done, `Worker.run_once` calls `Edges.release_scratch`, which deletes the job's
   scratch folder (only if the proposal is on the row and the job is not `failed`). It is done *after*
@@ -326,13 +329,13 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   Anthropic request id (`anthropic_request_id`, distinct from the API `request_id` context field),
   model, token counts and `cost_usd`, stamped with the job id by the log context. The segment
   stage's usage reaches `app.ai.job_cost.record_usage` through `ingester.request.usage_listener`
-  (`listener(model, usage, request_id)`, set by the worker); the filename/cover metadata call
+  (`listener(model, usage, request_id)`, set by the worker); the per-paper metadata calls
   (`app/ai/filename_extractor.py`) calls the same function. `record_usage` also adds the call to
   `ingest_job.report["cost"]` (`calls`, `input_tokens`, `output_tokens`, `cache_write`, `cache_hit`,
   `cost_usd`), returned as `report.cost` by `GET /api/import/jobs/{id}`. The update runs in its own
   short transaction under `SELECT ... FOR UPDATE` on the job row, so concurrent tasks of one job
   cannot lose each other's update; writers of other `report` keys re-read the row first
-  (`record_filename_metadata` refreshes, `after_report` locks). Prices live only in
+  (`record_paper_metadata` and `after_report` lock). Prices live only in
   `app.logger._PRICES` (`usage_fields`); `claude-haiku-4-5` and `claude-opus-5` (the retry model)
   are priced.
 - **Testing seam.** `app.deps.get_pipeline_runner()` returns the factory the worker builds its runner
@@ -481,8 +484,8 @@ shows the job id with a copy button.
 ## Confirming a paper
 
 The review page's right-hand column is the Manual wizard's own `MetadataSidebar` (shared component),
-pre-filled from `report.filename_metadata` (returned by `GET .../review` as `filename_metadata`;
-absent means empty) with **Confirm paper** and **Skip this paper**. Each proposed paper is confirmed
+pre-filled from the selected paper's own `report.paper_metadata[key]` (returned by `GET .../review` as
+`paper_metadata`; an old job falls back to `filename_metadata`; absent means empty). Edits are kept per paper with **Confirm paper** and **Skip this paper**. Each proposed paper is confirmed
 or skipped on its own (tabs show the outcome). Confirming opens the Manual flow's `TopicReview` on
 the created paper, unchanged; "Skip topics" leaves it with its blank part for Manage Papers. After the
 last decision the page returns to `/admin/import`.

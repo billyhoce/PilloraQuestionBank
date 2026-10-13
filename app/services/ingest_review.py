@@ -66,7 +66,9 @@ def build_review(job: IngestJob, store: ObjectStore) -> dict[str, Any]:
         "edited": job.proposal_edited is not None,
         "page_count": job.page_count,
         "review_zoom": REVIEW_ZOOM,
-        # What the register task read from the filename; pre-fills the metadata sidebar.
+        # Each paper's metadata read from its own cover (by paper key); pre-fills the sidebar.
+        "paper_metadata": (job.report or {}).get("paper_metadata") or {},
+        # Old jobs only: one guess from the filename, the fallback for a paper with no entry above.
         "filename_metadata": (job.report or {}).get("filename_metadata") or {},
         "proposal": {**proposal, "papers": papers},
     }
@@ -83,6 +85,28 @@ def extract_page_range(pdf_bytes: bytes, first_page: int, last_page: int) -> byt
                 return out.tobytes()
     except PageRangeError:
         raise
+    except Exception as e:
+        raise InvalidPdfError("The source PDF could not be read") from e
+
+
+def extract_pages(pdf_bytes: bytes, pages: list[int]) -> bytes:
+    """A new PDF of the given booklet pages (1-based, in order), cut with :func:`extract_page_range`
+    one contiguous run at a time."""
+    runs: list[list[int]] = []
+    for page in sorted(set(pages)):
+        if runs and page == runs[-1][-1] + 1:
+            runs[-1].append(page)
+        else:
+            runs.append([page])
+    parts = [extract_page_range(pdf_bytes, run[0], run[-1]) for run in runs]
+    if len(parts) == 1:
+        return parts[0]
+    try:
+        with fitz.open() as out:
+            for part in parts:
+                with fitz.open(stream=part, filetype="pdf") as src:
+                    out.insert_pdf(src)
+            return out.tobytes()
     except Exception as e:
         raise InvalidPdfError("The source PDF could not be read") from e
 

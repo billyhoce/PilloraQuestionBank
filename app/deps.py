@@ -17,7 +17,7 @@ parameter; these providers extend the same idea to the route layer.
 
 from typing import Callable
 
-from app.ai.filename_extractor import extract_metadata
+from app.ai.filename_extractor import extract_paper_metadata
 from app.ai.topic_labeler import label_question
 from app.storage.object_store import ObjectStore, S3ObjectStore
 from app.storage.s3_client import get_image_bytes, get_presigned_url
@@ -47,8 +47,8 @@ def get_object_store() -> ObjectStore:
 
 
 def get_metadata_extractor():
-    """The Claude call that reads paper metadata out of a filename."""
-    return extract_metadata
+    """The Claude call that reads paper metadata from a paper's cover pages and filename."""
+    return extract_paper_metadata
 
 
 def get_pipeline_runner():

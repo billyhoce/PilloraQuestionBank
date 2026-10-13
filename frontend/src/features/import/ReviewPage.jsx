@@ -153,7 +153,8 @@ export default function ReviewPage() {
   const latest = useRef(null)
   const [handoff, setHandoff] = useState(null)
   const refs = useReferenceData()
-  const [metadata, setMetadata] = useState(emptyMetadata)
+  // The admin's edits to the sidebar, by paper key; a paper never edited shows its own pre-fill.
+  const [metadataEdits, setMetadataEdits] = useState({})
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState(null)
   // After a confirm: the created paper's questions, awaiting the topic-review step.
@@ -165,7 +166,6 @@ export default function ReviewPage() {
       .then(r => {
         if (!live) return
         setReview(r)
-        setMetadata(m => mergeSuggested(m, r.filename_metadata ?? {}))
         // Open on the first paper still undecided.
         const first = r.proposal.papers.findIndex(p => !p.outcome)
         if (first > 0) setPaperIdx(first)
@@ -196,6 +196,10 @@ export default function ReviewPage() {
 
   const papers = review?.proposal.papers ?? []
   const paper = papers[paperIdx]
+  // Pre-filled from the paper's own cover; an old job has only the filename's guess for the booklet.
+  const metadata = metadataEdits[paper?.key]
+    ?? mergeSuggested(emptyMetadata, review?.paper_metadata?.[paper?.key] ?? review?.filename_metadata ?? {})
+  const setMetadata = m => setMetadataEdits(e => ({ ...e, [paper?.key]: m }))
   const answerOnly = isAnswerOnly(paper)
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
 
