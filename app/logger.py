@@ -1,12 +1,21 @@
 import logging
 import time
 
+from app.log_context import log_context
+
 log = logging.getLogger("pillora")
 
 
 def log_event(func: str, step: str, level: int = logging.INFO, **fields) -> None:
     """One structured line: ``msg`` is ``func/step`` and the fields ride as JSON keys."""
     log.log(level, "%s/%s", func, step, extra={"fields": {"func": func, "step": step, **fields}})
+
+
+def log_job_event(job_id, step: str, level: int = logging.INFO, **fields) -> None:
+    """A lifecycle event of an ingest job (``ingest_job/<step>``), stamped with the job id."""
+    job_id = str(job_id)
+    with log_context(job_id=job_id):
+        log_event("ingest_job", step, level, job_id=job_id, **fields)
 
 
 class Timer:

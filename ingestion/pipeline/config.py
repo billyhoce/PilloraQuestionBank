@@ -35,6 +35,12 @@ class PipelineConfig:
     # kills its runner from looping on its own, and a person asking for another go
     # is the judgement it was waiting for.
 
+    # How much of a failed stage's traceback is kept on its task (the last N characters:
+    # the raise site and the exception are at the end, and a deep stack's top frames add
+    # nothing). 4 KB holds roughly 25 frames, more than any stage here has; it keeps the
+    # row (and the job-detail response) small. A judgement.
+    traceback_chars: int = 4096
+
     # --- the proposal ------------------------------------------------------
     # How far (points) a rectangle may stick out of its booklet page before the
     # proposal warns about it (it is clipped to the page either way). The extractor's

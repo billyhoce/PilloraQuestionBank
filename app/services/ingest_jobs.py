@@ -11,6 +11,7 @@ from typing import Any
 import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
+from app.logger import log_job_event
 from app.models.orm import IngestJob, IngestTask, WorkerHeartbeat
 from app.storage.object_store import ObjectStore
 from app.worker.store import SqlStore
@@ -91,6 +92,10 @@ def create_job(
         except Exception:
             pass
         raise
+    log_job_event(
+        job_id, "created", filename=filename, size=len(pdf_bytes), sha256=job.sha256,
+        page_count=page_count, user_id=admin.id,
+    )
     return job
 
 
@@ -117,7 +122,9 @@ def cancel_job(job: IngestJob) -> str:
     """Mark the job cancelled; returns the S3 prefix the caller deletes after commit."""
     if job.status in ("confirmed", "cancelled", "expired"):
         raise JobNotCancellableError(job.status)
+    previous = job.status
     job.status = "cancelled"
+    log_job_event(job.id, "cancelled", previous_status=previous)
     return job_prefix(job.id)
 
 
@@ -190,6 +197,7 @@ def retry_job(job: IngestJob, db: Session) -> int:
     db.flush()
     reopened = Runner(store, default_registry(), no_job_dir).retry(str(job.id))
     db.expire(job)  # the store updated the rows with bulk UPDATEs
+    log_job_event(job.id, "retry", reopened=len(reopened), tasks=[f"{t.stage}:{t.section or '-'}" for t in reopened])
     return len(reopened)
 
 

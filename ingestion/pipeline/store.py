@@ -68,6 +68,7 @@ class Task:
     attempts: int = 0
     reason: str = ""
     error: str = ""
+    traceback: str = ""  # of the exception a failed stage raised (truncated)
     warnings: tuple[str, ...] = ()
     needs_review: bool = False
     fingerprint: str | None = None  # of the inputs a ``done`` task's artefacts were made from

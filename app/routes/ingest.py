@@ -15,7 +15,7 @@ from app.deps import (
     get_question_labeller,
 )
 from app.log_context import set_context
-from app.logger import Timer, log, log_event
+from app.logger import Timer, log, log_event, log_job_event
 from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
@@ -351,6 +351,7 @@ def _task_out(t) -> dict:
         "attempts": t.attempts,
         "reason": t.reason,
         "error": t.error,
+        "traceback": t.traceback,
         "warnings": t.warnings,
         "needs_review": t.needs_review,
         "started_at": t.started_at,
@@ -508,6 +509,7 @@ def save_proposal(
     except ProposalEditError as e:
         raise HTTPException(status_code=422, detail=str(e))
     db.commit()
+    log_job_event(job.id, "proposal_saved", edited=True)
     return {"saved": True}
 
 

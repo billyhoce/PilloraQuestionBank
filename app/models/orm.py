@@ -515,6 +515,8 @@ class IngestTask(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The last ~4 KB of the traceback of the exception a failed stage raised (shown on the job detail).
+    traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings: Mapped[list] = mapped_column(
         _JSON, nullable=False, default=list, server_default=text("'[]'")
     )

@@ -36,6 +36,7 @@ from pipeline.registry import Registry, Stage
 from pipeline.store import TaskSpec
 from sqlalchemy.orm import Session
 
+from app.logger import log_job_event
 from app.models.orm import IngestJob
 from app.services.ingest_jobs import job_prefix, record_filename_metadata, source_key_for
 from app.storage.object_store import ObjectStore
@@ -126,6 +127,7 @@ class Edges:
                 **self._summary(ctx.job_id, outcome),
             }
             db.commit()
+        log_job_event(job_uuid, "proposal_stored", papers=len(proposal.get("papers", [])))
         return outcome
 
     def _summary(self, job_id: str, outcome: Outcome) -> dict:

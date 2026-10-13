@@ -20,6 +20,7 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy import update as _update
 
+from app.logger import log_job_event
 from app.models.orm import IngestJob, WorkerHeartbeat
 from app.services.ingest_jobs import job_prefix
 
@@ -97,7 +98,7 @@ def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: da
         except Exception:
             log.exception("sweep: could not delete %s (the bucket lifecycle rule will)", prefix)
         _remove_scratch(scratch_root, job_id)
-        log.info("sweep: job %s expired", job_id)
+        log_job_event(job_id, "expired", reason="stale", max_age_days=EXPIRE_AFTER.days)
     return expired
 
 
