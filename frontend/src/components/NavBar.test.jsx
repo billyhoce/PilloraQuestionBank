@@ -13,7 +13,7 @@ const PRIMARY = { id: 2, name: 'Primary' }
 
 function renderNavBar(user) {
   useAuth.mockReturnValue({ user, loading: false, login: vi.fn(), logout: vi.fn() })
-  render(
+  return render(
     <MemoryRouter>
       <NavBar />
     </MemoryRouter>
@@ -48,6 +48,19 @@ describe('NavBar links by role', () => {
     expect(screen.queryByRole('link', { name: 'Import' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Papers' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Generation Config' })).not.toBeInTheDocument()
+  })
+
+  it('shows About to every role, including signed-out visitors', () => {
+    // The page itself is public, so the link must not be gated either.
+    for (const user of [
+      { email: 'admin@example.com', role: 'admin' },
+      { email: 'user@example.com', role: 'public' },
+      null,
+    ]) {
+      const { unmount } = renderNavBar(user)
+      expect(screen.getByRole('link', { name: 'About' })).toBeInTheDocument()
+      unmount()
+    }
   })
 
   it('shows a Log in link instead of the account button when signed out', () => {

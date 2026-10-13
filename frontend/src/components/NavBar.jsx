@@ -7,6 +7,7 @@ import UserMenu from './UserMenu'
 const baseLinks = [
   { to: '/', label: 'Question Bank' },
   { to: '/generate', label: 'Generate Paper' },
+  { to: '/about', label: 'About' },
 ]
 
 const adminLinks = [

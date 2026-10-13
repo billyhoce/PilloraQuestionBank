@@ -10,6 +10,21 @@ _ALGORITHM = "HS256"
 _DEFAULT_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 
+def normalize_email(email: str) -> str:
+    """The canonical form an address is stored and looked up under.
+
+    Every write and every lookup must go through this, or the same person ends
+    up with two accounts. Google's OIDC ``email`` claim is lower-case, so an
+    admin who invites ``Billy@Gmail.com`` would otherwise get a *second*,
+    unentitled row the moment that person signs in with Google.
+
+    Only case and surrounding whitespace are folded. Gmail's dot and ``+``
+    aliases deliberately are **not** — they are provider-specific, and treating
+    ``a.b@`` and ``ab@`` as one address would be wrong for every other provider.
+    """
+    return (email or "").strip().lower()
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 

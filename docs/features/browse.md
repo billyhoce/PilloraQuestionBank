@@ -86,5 +86,9 @@ All filters are optional and combinable.
   union across parts).
 - **Click to expand** — `QuestionDetailModal.jsx` shows all pages plus a **Breakdown** section
   listing each part's label, marks and topics. The breakdown is hidden for a question that is a
-  single unlabelled part, where it would only repeat the topic chips above it.
+  single unlabelled part, where it would only repeat the topic chips above it. There is **no
+  `/questions/:id` route** — the detail view is this modal, opened over Browse or Generate.
 - Pagination or infinite scroll.
+- Every question image renders through `<ProtectedImage>`, which blocks right-click, dragging and the
+  mobile long-press menu when an admin has switched the site-wide toggle on (admins excepted). It is
+  a deterrent only — see [site-config.md](./site-config.md).

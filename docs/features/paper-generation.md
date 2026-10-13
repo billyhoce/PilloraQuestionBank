@@ -29,6 +29,11 @@ POST   /api/generate/paper       -- render a PDF from a manual selection.
 
 Both require authentication (`get_current_user`), not admin.
 
+A successful `/generate/paper` increments the caller's `app_user.papers_generated`, the count shown
+on the admin User Management page. The increment sits **after** the render, so a failed generation
+doesn't inflate the tally. It is a plain counter rather than a per-generation log table because
+nothing needs the history yet.
+
 `/generate/select` (`app/routes/generate.py`) reuses the Browse filter suite (`apply_filters` plus
 the eager-load options from `app/services/question_query.py`) to build the candidate pool, excludes any
 `exclude_question_ids`, then dispatches on `target_type` + `algorithm`. It **never returns 404** — an
