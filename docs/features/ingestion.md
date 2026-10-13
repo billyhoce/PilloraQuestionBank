@@ -245,6 +245,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
 ### 1. `POST /api/import/upload-pdf`
 
 - Accepts a single PDF (multipart). Non-PDF content types → `422`.
+- The handler is a plain `def`, so FastAPI runs it in its thread pool and the blocking work (PDF render, S3 puts, DB commits) never stalls the event loop. `POST /api/import/jobs` and `POST /api/papers/upload-image` follow the same rule: upload routes are `def` and read with `file.file.read()`, never `async def` + `await file.read()`.
 - **PyMuPDF** renders each page to an RGB image at 300 dpi. Pages are processed **one at a time**
   (`app/services/ingest.py::iter_pdf_pages` is a generator): a page is rendered, standardised,
   encoded and uploaded, then released before the next is rendered. A 300 dpi page is ~26 MB, so

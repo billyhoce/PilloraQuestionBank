@@ -104,7 +104,7 @@ This is the same failure family as B1.
   with S3 copies before the commit and temp deletes after it, as today.
 - **Test:** make the `_record` step fail and assert that no paper row exists afterwards.
 
-### B2. The upload route blocks the event loop
+### B2. The upload route blocks the event loop — DONE
 
 - **Where:** `app/routes/ingest.py:386-400`.
 - **Bug:** `create_ingest_job` is `async def`, but `create_job` does blocking work: PyMuPDF

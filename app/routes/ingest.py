@@ -126,7 +126,7 @@ class SaveTopicsPayload(BaseModel):
 
 
 @router.post("/upload-pdf")
-async def upload_pdf(
+def upload_pdf(
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
@@ -134,7 +134,7 @@ async def upload_pdf(
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
     with Timer() as t:
-        pdf_bytes = await file.read()
+        pdf_bytes = file.file.read()
         result = upload_pages(pdf_bytes, file.filename or "", db)
     log.info(f"{'upload_pdf':<22}| TOTAL     | {t.s}")
     return result
@@ -384,7 +384,7 @@ def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
 
 
 @router.post("/jobs", status_code=201)
-async def create_ingest_job(
+def create_ingest_job(
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
@@ -392,7 +392,7 @@ async def create_ingest_job(
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
-    pdf_bytes = await file.read()
+    pdf_bytes = file.file.read()
     try:
         job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
     except InvalidPdfError as e:
