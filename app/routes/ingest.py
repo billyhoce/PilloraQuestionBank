@@ -26,8 +26,10 @@ from app.services.ingest_jobs import (
     InvalidPdfError,
     JobNotCancellableError,
     JobNotRetryableError,
+    UploadError,
     cancel_job,
-    create_job,
+    create_upload,
+    finish_upload,
     job_progress,
     retry_job,
     worker_state,
@@ -389,20 +391,41 @@ def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
     return job
 
 
-@router.post("/jobs", status_code=201)
-def create_ingest_job(
-    file: UploadFile = File(...),
+class UploadIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=512)
+    size: int
+
+
+@router.post("/uploads", status_code=201)
+def create_ingest_upload(
+    body: UploadIn,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
     store: ObjectStore = Depends(get_object_store),
 ):
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=422, detail="Only PDF files are accepted")
-    pdf_bytes = file.file.read()
-    # The bytes are not inspected here: the worker's ``register`` task fails a bad PDF with a reason.
-    job = create_job(pdf_bytes, file.filename or "", current_user, db, store)
+    """Create the job (``awaiting_upload``) and return the presigned S3 POST the browser uploads to."""
+    try:
+        job, post = create_upload(body.filename, body.size, current_user, db, store)
+    except UploadError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     set_context(job_id=str(job.id), user_id=str(current_user.id))
-    return {"job_id": str(job.id)}
+    return {"job_id": str(job.id), "url": post["url"], "fields": post["fields"]}
+
+
+@router.post("/jobs/{job_id}/uploaded")
+def ingest_upload_finished(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """The browser finished its S3 POST: verify the object and queue the job."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        finish_upload(job, current_user, db, store)
+    except UploadError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"job_id": str(job.id), "status": job.status}
 
 
 @router.get("/jobs")

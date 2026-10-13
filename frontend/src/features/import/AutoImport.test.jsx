@@ -6,11 +6,12 @@ import AutoImport, { POLL_MS } from './AutoImport'
 import { waitingDays } from './jobAge'
 import { api } from '../../api/client'
 
-vi.mock('../../api/client', () => ({
+vi.mock('../../api/client', async importActual => ({
   api: {
     import: {
+      // the real upload flow (fetch + XHR are stubbed per test)
+      uploadJob: (await importActual()).api.import.uploadJob,
       listJobs: vi.fn(),
-      createJob: vi.fn(),
       cancelJob: vi.fn(),
       retryJob: vi.fn(),
       getJob: vi.fn(),
@@ -29,7 +30,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.import.listJobs.mockResolvedValue(listing(JOBS))
   api.import.retryJob.mockResolvedValue({})
-  api.import.createJob.mockResolvedValue({ job_id: 'j3' })
   api.import.cancelJob.mockResolvedValue(null)
 })
 
@@ -102,13 +102,76 @@ describe('AutoImport', () => {
     expect(await screen.findByText('No import jobs yet.')).toBeInTheDocument()
   })
 
-  it('uploads a dropped PDF as a job and refreshes the list', async () => {
-    const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
-    await screen.findByText('second.pdf')
-    const file = new File(['%PDF'], 'new.pdf', { type: 'application/pdf' })
-    await userEvent.upload(container.querySelector('input[type=file]'), file)
-    await waitFor(() => expect(api.import.createJob).toHaveBeenCalledWith(file))
-    await waitFor(() => expect(api.import.listJobs).toHaveBeenCalledTimes(2))
+  describe('direct-to-S3 upload', () => {
+    let xhrs
+    let fetchMock
+
+    class FakeXhr {
+      constructor() { this.upload = {}; xhrs.push(this) }
+      open(method, url) { this.method = method; this.url = url }
+      send(form) { this.form = form }
+    }
+
+    const jsonRes = (status, body) => ({ ok: status < 400, status, json: async () => body })
+
+    beforeEach(() => {
+      xhrs = []
+      vi.stubGlobal('XMLHttpRequest', FakeXhr)
+      fetchMock = vi.fn(async (url, opts) => {
+        if (url === '/api/import/uploads') {
+          return jsonRes(201, { job_id: 'j3', url: 'https://s3.test/bucket', fields: { key: 'ingest/j3/source.pdf', 'Content-Type': 'application/pdf' } })
+        }
+        if (opts.method === 'DELETE') return { ok: true, status: 204 }
+        return jsonRes(200, { job_id: 'j3', status: 'queued' })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+    })
+    afterEach(() => vi.unstubAllGlobals())
+
+    const dropFile = async container => {
+      const file = new File(['%PDF'], 'new.pdf', { type: 'application/pdf' })
+      await userEvent.upload(container.querySelector('input[type=file]'), file)
+      return file
+    }
+    const calls = () => fetchMock.mock.calls.map(([url, opts]) => `${opts.method} ${url}`)
+
+    it('shows per-file progress, then marks the job uploaded and refreshes the list', async () => {
+      const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
+      await screen.findByText('second.pdf')
+      const file = await dropFile(container)
+
+      await waitFor(() => expect(xhrs).toHaveLength(1))
+      const [xhr] = xhrs
+      expect(xhr.method).toBe('POST')
+      expect(xhr.url).toBe('https://s3.test/bucket')
+      expect([...xhr.form.keys()]).toEqual(['key', 'Content-Type', 'file'])
+      expect(xhr.form.get('file')).toBe(file)
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ filename: 'new.pdf', size: file.size })
+
+      act(() => xhr.upload.onprogress({ lengthComputable: true, loaded: 25, total: 100 }))
+      expect(await screen.findByLabelText('Upload progress of new.pdf')).toHaveAttribute('value', '25')
+      expect(calls()).toEqual(['POST /api/import/uploads'])
+
+      api.import.listJobs.mockResolvedValue(listing([
+        { id: 'j3', filename: 'new.pdf', status: 'queued', created_at: '2026-10-08T10:00:00Z' }, ...JOBS,
+      ]))
+      xhr.status = 204
+      act(() => xhr.onload())
+      await waitFor(() => expect(calls()).toEqual(['POST /api/import/uploads', 'POST /api/import/jobs/j3/uploaded']))
+      expect(await screen.findByText('new.pdf')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Upload progress of new.pdf')).not.toBeInTheDocument()
+    })
+
+    it('cancels the job and shows the error when the S3 POST fails', async () => {
+      const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
+      await screen.findByText('second.pdf')
+      await dropFile(container)
+      await waitFor(() => expect(xhrs).toHaveLength(1))
+      xhrs[0].status = 403
+      act(() => xhrs[0].onload())
+      expect(await screen.findByText(/Upload to storage failed/)).toBeInTheDocument()
+      expect(calls()).toEqual(['POST /api/import/uploads', 'DELETE /api/import/jobs/j3'])
+    })
   })
 
   it('cancels a job after confirmation', async () => {
@@ -127,7 +190,7 @@ describe('AutoImport', () => {
   })
 
   it('shows the upload error', async () => {
-    api.import.createJob.mockRejectedValue({ message: 'Only PDF files are accepted' })
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ detail: 'Only PDF files are accepted' }) })))
     const { container } = render(<MemoryRouter><AutoImport /></MemoryRouter>)
     await screen.findByText('second.pdf')
     await userEvent.upload(
@@ -135,6 +198,7 @@ describe('AutoImport', () => {
       new File(['x'], 'a.pdf', { type: 'application/pdf' }),
     )
     expect(await screen.findByText('Only PDF files are accepted')).toBeInTheDocument()
+    vi.unstubAllGlobals()
   })
 
   it('shows stage, progress, warnings and the needs-review marker', async () => {

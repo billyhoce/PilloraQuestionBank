@@ -8,7 +8,7 @@ import JobDetail from './JobDetail'
 import { AWAITING_QUERY, STALE_AFTER_DAYS, waitingDays, waitingLabel } from './jobAge'
 
 // Statuses a job can still be cancelled from (mirrors the server).
-const CANCELLABLE = ['queued', 'running', 'review_ready', 'failed']
+const CANCELLABLE = ['awaiting_upload', 'queued', 'running', 'review_ready', 'failed']
 
 // Queued jobs count as active: with a live worker they flip to running soon.
 const ACTIVE = ['queued', 'running']
@@ -36,6 +36,7 @@ function AgeBadge({ job }) {
 }
 
 const STATUS_LABELS = {
+  awaiting_upload: 'Uploading',
   queued: 'Queued',
   running: 'Running',
   review_ready: 'Ready for review',
@@ -69,6 +70,8 @@ export default function AutoImport() {
   const [listError, setListError] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  // Files being sent to S3 right now: [{ name, progress (0..1) }].
+  const [transfers, setTransfers] = useState([])
   const [term, setTerm] = useState('')
   const [filter, setFilter] = useState({})
   const [awaiting, setAwaiting] = useState(false)
@@ -120,13 +123,20 @@ export default function AutoImport() {
   async function handleUpload(files) {
     setUploading(true)
     setUploadError(null)
+    setTransfers(files.map(f => ({ name: f.name, progress: 0 })))
     try {
-      // One job per PDF.
-      for (const file of files) await api.import.createJob(file)
+      // One job per PDF, one after another.
+      for (let i = 0; i < files.length; i++) {
+        await api.import.uploadJob(files[i], fraction =>
+          setTransfers(ts => ts.map((t, j) => (j === i ? { ...t, progress: fraction } : t))),
+        )
+        setTransfers(ts => ts.map((t, j) => (j === i ? { ...t, progress: 1 } : t)))
+      }
     } catch (e) {
       setUploadError(e.message)
     } finally {
       setUploading(false)
+      setTransfers([])
       refresh()
     }
   }
@@ -160,6 +170,22 @@ export default function AutoImport() {
         loadingMessage="Uploading…"
         prompt="Drag & drop PDF(s) to auto-detect questions"
       />
+
+      {transfers.length > 0 && (
+        <ul className="max-w-lg mx-auto space-y-2" aria-label="Uploads in progress">
+          {transfers.map((t, i) => (
+            <li key={i} className="text-sm text-gray-700">
+              <div className="break-all">{t.name}</div>
+              <progress
+                className="w-full h-2"
+                value={Math.round(t.progress * 100)}
+                max={100}
+                aria-label={`Upload progress of ${t.name}`}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="flex items-center justify-between mt-6 mb-2">
         <h2 className="text-lg font-semibold text-gray-800">Import jobs</h2>

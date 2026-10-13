@@ -241,7 +241,7 @@ IngestJob: {
   created_by (FK -> User, ON DELETE RESTRICT),
   filename, source_key,          -- source_key = ingest/{id}/source.pdf (legacy jobs: tmp/ingest/{id}/source.pdf)
   sha256, page_count,            -- nullable: NULL until the worker's `register` task reads the PDF (and for a PDF it rejected)
-  status ENUM(queued, running, review_ready, failed, confirmed, cancelled, expired),  -- default queued
+  status ENUM(awaiting_upload, queued, running, review_ready, failed, confirmed, cancelled, expired),  -- default queued
   proposal (JSONB, nullable),    -- the pipeline's proposed split
   proposal_edited (JSONB, nullable),  -- the admin's edits to it
   report (JSONB, nullable),      -- run report; `filename_metadata` holds the filename-extraction

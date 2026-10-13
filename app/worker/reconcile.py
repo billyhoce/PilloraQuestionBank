@@ -14,6 +14,7 @@ others.
 | ``stale_temp``       | anything under ``tmp/`` (but the legacy ``tmp/ingest/``)    | 24 h                 |
 | ``orphan_scratch``   | scratch folder of a job not queued / running / failed       | 1 day                |
 | ``orphan_paper_image``| ``papers/`` key no ``question_page`` references            | 7 days               |
+| ``abandoned_upload`` | ``awaiting_upload`` job whose browser upload never finished | 1 h after creation  |
 | ``stuck_job``        | queued / running, no live lease, no progress                | 6 h                  |
 | ``missing_source``   | pending job whose source object is gone                     | report only          |
 """
@@ -32,6 +33,7 @@ from sqlalchemy import select
 from app.logger import log_event, log_job_event
 from app.models.orm import IngestJob, IngestTask, QuestionPage
 from app.services.ingest_events import add_event
+from app.services.ingest_jobs import cancel_job
 
 log = logging.getLogger("pillora.worker")
 
@@ -44,12 +46,14 @@ TEMP_GRACE = timedelta(hours=24)
 SCRATCH_GRACE = timedelta(days=1)
 PAPER_IMAGE_GRACE = timedelta(days=7)
 STUCK_AFTER = timedelta(hours=6)
+UPLOAD_GRACE = timedelta(hours=1)
 
 JOB_ROOTS = ("ingest/", "tmp/ingest/")
 
 # Actions: what was done (delete mode) / would be done (dry run).
 DELETED, WOULD_DELETE, DELETE_FAILED = "deleted", "would_delete", "delete_failed"
 MARKED_FAILED, WOULD_MARK_FAILED = "marked_failed", "would_mark_failed"
+CANCELLED, WOULD_CANCEL = "cancelled", "would_cancel"
 REPORT_ONLY = "report_only"
 
 
@@ -103,6 +107,7 @@ class Reconciler:
     # --- the run --------------------------------------------------------------
     def run(self) -> list[Finding]:
         checks = (
+            self.check_abandoned_uploads,
             self.check_job_prefixes_and_sources,
             self.check_stale_temp,
             self.check_orphan_scratch,
@@ -219,6 +224,26 @@ class Reconciler:
             if age > PAPER_IMAGE_GRACE:
                 action = _try_delete("orphan_paper_image", lambda k=obj.key: self.objects.delete(k), self.delete)
                 self._add("orphan_paper_image", obj.key, None, age, action)
+
+    # --- abandoned uploads --------------------------------------------------------------------
+    def check_abandoned_uploads(self) -> None:
+        """An ``awaiting_upload`` job older than :data:`UPLOAD_GRACE`: the browser never called
+        ``uploaded``. Cancelled, and any partial object removed, only in delete mode."""
+        with self.factory() as db:
+            jobs = db.scalars(select(IngestJob).where(IngestJob.status == "awaiting_upload")).all()
+            for job in jobs:
+                age = self.now - _aware(job.created_at)
+                if age <= UPLOAD_GRACE:
+                    continue
+                key, prefix = job.source_key, None
+                if self.delete:
+                    prefix = cancel_job(job, db)
+                    db.commit()
+                    action = _try_delete("abandoned_upload", lambda p=prefix: self.objects.delete_prefix(p), True)
+                    action = CANCELLED if action == DELETED else action
+                else:
+                    action = WOULD_CANCEL
+                self._add("abandoned_upload", key, job.id, age, action)
 
     # --- stuck jobs ------------------------------------------------------------------------
     def check_stuck_jobs(self) -> None:

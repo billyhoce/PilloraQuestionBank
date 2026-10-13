@@ -45,7 +45,7 @@ Oracle Cloud VM
 CI/CD:  GitHub push to main → Actions (test → build image → push GHCR → SSH deploy)
 ```
 
-The frontend is built in CI and served as static files by Nginx; it calls the API at same-origin `/api/*` (Cloudflare is transparent — same hostname), so **no CORS configuration is needed**.
+The frontend is built in CI and served as static files by Nginx; it calls the API at same-origin `/api/*` (Cloudflare is transparent — same hostname), so **the API needs no CORS configuration**. The one exception is the S3 bucket: the admin's browser POSTs import PDFs straight to it, which needs the bucket CORS rule in [One-Time VM Provisioning](#one-time-vm-provisioning) step 6.
 
 ## Alternatives Considered
 
@@ -158,6 +158,17 @@ echoed). `LOG_LEVEL` (default `INFO`) sets the root level.
         "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 2}}
      ]}
      ```
+   - **CORS for direct PDF uploads.** The Auto-detect import tab POSTs each PDF from the browser straight to the bucket (a presigned POST). The bucket must allow that cross-origin request from the app origin, and nothing else (no GET, no other origins):
+     ```bash
+     aws s3api put-bucket-cors --bucket pillora-question-bank-prod --cors-configuration file://cors.json
+     ```
+     ```json
+     {"CORSRules": [
+       {"AllowedOrigins": ["https://questionbank.pillora.com.sg"], "AllowedMethods": ["POST"],
+        "AllowedHeaders": ["*"], "MaxAgeSeconds": 3000}
+     ]}
+     ```
+     Without it the upload fails in the browser and the job stays `awaiting_upload` until the reconciler cancels it after 1 hour (or the admin cancels it). Locally, MinIO has no per-bucket CORS: `docker-compose.yml` sets `MINIO_API_CORS_ALLOW_ORIGIN` on the `minio` service instead.
    - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
