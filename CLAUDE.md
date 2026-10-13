@@ -23,6 +23,10 @@ summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-
 | **Normal + premium for a school level** (registered, paid) | All Normal capabilities, plus view images of, and generate papers from, premium papers **in that school level** |
 | **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions — always with a cover page, choosing a title from the admin-configured list; the cover body, header, and footer are admin presets |
 
+Admins also **edit the public About page** in place and manage **users** — pre-adding an account by
+email so its premium is live before the customer signs up, deleting accounts, and toggling the
+site-wide deterrent against copying question images.
+
 The stored role values are just `admin` and `public` (shown as "Normal" in the UI).
 **Premium is not a role — it is the set of school levels a user has paid for** (`Primary`,
 `Secondary`, …), held in `user_premium_school_level`; a user may hold several, and "is this user
@@ -31,11 +35,13 @@ premium paper unlocks only for admins and for users holding **its** school level
 `level`. Premium is granted per school level by an admin via the User Management page — the
 Subscribe page (one plan per school level) is a payment stub for now.
 
-Users hold a first name, last name and email address. Accounts are created either manually
-(email + password, bcrypt-hashed) or with **Google OAuth 2.0** — a server-side authorization-code
-flow; the browser never handles the client ID, the client secret or any Google token. Signing in
-with Google on an address that already has a password account links the two, keeping the existing
-role. Either way the session is a JWT in an httpOnly cookie.
+Users hold a first name, last name and email address (stored lower-cased). Accounts are created
+either manually (email + password, bcrypt-hashed), with **Google OAuth 2.0** — a server-side
+authorization-code flow; the browser never handles the client ID, the client secret or any Google
+token — or **pre-created by an admin** as a credential-less row so premium is ready before the person
+signs up. Signing in with Google on an address that already has an account links the two, keeping the
+existing role and entitlements; that same path is what claims a pre-created row. Either way the
+session is a JWT in an httpOnly cookie.
 
 ## Tech Stack (Summary)
 
@@ -91,6 +97,7 @@ usually means opening one file. [docs/README.md](./docs/README.md) is the full i
 | [docs/features/browse.md](./docs/features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
 | [docs/features/paper-generation.md](./docs/features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
 | [docs/features/generation-config.md](./docs/features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
+| [docs/features/site-config.md](./docs/features/site-config.md) | Public About page + its WYSIWYG editor and sanitizer, and the image-copy deterrent toggle |
 | [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
 | [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
 | [ingestion/README.md](./ingestion/README.md) | The PDF ingester (`question_extractor`, `ingester`): segments a booklet, splits it, locates each question's rectangle, reads answer tables (OCR via the Tesseract image). Has its own [CLAUDE.md](./ingestion/CLAUDE.md) and per-package READMEs |

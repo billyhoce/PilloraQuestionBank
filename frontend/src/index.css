@@ -7,6 +7,17 @@ body {
   background-color: #f9fafb;
 }
 
+/* Question images while the site-wide copy deterrent is on (see
+   components/ProtectedImage.jsx). A class rather than inline styles because
+   -webkit-touch-callout — the property that suppresses the iOS long-press
+   "Save Image" sheet — is not part of any CSSOM, so React could not set it and
+   jsdom could not observe it. */
+.protected-image {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 /* Rich text editor (TipTap) — mirror how the PDF renders these fields:
    a blank line between paragraphs, blue underlined links. */
 .rich-text-editor p {
@@ -16,6 +27,59 @@ body {
   margin-bottom: 0;
 }
 .rich-text-editor a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+/* Page content authored in RichContentEditor (the About page). Applied to BOTH
+   the editor surface and the rendered page so the WYSIWYG promise holds.
+   Required, not decorative: Tailwind's preflight strips list markers and
+   heading sizes, so without these rules a bulleted list renders as plain
+   paragraphs in both places. */
+.rich-content h1,
+.rich-content h2,
+.rich-content h3,
+.rich-content h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.25rem 0 0.5rem;
+}
+.rich-content h1 { font-size: 1.75rem; }
+.rich-content h2 { font-size: 1.375rem; }
+.rich-content h3 { font-size: 1.125rem; }
+.rich-content h4 { font-size: 1rem; }
+.rich-content > :first-child { margin-top: 0; }
+
+.rich-content p {
+  margin: 0 0 0.75rem;
+}
+.rich-content p:last-child {
+  margin-bottom: 0;
+}
+
+.rich-content ul,
+.rich-content ol {
+  margin: 0 0 0.75rem;
+  padding-left: 1.5rem;
+}
+.rich-content ul { list-style: disc; }
+.rich-content ol { list-style: decimal; }
+.rich-content li { margin: 0.125rem 0; }
+.rich-content li > p { margin: 0; }
+
+.rich-content blockquote {
+  margin: 0 0 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid #e5e7eb;
+  color: #4b5563;
+}
+
+.rich-content hr {
+  margin: 1.25rem 0;
+  border-top: 1px solid #e5e7eb;
+}
+
+.rich-content a {
   color: #2563eb;
   text-decoration: underline;
 }

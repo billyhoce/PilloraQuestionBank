@@ -323,4 +323,10 @@ def generate_paper(
     else:
         engine, plan = section(is_question=payload.variant == "question")
         pdf = engine.render(plan, fetch_bytes=fetch_bytes)
+
+    # Counted only once the PDF actually rendered, so a failed generation does
+    # not inflate the tally shown on User Management.
+    current_user.papers_generated = (current_user.papers_generated or 0) + 1
+    db.flush()
+
     return Response(content=pdf, media_type="application/pdf")

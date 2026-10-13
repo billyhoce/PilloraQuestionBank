@@ -262,6 +262,31 @@ def public_user(db_session):
     return _create_user(db_session, "user@test.com", "Userpass123!", "public")
 
 
+def _create_invited_user(db_session: Session, email: str, role: str = "public") -> User:
+    """An account an admin pre-created: no password, no google_sub, so it cannot
+    be signed into until someone claims it by registering or using Google."""
+    user = User(
+        email=email,
+        first_name="",
+        last_name="",
+        password_hash=None,
+        google_sub=None,
+        role=role,
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+@pytest.fixture
+def invited_user(db_session, reference_data):
+    """A pre-added user holding premium for the sample paper's school level, so
+    tests can prove the entitlement survives being claimed."""
+    user = _create_invited_user(db_session, "invited@test.com")
+    return _grant_premium(db_session, user, reference_data["school_level"])
+
+
 def _grant_premium(db_session: Session, user: User, *school_levels) -> User:
     """Give ``user`` premium access to each school level."""
     for sl in school_levels:

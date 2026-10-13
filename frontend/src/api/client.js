@@ -124,6 +124,11 @@ export const api = {
 
   users: {
     list: () => request('GET', '/api/users').then(r => r.data),
+    // Pre-create an account for someone who hasn't signed up yet, so their
+    // premium is live when they do. body: { email, first_name, last_name, role,
+    // school_level_ids }. The row has no password until they claim it.
+    create: (body) => request('POST', '/api/users', body),
+    remove: (id) => request('DELETE', `/api/users/${id}`),
     updateRole: (id, role) => request('PATCH', `/api/users/${id}/role`, { role }),
     // Replaces the user's premium school levels wholesale — send every ticked box.
     setPremiumSchoolLevels: (id, schoolLevelIds) =>
@@ -225,6 +230,15 @@ export const api = {
   generationConfig: {
     get: (signal) => request('GET', '/api/generation-config', undefined, signal),
     update: (body) => request('PUT', '/api/generation-config', body),
+  },
+
+  // Site-wide settings ({ about_content, protect_images }). The GET is public —
+  // the About page and the Browse page both need it while signed out. The PUT is
+  // admin-only and *partial*: send only the field you are changing, so the About
+  // editor and the image toggle can't overwrite each other.
+  siteConfig: {
+    get: (signal) => request('GET', '/api/site-config', undefined, signal),
+    update: (body) => request('PUT', '/api/site-config', body),
   },
 
   coverTitles: {

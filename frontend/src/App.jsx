@@ -1,7 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import { SiteConfigProvider } from './context/SiteConfigContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import AppShell from './components/AppShell'
+import AboutPage from './pages/AboutPage'
 import BrowsePage from './pages/BrowsePage'
 import GeneratePage from './pages/GeneratePage'
 import SubscribePage from './pages/SubscribePage'
@@ -19,27 +21,31 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route element={<AppShell />}>
-            <Route path="/" element={<BrowsePage />} />
-            <Route element={<ProtectedRoute />}>
-              <Route path="/generate" element={<GeneratePage />} />
-              <Route path="/subscribe" element={<SubscribePage />} />
+        <SiteConfigProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route element={<AppShell />}>
+              <Route path="/" element={<BrowsePage />} />
+              {/* Public, like `/` — the About page is outward-facing copy. */}
+              <Route path="/about" element={<AboutPage />} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/generate" element={<GeneratePage />} />
+                <Route path="/subscribe" element={<SubscribePage />} />
+              </Route>
+              <Route element={<ProtectedRoute requiredRole="admin" />}>
+                <Route path="/admin/reference" element={<ReferencePage />} />
+                <Route path="/admin/import" element={<ImportPage />} />
+                <Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} />
+                <Route path="/admin/papers" element={<PapersPage />} />
+                <Route path="/admin/papers/:id" element={<PaperEditorPage />} />
+                <Route path="/admin/users" element={<UserManagementPage />} />
+                <Route path="/admin/generation-config" element={<GenerationConfigPage />} />
+              </Route>
             </Route>
-            <Route element={<ProtectedRoute requiredRole="admin" />}>
-              <Route path="/admin/reference" element={<ReferencePage />} />
-              <Route path="/admin/import" element={<ImportPage />} />
-              <Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} />
-              <Route path="/admin/papers" element={<PapersPage />} />
-              <Route path="/admin/papers/:id" element={<PaperEditorPage />} />
-              <Route path="/admin/users" element={<UserManagementPage />} />
-              <Route path="/admin/generation-config" element={<GenerationConfigPage />} />
-            </Route>
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </SiteConfigProvider>
       </AuthProvider>
     </BrowserRouter>
   )

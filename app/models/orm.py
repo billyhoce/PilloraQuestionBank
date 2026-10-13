@@ -144,6 +144,32 @@ class GenerationConfig(Base):
     footer_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
+class SiteConfig(Base):
+    """Singleton row (id=1) of site-wide settings that are neither reference data
+    nor generation presets.
+
+    Kept separate from ``GenerationConfig`` on purpose: that table is scoped to
+    paper-generation presets and its endpoint requires authentication, while both
+    fields here have to reach **signed-out** visitors — the About page is public
+    and the image-protection flag is read by the public Browse page.
+
+    ``about_content`` is rich-text HTML rendered straight into the browser, so it
+    is sanitized on write (``app/services/site_config.py``) rather than at render
+    time; the PDF sanitizer in ``app/pdf/rich_text.py`` is a different, narrower
+    subset and is not used here.
+    """
+
+    __tablename__ = "site_config"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_site_config_singleton"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    about_content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Client-side deterrent against casual image copying. Off by default.
+    protect_images: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
+
 class User(Base):
     """An account. ``role`` says whether it is an admin; premium access is *not*
     stored here — it is the set of school levels in ``premium_school_levels``,
@@ -154,6 +180,7 @@ class User(Base):
     __table_args__ = (CheckConstraint("role IN ('admin', 'public')", name="ck_user_role"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Always stored lower-cased — see ``normalize_email`` in app/services/auth.py.
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
     last_name: Mapped[str] = mapped_column(String(100), nullable=False, server_default="")
@@ -166,6 +193,28 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Stamped on every successful sign-in, both paths — see _set_session_cookie
+    # in app/routes/auth.py. Null until the account has ever signed in, which is
+    # also true of every admin-created invite.
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Running count of PDFs generated, incremented by POST /api/generate/paper.
+    # A counter rather than a log table: nothing needs per-generation history yet.
+    papers_generated: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    @property
+    def is_invited(self) -> bool:
+        """An account an admin pre-created that nobody has claimed yet: no
+        password and no Google link, so there is no way to sign into it.
+
+        Derived rather than stored, like premium access — a stored flag could
+        disagree with the credentials actually on the row. Registering or
+        signing in with Google on this address claims the row, keeping its role
+        and its premium school levels."""
+        return not self.password_hash and not self.google_sub
 
     # Eagerly loaded: every user row the API returns carries its entitlements,
     # so lazy loading would mean a query per user on /api/users.

@@ -52,8 +52,24 @@ the other. `tests/test_premium_gate.py` asserts the two agree.
 
 ```
 GET    /api/users                            -- list all users. Each row carries id, email,
-                                                first_name, last_name, role, created_at, and
-                                                premium_school_levels: [{id, name}]
+                                                first_name, last_name, role, created_at,
+                                                premium_school_levels: [{id, name}], plus
+                                                last_login_at, papers_generated and the derived
+                                                has_password / has_google / is_invited flags.
+                                                The hash and google_sub themselves are excluded.
+
+POST   /api/users                            -- pre-create an account for an address that has not
+                                                signed up yet. Body: { email, first_name?,
+                                                last_name?, role?, school_level_ids? }. Creates a
+                                                credential-less row plus its entitlements, so
+                                                premium is live the moment they register.
+                                                Duplicate email -> 409; unknown school level -> 422.
+                                                201 + the list-row shape.
+
+DELETE /api/users/{id}                       -- delete an account; entitlements cascade. 204.
+                                                Deleting yourself -> 400. A user who imported
+                                                papers -> 409 naming the count (Paper.created_by is
+                                                ON DELETE RESTRICT). Unknown -> 404.
 
 PATCH  /api/users/{id}/role                  -- change a user's role. Body: { role: "admin"|"public" }.
                                                 An admin cannot change their own role (400).
@@ -70,11 +86,43 @@ PUT    /api/users/{id}/premium-school-levels -- replace the set of school levels
 ```
 
 `/api/auth/me` also returns `premium_school_levels`, so the SPA knows which plans the user owns.
-There is no delete-account endpoint.
 
 Deleting a school level cascades its entitlement rows away (`ON DELETE CASCADE`). In practice the
 `level`/`stream` foreign keys already `RESTRICT` the delete, so it rarely bites — see
 [reference-data.md](./reference-data.md).
+
+**No separate "last admin" guard on delete.** Refusing self-delete already makes one unnecessary: the
+caller is an admin and cannot be the target, so deleting an admin always leaves at least the caller
+behind. A `remaining == 0` check could never fire, so it isn't there.
+
+## Pre-adding a user (invites)
+
+An admin can create an account for someone who has not signed up yet — typically because they paid
+first — so their premium access is live the moment they do. It is **not** a separate table: the
+invite is an ordinary `app_user` row with **no password and no `google_sub`**, which
+`User.is_invited` derives (see [DATA_MODEL.md](../DATA_MODEL.md#google-linked-accounts) for the four
+credential states). Entitlements attach through the normal FK, and invites are listed like any other
+row so a mistyped address is visible rather than silently doing nothing.
+
+**Claiming.** Both sign-up paths land on the same row and keep its role and premium:
+
+- **Password** — `POST /api/auth/register` looks the address up first and, if the row is an unclaimed
+  invite, sets its `password_hash` instead of returning 409. Without this an invited user could not
+  create an account *at all*. A row that already has a credential still returns 409, so registering
+  can never take over someone else's account.
+- **Google** — needs no new code. `_resolve_google_user` already falls through `google_sub` → email →
+  create, and the email branch is exactly what attaches a `google_sub` to the pre-made row.
+
+### What can go wrong with Google, and what we do about it
+
+| | Behaviour |
+|---|---|
+| **Case** | Fixed. Google's `email` claim is canonical lower-case; addresses are normalized on every write and lookup, so `Billy@Gmail.com` and `billy@gmail.com` are one account. Before this, an invite in the wrong case produced a second, unentitled row. |
+| **Gmail dot / `+` aliases** | **Not** handled, on purpose. `bill.y@`, `billy+qb@` and `@googlemail.com` reach the same inbox, but Google reports the canonical address, so an aliased invite never matches. Normalizing them would be wrong for every non-Gmail provider. Mitigated in the UI: the invite form says the address must be the exact one they sign in with. |
+| **A different Google address** (work Workspace vs personal Gmail) | Creates a fresh unentitled row and leaves the invite pending. The admin ticks premium on the real row and deletes the stale invite — which is why unclaimed invites stay visible. |
+| **Google changes the account's email** | Matching is `google_sub`-first, so a linked account survives it; `app_user.email` then goes stale. Pre-existing behaviour, unchanged. |
+| **No email verification on registration** | **Accepted risk.** Anyone who knows an invited address can register it first and inherit the premium. Already true of open registration generally — there is no email verification anywhere — but an invite makes the prize bigger than an empty account. Acceptable at 1–10 hand-granted users. |
+| **User enumeration** | None added. The "created with Google" 409 branch requires a `google_sub`, which an invite lacks, so a password attempt against one falls through to the generic 401. |
 
 ## Flagging a paper premium
 
@@ -114,14 +162,28 @@ Admins are unrestricted throughout.
 
 ## UI
 
-- **User Management** (`/admin/users`, `features/users/UsersList.jsx`): **Name**, Email, Tier and
-  **Premium Access** columns. Name shows `first_name last_name`, or a dash for accounts with neither
-  on file (`fullName` in `utils/userName.js`). The Tier select offers only Normal / Admin
+- **User Management** (`/admin/users`, `features/users/UsersList.jsx`): **Name**, Email, **Sign-in**,
+  **Joined**, **Last login**, **Papers**, Tier, **Premium Access** and a delete action. Widened to
+  `max-w-[90%]` — nine columns don't fit the old `max-w-4xl`. Name shows `first_name last_name`, or a
+  dash for accounts with neither on file (`fullName` in `utils/userName.js`). Sign-in is a badge
+  reading **Invited** / Password / Google / Password + Google, derived from the `has_password` /
+  `has_google` / `is_invited` flags. Last login shows "Never" until the account has signed in, which
+  is always the case for an unclaimed invite. The Tier select offers only Normal / Admin
   (`api.users.updateRole`); an admin's own row is **disabled** so they can't lock themselves out.
   Premium Access renders one checkbox per school level (from `api.schoolLevels.list()`); ticking one
   sends the whole resulting set through `api.users.setPremiumSchoolLevels`, optimistically updating
   the row and reverting + showing an error on failure — the same pattern as the inline Premium
   checkbox on the Papers list. Admin rows show "All access" instead of checkboxes.
+- **Add user by email** (`features/users/InviteUserModal.jsx`): email + names + the same school-level
+  checkboxes, posting `api.users.create` and appending the row. The email field warns that it must be
+  the exact address they will sign in with, since a Gmail dot or `+alias` variant will never match
+  their Google account.
+- **Delete** per row (hidden on the admin's own row), through the shared
+  `components/ConfirmDialog.jsx`. A backend refusal — most often "imported N paper(s)" — is shown in
+  the dialog and the row stays.
+- **Site settings** panel above the table: the site-wide **Discourage copying of question images**
+  toggle, sent as a *partial* `api.siteConfig.update({ protect_images })` so it cannot overwrite the
+  About page content edited elsewhere. See [site-config.md](./site-config.md).
 - **Subscribe** (`/subscribe`, `pages/SubscribePage.jsx`): one plan card per school level, built from
   `api.schoolLevels.list()`. A plan the user already holds shows an owned banner instead of the
   (disabled) Subscribe button; admins see every plan as owned. `?school_level=<name>` highlights one

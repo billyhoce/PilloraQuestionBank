@@ -95,13 +95,17 @@ QuestionTag: {
 
 User: {
   id,
-  email (unique),
+  email (unique),                            -- always lower-cased; see normalize_email()
   first_name,                                -- '' for accounts predating the field
   last_name,                                 -- '' for accounts predating the field
-  password_hash (nullable),                  -- NULL for accounts created via Google
+  password_hash (nullable),                  -- NULL for accounts created via Google, and for
+                                             --   an admin-created invite nobody has claimed
   google_sub (unique, nullable),             -- Google's 'sub' claim; set once linked to Google
   role ENUM('admin', 'public'),              -- 'public' is shown as "Normal" in the UI
-  created_at
+  created_at,
+  last_login_at (nullable),                  -- stamped on every successful sign-in, both paths;
+                                             --   NULL until the account has ever signed in
+  papers_generated (int, default 0)          -- running count from POST /api/generate/paper
 }
 
 UserPremiumSchoolLevel: {
@@ -123,6 +127,20 @@ GenerationConfig: {
   -- bold/italic/underline/link), sanitized at render time by app/pdf/rich_text.py.
   -- Plain text stored before they became rich text still renders, and migration
   -- a1b2c3d4e5f7 converts the seeded values to HTML.
+}
+
+SiteConfig: {
+  id,                          -- singleton: CHECK (id = 1)
+  about_content (text),        -- rich-text HTML for the public /about page
+  protect_images (bool)        -- default false; client-side deterrent against
+                               --   copying question images
+
+  -- A separate singleton from GenerationConfig because that one is scoped to
+  -- paper-generation presets and its endpoint requires auth, while BOTH fields
+  -- here must reach signed-out visitors. about_content is a WIDER HTML subset
+  -- (headings, lists, colour, font size) than the PDF fields above, and is
+  -- sanitized on WRITE by app/services/site_config.py rather than at render
+  -- time, because it is the one value rendered as HTML in the browser.
 }
 ```
 
@@ -177,15 +195,22 @@ paper could read as Secondary in the UI while being sold to Primary customers. T
 always send. Rows created before this field existed keep `''`, so the UI falls back to the email
 address wherever a name is displayed (`frontend/src/utils/userName.js`).
 
+**Emails are stored lower-cased.** Every write and every lookup goes through `normalize_email`
+(`app/services/auth.py`); migration `e6f7a8b9c0d1` folded the rows written before it existed. Google's
+OIDC `email` claim is canonical lower-case, so matching verbatim meant one person could end up with
+two accounts. Only case and surrounding whitespace fold — Gmail's dot and `+` aliases deliberately do
+**not**, since they are provider-specific and folding them would be wrong for every other provider.
+
 **Google-linked accounts.** `google_sub` holds Google's `sub` claim — unique per Google account and
 stable even if the user changes the email address on it, which is why sign-in matches on it rather
-than on email. An account may have a password, a Google link, or both:
+than on email. The two credential columns give **four** states:
 
-| `password_hash` | `google_sub` | How it was created |
+| `password_hash` | `google_sub` | What the row is |
 |---|---|---|
 | set | NULL | Manual registration |
 | NULL | set | First sign-in with Google |
 | set | set | Registered manually, later signed in with Google on the same verified address |
+| NULL | NULL | **An admin-created invite nobody has claimed yet** — no way to sign into it |
 
 The third row is produced by **auto-linking**: when Google reports `email_verified = true` for an
 address that already has an account, that account gains the `google_sub` and keeps its existing
@@ -193,7 +218,14 @@ address that already has an account, that account gains the `google_sub` and kee
 and it avoids a duplicate account. Both sign-in methods then work. Blank names are backfilled from Google at that point, but
 a name the user typed is never overwritten. `password_hash` is nullable purely to represent the
 second row; `verify_password` rejects a NULL/empty hash, so a Google-only account cannot be
-password-logged-in. See [features/auth.md](./features/auth.md).
+password-logged-in.
+
+The fourth row is an **invite** (`User.is_invited`, derived rather than stored — like premium access,
+so it can never disagree with the credentials actually present). It is created by
+`POST /api/users` so premium is live before the customer signs up, and it is *claimed* — becoming
+row one or row two — when someone registers with that address or signs in with Google on it, keeping
+its role and entitlements either way. See [features/auth.md](./features/auth.md) and
+[features/users-and-premium.md](./features/users-and-premium.md).
 
 ## Auto-import jobs
 
