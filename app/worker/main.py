@@ -27,7 +27,7 @@ from question_extractor import ExtractConfig
 from app.ai.job_cost import record_usage
 from app.logging_setup import configure_logging
 from app.worker.edges import Edges
-from app.worker.store import SqlStore
+from app.worker.store import REPORT_STAGE, SqlStore
 from app.worker.sweep import run_sweep
 
 log = logging.getLogger("pillora.worker")
@@ -147,12 +147,21 @@ class Worker:
         self.store.touch_worker()
         self.sweep()
         try:
-            return self.runner.run_one() is not None
+            task = self.runner.run_one()
+            if task is not None and task.section is None and task.stage == REPORT_STAGE:
+                self._release_scratch(task.job_id)
+            return task is not None
         except Exception:
             # The runner records a failing stage; this is the store or S3 being unreachable.
             # The claimed task, if any, comes back when its lease expires.
             log.exception("the worker could not run a task")
             return False
+
+    def _release_scratch(self, job_id: str) -> None:
+        try:
+            self.edges.release_scratch(job_id)
+        except Exception:
+            log.exception("job %s: could not release its scratch folder", job_id)
 
     def run_forever(self) -> None:
         self.start()

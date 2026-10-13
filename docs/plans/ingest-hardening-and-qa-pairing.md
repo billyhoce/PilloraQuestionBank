@@ -232,7 +232,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
 - In `AutoImport.jsx`, show an age badge ("waiting 12 days") from `created_at`, highlighted past
   14 days, and a filter "Awaiting review".
 
-### 2.3 Scratch as a cache
+### 2.3 Scratch as a cache (DONE)
 
 - After the report stage succeeds, `after_report` (`app/worker/edges.py:109-129`) deletes the job's
   scratch folder, once pages are uploaded and the proposal is written. Review, confirm and manual-pages
@@ -241,10 +241,11 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
   redeploy), `Runner.revalidate` already re-runs from the S3 source, as today.
 - `clean_cancelled_scratch` still covers `cancelled` / `confirmed` jobs whose scratch outlived them.
 
-### 2.4 Debug bundle on settle
+### 2.4 Debug bundle on settle (DONE)
 
-- Copy `segments.json` and `ingest.json` into the job row at `after_report` time. Add a new
-  `ingest_job.debug` JSONB column, or nest them under `report["debug"]`.
+- Copy `segments.json` and `ingest.json` into the job row at `after_report` time, in the new
+  `ingest_job.debug` JSONB column (decided; migration `d0e1f2a3b4c5`). Scratch itself is released by
+  `Edges.release_scratch` after the runner records `report` done, not inside the hook.
 - The proposal and edited proposal are already on the row.
 - With that in place, settling (`_drop_job_objects`, cancel) deletes **everything** under
   `ingest/{job_id}/`. The invariant for the reconciler becomes: "settled job ⇒ prefix empty".
