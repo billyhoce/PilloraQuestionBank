@@ -162,6 +162,8 @@ export default function ReviewPage() {
   const [topicStep, setTopicStep] = useState(null)
   // Papers linked to a paper of another job, by paper key: { filename, paper_key, ... }.
   const [matches, setMatches] = useState({})
+  // Automatic matches of answer-only papers to confirmed papers, by key: { status, note, paper }.
+  const [proposals, setProposals] = useState({})
 
   useEffect(() => {
     let live = true
@@ -170,6 +172,7 @@ export default function ReviewPage() {
         if (!live) return
         setReview(r)
         setMatches(r.matches ?? {})
+        setProposals(r.proposals ?? {})
         // Open on the first paper still undecided.
         const first = r.proposal.papers.findIndex(p => !p.outcome)
         if (first > 0) setPaperIdx(first)
@@ -584,6 +587,7 @@ export default function ReviewPage() {
                   metadata={metadata}
                   refs={refs}
                   link={matches[paper.key] ?? null}
+                  proposal={proposals[paper.key] ?? null}
                   onLink={link => setMatches(m => ({ ...m, [paper.key]: link }))}
                   onFlush={async () => { if (timer.current) await flush() }}
                   onAttached={jobStatus => decided('attached', jobStatus)}

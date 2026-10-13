@@ -599,6 +599,42 @@ finds the paper an answer-only paper belongs to.
   (`{paper key: {ingest_paper_id, job_id, filename, paper_key}}`); both review pages show
   "Linked to <filename> <key>" with an Unlink button. Confirming the question paper to pull in the
   linked answers is not built yet.
+  A pending-paper link takes precedence over an automatic proposal (see below), which is hidden while it exists.
 - **Job list**: the "Unmatched answers" checkbox sends `unmatched_answers=true`, keeping jobs with
   at least one `answer_only` paper that is `pending` and has no `matched_ingest_paper_id`. It combines
   with the other filters.
+
+### Automatic matching to a confirmed paper
+
+`app/services/ingest_matching.py` proposes, for each **pending answer-only** `ingest_paper`, the
+confirmed paper it belongs to. The result is stored on the row (`match_status`, `proposed_paper_id`,
+`match_note`; see [DATA_MODEL.md](../DATA_MODEL.md)). It is only ever a proposal: nothing is attached
+until the admin accepts.
+
+| Situation | `match_status` |
+|---|---|
+| All seven key fields known and exactly one `paper` has that key | `proposed` (+ `proposed_paper_id`) |
+| All seven known and several papers share the key (`paper` has no unique index) | `manual`, note "N papers have this key" |
+| No exact match, or a field is unknown, but papers share `school_id` + `year` + `subject_id` with the row (the *partial* rule; those three must be known) | `manual`, note "partial: ... differ" / "partial: unknown ..." |
+| Anything else | NULL (nothing to do) |
+
+`paper_number` is not normalised in the bank, so it is compared after trimming and case-folding only
+(`"2A"` matches `" 2a "`, not `"02A"`). A row linked to a pending question paper (`matched_ingest_paper_id`)
+is left alone: the admin's link wins, and unlinking re-runs matching. Settling a paper (attach or skip,
+via `set_status`) clears the proposal.
+
+**When it runs**
+- End of the worker's `after_report` (`match_job`), in the same transaction as the proposal and `ingest_paper` upsert.
+- `PUT .../papers/{key}/metadata` re-matches that paper in the same transaction and returns `proposal`.
+- Any paper creation (`confirm_import`, which both `confirm_job_paper` and the manual import use) calls
+  `match_for_new_paper`: it re-matches pending answer-only papers of `review_ready` jobs sharing the new
+  paper's school, year and subject, so the new paper shows up as a ready-to-attach target on the answer job
+  (or turns a single proposal into "several"). It runs in the confirm's own transaction, inside a savepoint
+  and with every exception swallowed and logged, so it commits or rolls back with the paper and can never
+  make the confirm fail.
+
+**Review page**: the review response has `proposals` (`{paper key: {status, note, paper}}`, `paper` being
+`{id, school, year, level, subject, exam_type, stream, paper_number}` for a proposal). In the Match panel
+a proposal reads "Answers match <paper> — Attach"; one click runs the normal attach flow (asking
+append/replace only if the target's questions already have answers). `manual` shows the note and "Several or
+partial matches — pick one below".

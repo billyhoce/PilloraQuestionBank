@@ -107,6 +107,8 @@ def set_status(db: Session, job: IngestJob, key: str, status: str, paper_id: int
     row.status = status
     if paper_id is not None:
         row.paper_id = paper_id
+    if status != "pending":
+        row.match_status = row.proposed_paper_id = row.match_note = None  # a settled paper has no proposal
 
 
 # --- matching an answer-only paper to a question paper (manual, #82) -------------------------
@@ -220,6 +222,10 @@ def unlink_paper(db: Session, job: IngestJob, key: str) -> None:
     if row is None:
         raise MatchError(404, f"This job has no paper {key!r}")
     _clear_link(row)
+    db.flush()
+    from app.services.ingest_matching import match_row  # imports this module's constants
+
+    match_row(db, row)  # back to what the bank offers
     db.flush()
 
 

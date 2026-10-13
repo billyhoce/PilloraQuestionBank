@@ -55,6 +55,7 @@ from app.services.ingest_jobs import (
     record_paper_metadata,
     source_key_for,
 )
+from app.services.ingest_matching import match_job
 from app.services.ingest_papers import sync_job_papers
 from app.services.ingest_review import extract_pages
 from app.storage.object_store import ObjectStore
@@ -223,6 +224,7 @@ class Edges:
                 **self._summary(ctx.job_id, outcome),
             }
             sync_job_papers(db, job)  # same transaction as the proposal
+            match_job(db, job)  # propose answer-only papers' confirmed papers
             db.commit()
         log_job_event(job_uuid, "proposal_stored", papers=len(proposal.get("papers", [])))
         return outcome

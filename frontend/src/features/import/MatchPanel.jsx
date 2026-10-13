@@ -41,6 +41,9 @@ function firstAnswer(paper) {
   return null
 }
 
+const describePaper = p =>
+  `${p.school} ${p.year} ${p.level} ${p.subject}${p.paper_number ? ` Paper ${p.paper_number}` : ''} (paper ${p.id})`
+
 const metaText = m => [m.year, m.paper_number && `Paper ${m.paper_number}`].filter(Boolean).join(' ')
 
 // Match an answer-only paper to its question paper by hand. Filters start from the paper's own
@@ -48,7 +51,7 @@ const metaText = m => [m.year, m.paper_number && `Paper ${m.paper_number}`].filt
 // other review-ready jobs. Selecting a confirmed paper enables Attach (append / replace prompt as
 // before, unless the answers have nowhere to clash); selecting a pending one links the two ingest
 // papers instead (they are settled together when the question paper is confirmed).
-export default function MatchPanel({ jobId, paper, metadata, refs, link, onLink, onFlush, onAttached, onSkip, busy }) {
+export default function MatchPanel({ jobId, paper, metadata, refs, link, proposal, onLink, onFlush, onAttached, onSkip, busy }) {
   const [filters, setFilters] = useState(() => ({
     subject_id: metadata.subject_id ?? '', stream_id: metadata.stream_id ?? '', level_id: metadata.level_id ?? '',
     school_id: metadata.school_id ?? '', exam_type_id: metadata.exam_type_id ?? '',
@@ -99,28 +102,29 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, onLink,
     }
   }
 
-  async function submit(mode) {
-    const r = await api.import.attachJobPaper(jobId, { key: paper.key, paper_id: Number(paperId), ...(mode ? { mode } : {}) })
+  async function submit(mode, id = Number(paperId)) {
+    const r = await api.import.attachJobPaper(jobId, { key: paper.key, paper_id: id, ...(mode ? { mode } : {}) })
     setChoice(null)
     setResult(r)
   }
 
-  async function handleAttach() {
+  // `id` is given by the one-click accept of an automatic proposal; otherwise the typed paper id.
+  async function handleAttach(id = Number(paperId)) {
     setLoading(true)
     setError(null)
     try {
       await onFlush() // the server crops the saved proposal, so a pending edit goes first
       if (choice) {
-        await submit(choice.mode)
+        await submit(choice.mode, id)
         return
       }
-      const target = await api.papers.get(Number(paperId))
+      const target = await api.papers.get(id)
       const withAnswers = new Set(
         target.questions.filter(q => q.pages.some(p => p.page_type === 'answer')).map(q => Number(q.question_number)),
       )
       const count = paper.questions.filter(q => q.answer_rects.length > 0 && withAnswers.has(num(q.number))).length
       if (count > 0) setChoice({ mode: 'append', count })
-      else await submit(null)
+      else await submit(null, id)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -196,6 +200,26 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, onLink,
             Unlink
           </button>
         </div>
+      )}
+
+      {!link && proposal?.status === 'proposed' && proposal.paper && (
+        <div role="status" className="text-xs bg-green-50 border border-green-200 rounded px-2 py-1.5 space-y-1">
+          <p>Answers match {describePaper(proposal.paper)}.</p>
+          <button
+            type="button"
+            onClick={() => { setPaperId(String(proposal.paper.id)); handleAttach(proposal.paper.id) }}
+            disabled={loading || busy || paper.questions.length === 0}
+            className="text-green-800 font-medium hover:underline disabled:opacity-50"
+          >
+            Attach
+          </button>
+        </div>
+      )}
+      {!link && proposal?.status === 'manual' && (
+        <p role="status" className="text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+          {proposal.note ? `${proposal.note[0].toUpperCase()}${proposal.note.slice(1)}. ` : ''}
+          Several or partial matches — pick one below.
+        </p>
       )}
 
       <fieldset className="grid grid-cols-2 gap-2">
@@ -308,7 +332,7 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, onLink,
       ) : (
         <button
           type="button"
-          onClick={handleAttach}
+          onClick={() => handleAttach()}
           disabled={!(Number(paperId) > 0) || loading || busy || paper.questions.length === 0}
           className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium flex items-center justify-center gap-2"
         >
