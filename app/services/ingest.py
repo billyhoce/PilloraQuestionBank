@@ -168,6 +168,11 @@ def confirm_import(
             copied_keys.append(canonical_key)
         if before_commit is not None:
             before_commit(paper)
+        # Same transaction as the paper: pending answer-only papers with its key now see it (in a
+        # savepoint, and never raising, so it cannot fail the import).
+        from app.services.ingest_matching import match_for_new_paper
+
+        match_for_new_paper(db, paper)
         db.commit()
     except Exception:
         db.rollback()

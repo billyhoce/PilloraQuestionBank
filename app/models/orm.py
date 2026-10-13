@@ -535,6 +535,12 @@ class IngestPaper(Base):
     matched_ingest_paper: Mapped["IngestPaper | None"] = relationship(
         "IngestPaper", foreign_keys=[matched_ingest_paper_id], remote_side="IngestPaper.id", post_update=True
     )
+    # Automatic matching of a pending answer-only paper to the bank (app/services/ingest_matching.py):
+    # NULL (nothing to do), ``proposed`` (one confirmed paper, ``proposed_paper_id``) or ``manual``
+    # (several or only partial candidates); ``match_note`` says why.
+    match_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    proposed_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
+    match_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

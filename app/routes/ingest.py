@@ -21,6 +21,7 @@ from app.models.orm import INGEST_JOB_STATUSES, IngestJob, IngestPaper, Paper, Q
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.ingest_matching import match_info, match_row
 from app.services.ingest_papers import (
     MatchError,
     get_row as get_paper_row,
@@ -546,7 +547,8 @@ def review_ingest_job(
     except NoProposalError:
         raise HTTPException(status_code=409, detail="This job has no proposal to review yet")
     # Papers linked to a paper of another job (by key), for the "linked to ..." note.
-    return {**review, "matches": paper_links(db, job)}
+    # ``proposals``: automatic matches of answer-only papers to confirmed papers, by key (#83).
+    return {**review, "matches": paper_links(db, job), "proposals": match_info(db, job)}
 
 
 @router.put("/jobs/{job_id}/proposal")
@@ -639,8 +641,9 @@ def save_paper_metadata(
     if row.status != "pending":
         raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} was already {row.status}")
     set_paper_metadata(db, job, paper_key, payload.model_dump())
+    match_row(db, row)  # the key may now match (or stop matching) a confirmed paper
     db.commit()
-    return {"saved": True, "metadata_source": row.metadata_source}
+    return {"saved": True, "metadata_source": row.metadata_source, "proposal": match_info(db, job).get(paper_key)}
 
 
 @router.get("/papers/pending")

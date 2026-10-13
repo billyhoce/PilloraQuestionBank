@@ -333,6 +333,34 @@ describe('ReviewPage', () => {
       expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 })
     })
 
+    it('shows a proposed paper and attaches to it with one click', async () => {
+      const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1' }
+      api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'proposed', note: null, paper } } })
+      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'question' }] }] })
+      api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [], modes: {}, job_status: 'confirmed' })
+      renderPage()
+      expect(await screen.findByText(/Answers match Raffles 2024 Sec 3 Math Paper 1/)).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Attach' }))
+      await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 9 }))
+    })
+
+    it('asks append or replace on a proposed paper whose questions already have answers', async () => {
+      const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1' }
+      api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'proposed', note: null, paper } } })
+      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'answer' }] }] })
+      renderPage()
+      await userEvent.click(await screen.findByRole('button', { name: 'Attach' }))
+      expect(await screen.findByLabelText('Add to the existing answers')).toBeChecked()
+      expect(api.import.attachJobPaper).not.toHaveBeenCalled()
+    })
+
+    it('hints at manual matching when several or only partial papers match', async () => {
+      api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'manual', note: 'partial: year differ', paper: null } } })
+      renderPage()
+      expect(await screen.findByText(/Partial: year differ\. Several or partial matches — pick one below/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
+    })
+
     it('asks append or replace (default append) when a target question already has answers', async () => {
       api.import.review.mockResolvedValue(ANSWERS)
       api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'answer' }] }] })
