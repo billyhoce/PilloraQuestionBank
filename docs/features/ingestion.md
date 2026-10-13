@@ -50,7 +50,10 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   result in `report.filename_metadata` (merged into any existing report; empty metadata on error)
   so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
   needs the DB reference data (`ingestion/` never imports `app`).
-- `GET /api/import/jobs?status=` — **only jobs the requesting admin created**, newest first, as
+- `GET /api/import/jobs?status=&job_id=&paper_id=` — **every admin's jobs**, newest first, optionally
+  narrowed by `status`, by `job_id` (a UUID), or by `paper_id` (the job that confirmed that paper:
+  `paper.source_job_id` or the job's `confirmed_paper_ids`). Any admin may also open, retry, cancel,
+  review and confirm any other admin's job (`_get_own_job` only scopes non-admins to their own). Returns
   `{"data": [...], "worker_alive": bool, "heartbeat_age_s": int|null}`; an unknown `status` is `422`.
   Each job carries its progress (below).
 - `GET /api/import/jobs/{id}` — the job plus `report`, its `tasks` (status, attempts, duration,
@@ -390,7 +393,19 @@ the **parts themselves and their marks survive**, only the now-out-of-scope topi
 For the Premium checkbox on the papers list, see
 [users-and-premium.md](./users-and-premium.md#flagging-a-paper-premium).
 
-### Confirming a paper
+### Provenance of confirmed content
+
+Confirming an auto-import paper records where each stored image came from in the source PDF, all
+nullable (manual imports leave them null): `question.section` (the paper's question label, e.g.
+`q1`; the answer label for an answer-only paper) and `question.proposal_question_index` (0-based
+position in the paper's `questions`), and on each `question_page` `source_page` (the booklet page
+number used in the proposal) and `source_rect` (JSON `{x0, y0, x1, y1}` in PDF points, the
+proposal's rectangle shape). Set by `build_confirm_payload` and stored by `confirm_import`.
+
+The import jobs list has a search box (job id as a UUID, or a numeric paper id), and the job detail
+shows the job id with a copy button.
+
+## Confirming a paper
 
 The review page's right-hand column is the Manual wizard's own `MetadataSidebar` (shared component),
 pre-filled from `report.filename_metadata` (returned by `GET .../review` as `filename_metadata`;
@@ -404,7 +419,7 @@ question `label` (`q1`), else its `answer_label` (`a1`) for an answer-only paper
 `paper{position}`. Question and answer labels come from different sections, so keys do not clash.
 
 `POST /api/import/jobs/{id}/confirm` `{paper_label, subject_id, stream_id, level_id, school_id,
-exam_type_id, year, paper_number, is_premium}` (admin, own job; `201`):
+exam_type_id, year, paper_number, is_premium}` (admin, any admin's job; `201`):
 
 1. The job must be `review_ready` and the paper undecided, else `409`; an unknown label is `404`; a
    stream/level from different school levels is `422`, as in `/confirm`. A paper with **no questions**

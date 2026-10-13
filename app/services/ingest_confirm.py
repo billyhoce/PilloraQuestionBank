@@ -94,7 +94,9 @@ def build_confirm_payload(
 
     Each proposal question becomes one payload question (``question_number`` = its number); its
     ``question_rects`` become ``question`` pages and its ``answer_rects`` ``answer`` pages, in
-    list order, ``page_order`` counting from 1 per type like the Manual flow. Orphan answers are
+    list order, ``page_order`` counting from 1 per type like the Manual flow. Provenance rides
+    along: each question carries its ``section`` (the paper's question label) and
+    ``proposal_question_index``, each page its ``source_page`` and ``source_rect``. Orphan answers are
     not imported. On a failure the images already uploaded are deleted again."""
     upload_id = upload_id or str(uuid.uuid4())
     keys: list[str] = []
@@ -102,7 +104,7 @@ def build_confirm_payload(
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             n = 0
-            for q in paper["questions"]:
+            for q_index, q in enumerate(paper["questions"]):
                 pages = []
                 for page_type, rects in (("question", q["question_rects"]), ("answer", q["answer_rects"])):
                     for order, rect in enumerate(rects, start=1):
@@ -117,8 +119,14 @@ def build_confirm_payload(
                         pages.append({
                             "temp_key": key, "page_type": page_type, "page_order": order,
                             "width_px": w, "height_px": h,
+                            "source_page": rect["page"],
+                            "source_rect": {k: rect[k] for k in ("x0", "y0", "x1", "y1")},
                         })
-                questions.append({"question_number": q["number"], "pages": pages})
+                questions.append({
+                    "question_number": q["number"], "pages": pages,
+                    "section": paper.get("label") or paper.get("answer_label"),
+                    "proposal_question_index": q_index,
+                })
     except Exception:
         _delete_quietly(keys)
         raise

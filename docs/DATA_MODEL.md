@@ -44,6 +44,8 @@ Question: {
   id,
   paper_id (FK),
   question_number (int),
+  section (string(64), nullable),            -- provenance: the proposal paper's question label (e.g. "q1"); NULL for manual imports
+  proposal_question_index (int, nullable),   -- provenance: 0-based index in that proposal paper's `questions`; NULL for manual imports
   created_at
   -- no marks column: the total is SUM(QuestionPart.marks), see below
 }

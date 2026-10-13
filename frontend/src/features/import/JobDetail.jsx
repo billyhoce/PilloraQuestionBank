@@ -7,6 +7,27 @@ function formatDuration(ms) {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
 }
 
+function JobId({ id }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return (
+    <p className="mb-2 text-xs text-gray-600">
+      Job id: <code className="font-mono select-all">{id}</code>{' '}
+      <button type="button" onClick={copy} className="text-blue-600 hover:underline">
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </p>
+  )
+}
+
 // Every task of one job with its status, duration, warnings and reason/error.
 // `version` changes whenever the list refreshed, so an open detail stays live.
 export default function JobDetail({ jobId, version }) {
@@ -24,6 +45,8 @@ export default function JobDetail({ jobId, version }) {
   if (error) return <ErrorBanner message={error} />
   if (!job) return <p className="text-xs text-gray-500">Loading tasks…</p>
   return (
+    <>
+    <JobId id={job.id} />
     <table className="w-full text-xs" aria-label={`Tasks of ${job.filename}`}>
       <thead>
         <tr className="text-left text-gray-500">
@@ -60,5 +83,6 @@ export default function JobDetail({ jobId, version }) {
         ))}
       </tbody>
     </table>
+    </>
   )
 }

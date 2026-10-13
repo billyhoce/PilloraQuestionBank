@@ -80,14 +80,20 @@ export const api = {
           return res.json()
         })
     },
-    // The admin's own jobs, newest first; optional status filter. Resolves to
-    // { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
-    listJobs: (status) =>
-      request('GET', `/api/import/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`).then(r => ({
+    // Every admin's jobs, newest first; optional status, `{ job_id }` or `{ paper_id }` filters.
+    // Resolves to { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
+    listJobs: (status, { job_id, paper_id } = {}) => {
+      const params = new URLSearchParams()
+      if (status) params.set('status', status)
+      if (job_id) params.set('job_id', job_id)
+      if (paper_id) params.set('paper_id', paper_id)
+      const qs = params.toString()
+      return request('GET', `/api/import/jobs${qs ? `?${qs}` : ''}`).then(r => ({
         jobs: r.data,
         workerAlive: r.worker_alive,
         heartbeatAgeS: r.heartbeat_age_s,
-      })),
+      }))
+    },
     getJob: (id) => request('GET', `/api/import/jobs/${id}`),
     // The proposal under review, with presigned page-image URLs and pixel sizes.
     review: (id) => request('GET', `/api/import/jobs/${id}/review`),

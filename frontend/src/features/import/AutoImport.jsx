@@ -30,6 +30,17 @@ function formatCreated(iso) {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// A search term is a job id (a UUID) or a paper id (digits); anything else is not searchable.
+function parseJobSearch(term) {
+  const t = term.trim()
+  if (!t) return {}
+  if (UUID_RE.test(t)) return { job_id: t.toLowerCase() }
+  if (/^\d+$/.test(t)) return { paper_id: t }
+  return null
+}
+
 export default function AutoImport() {
   const [jobs, setJobs] = useState(null)
   const [worker, setWorker] = useState({ alive: true, ageS: null })
@@ -38,6 +49,8 @@ export default function AutoImport() {
   const [listError, setListError] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  const [term, setTerm] = useState('')
+  const [filter, setFilter] = useState({})
 
   const applyList = useCallback(res => {
     setJobs(res.jobs)
@@ -48,19 +61,19 @@ export default function AutoImport() {
 
   const refresh = useCallback(async () => {
     try {
-      applyList(await api.import.listJobs())
+      applyList(await api.import.listJobs(undefined, filter))
     } catch (e) {
       setListError(e.message)
     }
-  }, [applyList])
+  }, [applyList, filter])
 
   useEffect(() => {
     let live = true
-    api.import.listJobs()
+    api.import.listJobs(undefined, filter)
       .then(res => { if (live) applyList(res) })
       .catch(e => { if (live) setListError(e.message) })
     return () => { live = false }
-  }, [applyList])
+  }, [applyList, filter])
 
   // Poll every POLL_MS while any job is queued or running; stops when none is, and on unmount.
   const anyActive = !!jobs && jobs.some(j => ACTIVE.includes(j.status))
@@ -69,6 +82,18 @@ export default function AutoImport() {
     const id = setInterval(refresh, POLL_MS)
     return () => clearInterval(id)
   }, [anyActive, refresh])
+
+  const parsed = parseJobSearch(term)
+
+  function handleSearch(e) {
+    e.preventDefault()
+    if (parsed) setFilter(parsed)
+  }
+
+  function clearSearch() {
+    setTerm('')
+    setFilter({})
+  }
 
   async function handleUpload(files) {
     setUploading(true)
@@ -120,6 +145,27 @@ export default function AutoImport() {
           Refresh
         </button>
       </div>
+      <form onSubmit={handleSearch} className="flex items-center gap-2 mb-2">
+        <input
+          type="search"
+          aria-label="Search jobs by job id or paper id"
+          placeholder="Job id or paper id"
+          value={term}
+          onChange={e => setTerm(e.target.value)}
+          className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm"
+        />
+        <button type="submit" disabled={!parsed} className="text-sm text-blue-600 hover:underline disabled:text-gray-400 disabled:no-underline">
+          Search
+        </button>
+        {(filter.job_id || filter.paper_id) && (
+          <button type="button" onClick={clearSearch} className="text-sm text-gray-600 hover:underline">
+            Clear
+          </button>
+        )}
+      </form>
+      {parsed === null && (
+        <p className="mb-2 text-xs text-gray-500">Enter a job id (UUID) or a numeric paper id.</p>
+      )}
       <ErrorBanner message={listError} />
       {anyActive && !worker.alive && (
         <p role="alert" className="mb-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
@@ -130,7 +176,7 @@ export default function AutoImport() {
       {jobs === null && !listError ? (
         <Spinner />
       ) : jobs && jobs.length === 0 ? (
-        <p className="text-sm text-gray-500">No import jobs yet.</p>
+        <p className="text-sm text-gray-500">{filter.job_id || filter.paper_id ? 'No jobs match.' : 'No import jobs yet.'}</p>
       ) : jobs ? (
         <table className="w-full text-sm bg-white border border-gray-200 rounded">
           <thead>

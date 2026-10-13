@@ -184,7 +184,7 @@ expired, reconciler finding.
   total in `job.report["cost"]`.
 - Do the same for the filename/cover metadata call.
 
-### 1.7 Provenance from question back to source
+### 1.7 Provenance from question back to source — DONE
 
 - Store `section` and `proposal_question_index` on each `question`, plus the source page and rectangle
   on each `question_page`, all nullable. This is where a confirmed question came from inside the PDF.

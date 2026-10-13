@@ -275,6 +275,9 @@ class Paper(Base):
     exam_type: Mapped["ExamType"]  = relationship()
 
 
+_JSON = JSON().with_variant(JSONB(), "postgresql")
+
+
 class Question(Base):
     """One exam question, imported as a single set of page images.
 
@@ -290,6 +293,9 @@ class Question(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("paper.id", ondelete="CASCADE"), nullable=False)
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Provenance, written by an auto-import confirm; null for manual imports.
+    section: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proposal_question_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -319,6 +325,10 @@ class QuestionPage(Base):
     page_type: Mapped[str] = mapped_column(String(16), nullable=False)
     width_px: Mapped[int] = mapped_column(Integer, nullable=False)
     height_px: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Provenance, written by an auto-import confirm; null for manual imports. The booklet page
+    # and the rectangle (PDF points: {"x0","y0","x1","y1"}) this image was cropped from.
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_rect: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
 
     question: Mapped[Question] = relationship(back_populates="pages")
 
@@ -431,7 +441,6 @@ Question.total_marks = column_property(
 # creates them).
 # ---------------------------------------------------------------------------
 
-_JSON = JSON().with_variant(JSONB(), "postgresql")
 _INT_ARRAY = JSON().with_variant(ARRAY(Integer()), "postgresql")
 
 INGEST_JOB_STATUSES = (

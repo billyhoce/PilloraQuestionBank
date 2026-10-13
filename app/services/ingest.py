@@ -122,6 +122,8 @@ def confirm_import(
         for q_data in payload["questions"]:
             question = Question(
                 question_number=q_data["question_number"],
+                section=q_data.get("section"),
+                proposal_question_index=q_data.get("proposal_question_index"),
                 created_at=datetime.now(UTC),
             )
             # Topics and marks arrive later, at the topic-review step; until then
@@ -140,6 +142,8 @@ def confirm_import(
                     page_type=p_data["page_type"],
                     width_px=p_data["width_px"],
                     height_px=p_data["height_px"],
+                    source_page=p_data.get("source_page"),
+                    source_rect=p_data.get("source_rect"),
                 ))
                 pages_to_move.append((p_data["temp_key"], canonical_key))
 

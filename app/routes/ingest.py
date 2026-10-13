@@ -376,11 +376,13 @@ def _job_out(job: IngestJob) -> dict:
 
 
 def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
-    job = (
-        db.query(IngestJob)
-        .filter(IngestJob.id == job_id, IngestJob.created_by == user.id)
-        .first()
-    )
+    """The job to act on. Every route here is admin-only and admins are trusted with each other's
+    jobs, so any admin may open or act on any job; a non-admin (unreachable through these routes)
+    would still be limited to their own."""
+    q = db.query(IngestJob).filter(IngestJob.id == job_id)
+    if getattr(user, "role", None) != "admin":
+        q = q.filter(IngestJob.created_by == user.id)
+    job = q.first()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     set_context(job_id=str(job.id), user_id=str(user.id))
@@ -408,18 +410,28 @@ def create_ingest_job(
 @router.get("/jobs")
 def list_ingest_jobs(
     status: Optional[str] = None,
+    job_id: Optional[uuid.UUID] = None,
+    paper_id: Optional[int] = None,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    """Every admin's jobs, optionally narrowed by status, job id, or a paper id (the job that
+    confirmed that paper, by ``paper.source_job_id`` or the job's recorded ``confirmed_paper_ids``)."""
     if status is not None and status not in INGEST_JOB_STATUSES:
         raise HTTPException(status_code=422, detail="Unknown job status")
-    q = (
-        db.query(IngestJob)
-        .options(selectinload(IngestJob.tasks))
-        .filter(IngestJob.created_by == current_user.id)
-    )
+    q = db.query(IngestJob).options(selectinload(IngestJob.tasks))
     if status is not None:
         q = q.filter(IngestJob.status == status)
+    if job_id is not None:
+        q = q.filter(IngestJob.id == job_id)
+    if paper_id is not None:
+        # confirmed_paper_ids is INT[] on Postgres and JSON on SQLite, so match it in Python.
+        ids = {
+            j for j, in db.query(Paper.source_job_id).filter(Paper.id == paper_id, Paper.source_job_id.isnot(None))
+        }
+        ids |= {j.id for j in db.query(IngestJob).filter(IngestJob.confirmed_paper_ids.isnot(None))
+                if paper_id in (j.confirmed_paper_ids or [])}
+        q = q.filter(IngestJob.id.in_(ids))
     jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
     return {"data": [_job_out(j) for j in jobs], **worker_state(db)}
 
