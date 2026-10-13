@@ -133,8 +133,13 @@ extracted from — or when the pipeline ends with no proposal. A job in an API-o
 (`cancelled`, `confirmed`, `expired`) is never touched.
 
 **Retention.** Unconfirmed jobs never expire: a `review_ready` or `failed` job stays, with its S3 prefix
-and scratch, until the admin confirms, skips or cancels it (the job list's age badge, below, keeps old
-ones visible). Once a day the worker (`app/worker/sweep.py`) removes the scratch folders of jobs
+until the admin confirms, skips or cancels it (the job list's age badge, below, keeps old ones visible).
+Its scratch folder is only a **cache**: it is deleted as soon as the `report` task is recorded `done`
+(see "Scratch and S3 edges"), so a `review_ready` job lives on S3 and the database alone, and a `failed`
+job keeps it so Retry re-runs only the failed tasks. **Settling** a job — every paper confirmed or
+skipped, or the job cancelled — deletes everything under its S3 prefix (`ingest/{job_id}/`, or the
+legacy `tmp/ingest/{job_id}/`): the invariant is *settled job ⇒ prefix empty*. What survives is the
+small debug bundle on the job row (`ingest_job.debug`, below). Once a day the worker (`app/worker/sweep.py`) removes the scratch folders of jobs
 cancelled or confirmed over a day ago (confirming deletes the S3 prefix itself; only the worker knows
 its scratch folder). The sweep is claimed by an atomic update of `worker_heartbeat.last_sweep_at`, so it
 runs at most once a day across restarts and workers. `ingest/` has no bucket lifecycle rule; a bucket
@@ -228,7 +233,17 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
   `ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
   (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
-  `report` next to `filename_metadata`. The images go up from `report`, not `render`, because the
+  `report` next to `filename_metadata`, and `segments.json` and `ingest.json` are copied into the
+  `ingest_job.debug` JSONB column (`{"segments": …, "ingest": …}`, a few KB). Once the runner has
+  recorded `report` done, `Worker.run_once` calls `Edges.release_scratch`, which deletes the job's
+  scratch folder (only if the proposal is on the row and the job is not `failed`). It is done *after*
+  completion, not inside the `after_report` hook, because the hook runs before the task is marked
+  done: a crash in between would leave `report` unfinished with its inputs gone and rerun the whole
+  job. After completion a crash only leaves the folder behind, which the daily sweep removes once the
+  job settles. `review_ready` jobs are never revalidated (the worker revalidates only `queued` /
+  `running` jobs), and review, confirm and manual pages read only S3 and the database, so the missing
+  artefacts are never looked for; if a failed job's scratch is gone (a redeploy) `Runner.revalidate`
+  re-runs from the S3 source as before. The images go up from `report`, not `render`, because the
   job-level `pages/` folder the proposal's image paths name is assembled by `report` (`render` writes
   only each section's own `review/` folder). A job cancelled while `report` runs gets no upload.
 - **Memory.** PyMuPDF pages are rasterised one at a time and freed in the extractor (no list of

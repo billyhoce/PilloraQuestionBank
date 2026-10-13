@@ -15,7 +15,9 @@ stages of the registry (:func:`wrap_registry`) and by resolving each job's scrat
   ``tmp/ingest/{job_id}/pages/`` and the proposal and the run summary are stored on the job row.
   The images are uploaded here rather than at ``render`` because the job-level ``pages/`` folder
   (booklet page numbering, what the proposal's ``image`` paths name) is assembled by ``report``;
-  ``render`` only writes each section's own ``review/`` folder.
+  ``render`` only writes each section's own ``review/`` folder. The job's ``segments.json`` and
+  ``ingest.json`` are copied to ``ingest_job.debug``, and once the runner has recorded the task done
+  the scratch folder is deleted (:meth:`Edges.release_scratch`, called by the worker loop).
 
 A hook runs inside its stage's task (before ``complete``), so the task's lease covers it, a failure
 fails the task, and a crash reruns it.
@@ -24,6 +26,7 @@ fails the task, and a crash reruns it.
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
@@ -31,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pipeline import artefacts
-from pipeline.outcome import FAILED, Outcome, StageContext, failed
+from pipeline.outcome import DONE, FAILED, Outcome, StageContext, failed
 from pipeline.registry import Registry, Stage
 from pipeline.store import TaskSpec
 from sqlalchemy.orm import Session
@@ -43,6 +46,8 @@ from app.storage.object_store import ObjectStore
 from app.worker.store import API_OWNED, SOURCE_NAME, SqlStore
 
 log = logging.getLogger(__name__)
+
+FAILED_JOB_STATUSES = ("failed",)
 
 PAGES_DIR = "pages"
 FIXTURE_SUFFIX = ".segments.json"
@@ -128,6 +133,7 @@ class Edges:
             for image in sorted(pages.glob("*.webp")) if pages.is_dir() else ():
                 self._objects.put(prefix + image.name, image.read_bytes(), "image/webp")
             job.proposal = proposal
+            job.debug = self._debug_bundle(ctx)
             job.report = {
                 **(job.report or {}),
                 **self._summary(ctx.job_id, outcome),
@@ -135,6 +141,46 @@ class Edges:
             db.commit()
         log_job_event(job_uuid, "proposal_stored", papers=len(proposal.get("papers", [])))
         return outcome
+
+    @staticmethod
+    def _debug_bundle(ctx: StageContext) -> dict:
+        """``segments.json`` and ``ingest.json`` as read from scratch (a few KB): once the scratch
+        folder is released they are all that remains of the pipeline's own record of the run."""
+        bundle: dict = {}
+        for name, filename in (("segments", artefacts.SEGMENTS_NAME), ("ingest", artefacts.REPORT_NAME)):
+            path = ctx.path(filename)
+            if path.is_file():
+                try:
+                    bundle[name] = artefacts.read_json(path)
+                except (OSError, ValueError):
+                    log.warning("job %s: could not read %s for the debug bundle", ctx.job_id, filename)
+        return bundle
+
+    def release_scratch(self, job_id: str) -> bool:
+        """Delete the job's scratch folder once its ``report`` task is durably ``done`` and the
+        proposal is on the job row; returns whether it did.
+
+        This runs after the runner has recorded the task done, not inside ``after_report``: a hook
+        runs before ``complete``, so a crash after deleting there would leave ``report`` unfinished
+        with its inputs gone and rerun the whole job. After ``complete`` a crash merely leaves the
+        folder behind (the sweep/reconciler removes it). A ``review_ready`` job is never revalidated
+        (the worker revalidates only ``queued`` / ``running`` jobs), and Review, confirm and
+        manual-pages read only S3 and the database, so the missing artefacts are never looked for.
+        A failed job keeps its folder, so Retry re-runs only the failed tasks."""
+        job_uuid = uuid.UUID(str(job_id))
+        report_done = any(
+            t.section is None and t.stage == "report" and t.status == DONE
+            for t in self._store.tasks(str(job_id))
+        )
+        if not report_done:
+            return False
+        with self._factory() as db:
+            job = db.get(IngestJob, job_uuid)
+            if job is None or job.proposal is None or job.status in FAILED_JOB_STATUSES:
+                return False
+        shutil.rmtree(self._scratch / str(job_id), ignore_errors=True)
+        log_job_event(job_uuid, "scratch_released")
+        return True
 
     def _summary(self, job_id: str, outcome: Outcome) -> dict:
         """Per-stage timing and the warnings of every task (the report task itself excluded:

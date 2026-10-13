@@ -248,6 +248,8 @@ IngestJob: {
                                  -- result, written by the worker's `register` task (pre-fills the metadata sidebar);
                                  -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped"
                                  -- (written by the confirm/skip endpoints; the job is `confirmed` once all are set)
+  debug (JSONB, nullable),       -- debug bundle copied at report time: {"segments": segments.json, "ingest": ingest.json};
+                                 -- all that is kept of the worker's scratch once the job is review_ready/settled
   error (text, nullable),
   created_at, updated_at,
   confirmed_paper_ids (int[], nullable)   -- papers created by confirming proposal papers, in order

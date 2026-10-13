@@ -137,6 +137,20 @@ def test_confirm_creates_paper_with_cropped_pages(admin_client, db_session, env,
         [(1, "question", 1), (1, "question", 2), (1, "answer", 1), (2, "question", 1)]
     )
     assert fake_object_store.deleted_prefixes == [f"tmp/ingest/{job.id}/"]
+    assert not [k for k in fake_object_store.objects if k.startswith(f"tmp/ingest/{job.id}/")]
+
+
+def test_settling_leaves_the_job_prefix_empty(admin_client, db_session, env, fake_object_store, mock_s3):
+    """Settled job => prefix empty: source, review images and any stray object under it go."""
+    setup, meta = env
+    job = setup(prop=proposal(paper("q1", "a1"), paper("q2", "a2")))
+    prefix = job.source_key.rsplit("/", 1)[0] + "/"
+    fake_object_store.objects[prefix + "pages/p01.webp"] = b"webp"
+    fake_object_store.objects[prefix + "stray.json"] = b"{}"
+    admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "q1"})
+    assert any(k.startswith(prefix) for k in fake_object_store.objects)  # one paper still open
+    assert admin_client.post(f"/api/import/jobs/{job.id}/skip", json={"paper_label": "q2"}).status_code == 200
+    assert not [k for k in fake_object_store.objects if k.startswith(prefix)]
 
 
 def test_edited_rectangles_are_what_gets_cropped(admin_client, db_session, env, mock_s3):

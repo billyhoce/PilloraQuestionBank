@@ -52,6 +52,8 @@ class Fake:
             (ctx.job_dir / "pages").mkdir(exist_ok=True)
             (ctx.job_dir / "pages" / "p01.webp").write_bytes(b"webp")
             (ctx.job_dir / "proposal.json").write_text(json.dumps(PROPOSAL))
+            (ctx.job_dir / "segments.json").write_text(json.dumps({"sections": ["q1"]}))
+            (ctx.job_dir / "ingest.json").write_text(json.dumps({"papers": 1}))
             if self.on_report:
                 self.on_report()
             return done()
@@ -131,6 +133,33 @@ def test_job_goes_queued_running_review_ready_with_the_proposal(setup):
         assert {t.status for t in db.scalars(select(IngestTask))} == {"done"}
 
 
+def test_report_keeps_a_debug_bundle_and_releases_scratch(setup):
+    factory, job, _, _, _, make_worker, tmp_path = setup
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    row = job_row(factory, job)
+    assert row.debug == {"segments": {"sections": ["q1"]}, "ingest": {"papers": 1}}
+    assert not (tmp_path / "scratch" / str(job)).exists()  # scratch is a cache
+    # a restart does not reopen the review_ready job's tasks for want of the artefacts
+    restarted = make_worker()
+    restarted.start()
+    assert not restarted.run_once()
+    with factory() as db:
+        assert {t.status for t in db.scalars(select(IngestTask))} == {"done"}
+    assert job_row(factory, job).status == "review_ready"
+
+
+def test_scratch_is_kept_for_a_failed_job(setup):
+    factory, job, _, _, fake, make_worker, tmp_path = setup
+    fake.fail_segment = True
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    assert job_row(factory, job).status == "failed"
+    assert (tmp_path / "scratch" / str(job)).is_dir()  # Retry re-runs only the failed tasks
+
+
 def test_a_failed_job_level_stage_fails_the_job_with_the_reason(setup):
     factory, job, _, _, fake, make_worker, _ = setup
     fake.fail_segment = True
@@ -157,7 +186,7 @@ def test_scratch_is_rebuilt_from_s3_after_a_restart(setup):
     restarted.start()
     drain(restarted)
     assert job_row(factory, job).status == "review_ready"
-    assert (tmp_path / "scratch" / str(job) / "source.pdf").read_bytes() == b"%PDF source"
+    assert not (tmp_path / "scratch" / str(job)).exists()  # released once the report was done
 
 
 def test_killed_mid_task_resumes_with_only_unfinished_tasks(setup):
