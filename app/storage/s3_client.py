@@ -72,3 +72,32 @@ def list_objects(prefix: str) -> list[tuple[str, "datetime"]]:
         for o in page.get("Contents", []):
             found.append((o["Key"], o["LastModified"]))
     return found
+
+
+def head_object(key: str) -> tuple[int, str] | None:
+    """``(size, content_type)`` of the object, or ``None`` if it does not exist."""
+    from botocore.exceptions import ClientError
+
+    try:
+        resp = _get_client().head_object(Bucket=os.environ["S3_BUCKET"], Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+    return resp["ContentLength"], resp.get("ContentType", "")
+
+
+def presign_post(key: str, content_type: str, min_size: int, max_size: int, expires_in: int) -> dict:
+    """A presigned browser POST for ``key``: ``{"url", "fields"}``. Built on the same client (so the
+    same ``S3_ENDPOINT_URL``) as :func:`get_presigned_url`; the signed policy pins the key, the
+    ``Content-Type`` and the ``content-length-range``."""
+    return _get_client().generate_presigned_post(
+        Bucket=os.environ["S3_BUCKET"],
+        Key=key,
+        Fields={"Content-Type": content_type},
+        Conditions=[
+            {"Content-Type": content_type},
+            ["content-length-range", min_size, max_size],
+        ],
+        ExpiresIn=expires_in,
+    )

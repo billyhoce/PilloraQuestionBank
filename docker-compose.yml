@@ -7,6 +7,9 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      # The browser POSTs PDFs straight to the bucket (presigned POST): MinIO's CORS is server-wide,
+      # not per bucket. Mirrors the S3 bucket CORS rule in docs/DEPLOYMENT.md (POST from the app origin).
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:5173,http://localhost:3000,http://localhost:8000"
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"

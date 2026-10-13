@@ -13,7 +13,7 @@ When a phase ships, move the facts it establishes into the owning feature doc
 - [Phase 0 — Bug fixes](#phase-0--bug-fixes)
 - [Phase 1 — Trace one PDF by its job id](#phase-1--trace-one-pdf-by-its-job-id)
 - [Phase 2 — Retention and cleanup](#phase-2--retention-and-cleanup)
-- [Phase 3 — Direct-to-S3 upload](#phase-3--direct-to-s3-upload)
+- [Phase 3 — Direct-to-S3 upload](#phase-3--direct-to-s3-upload--done)
 - [Phase 4 — Question/answer booklet pairing](#phase-4--questionanswer-booklet-pairing)
 - [Phase 5 — API auth hardening](#phase-5--api-auth-hardening)
 - [Verification rules](#verification-rules)
@@ -61,7 +61,7 @@ When a phase ships, move the facts it establishes into the owning feature doc
 | Topic | Decision |
 |---|---|
 | Job queue | **Keep Postgres as the queue** (`SELECT … FOR UPDATE SKIP LOCKED`, leases, heartbeats). This is the same pattern as Solid Queue, Oban, River, pg-boss and Procrastinate. It enqueues in the same transaction that creates the job and needs no extra infrastructure. Kafka is an event log, not a job queue. Redis/Celery or SQS would add infrastructure plus an outbox to keep the DB and queue consistent. Revisit only at thousands of jobs/s or when there are many independent consumers. |
-| Upload path | Move to **presigned direct-to-S3 uploads** ([Phase 3](#phase-3--direct-to-s3-upload)). The blocking-route bug is fixed first ([B2](#b2-the-upload-route-blocks-the-event-loop)). |
+| Upload path | Move to **presigned direct-to-S3 uploads** ([Phase 3](#phase-3--direct-to-s3-upload--done)). The blocking-route bug is fixed first ([B2](#b2-the-upload-route-blocks-the-event-loop)). |
 | Retention of unconfirmed jobs | **Keep until settled.** No auto-expiry for `review_ready` / `failed`; the job list shows an age badge instead. |
 | Protecting pending files from S3 lifecycle | **Separate prefix.** Job data lives under `ingest/{job_id}/`, which has no lifecycle rule. `tmp/` keeps a short expiry and holds only throwaway files. |
 | What survives a settled job | **A small debug bundle**: `segments.json`, `ingest.json` and the proposal, a few KB. It is kept on the `ingest_job` row. Everything under `ingest/{job_id}/` is deleted. |
@@ -289,7 +289,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
 
 ---
 
-## Phase 3 — Direct-to-S3 upload
+## Phase 3 — Direct-to-S3 upload — DONE
 
 **Goal:** the browser uploads straight to S3 with a presigned POST, so the API never holds the file.
 
@@ -313,7 +313,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
    equivalent to the MinIO `createbuckets` service in `docker-compose.yml`.
 6. **Abandoned uploads.** An `awaiting_upload` job older than 1 hour is marked `cancelled` by the
    reconciler, which also removes any partial object.
-7. Remove the old multipart `POST /api/import/jobs`, or keep it for tests and the CLI for one release.
+7. Remove the old multipart `POST /api/import/jobs` (removed; its tests were ported to the new flow).
    Keep nginx's `client_max_body_size` for the Manual tab.
 
 The job id now exists **before** the bytes move, so the traceability from Phase 1 covers the upload

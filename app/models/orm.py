@@ -444,7 +444,7 @@ Question.total_marks = column_property(
 _INT_ARRAY = JSON().with_variant(ARRAY(Integer()), "postgresql")
 
 INGEST_JOB_STATUSES = (
-    "queued", "running", "review_ready", "failed", "confirmed", "cancelled", "expired",
+    "awaiting_upload", "queued", "running", "review_ready", "failed", "confirmed", "cancelled", "expired",
 )
 INGEST_TASK_STATUSES = (
     "pending", "ready", "running", "done", "skipped", "failed", "blocked",

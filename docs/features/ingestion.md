@@ -14,7 +14,8 @@ POST   /api/import/ai-topics        -- AI part split + topic/marks suggestions f
 POST   /api/import/save-topics      -- persist user-reviewed parts for a paper's questions
 DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
 
-POST   /api/import/jobs             -- (Auto-detect) submit a PDF as an ingest job; returns {job_id}
+POST   /api/import/uploads          -- (Auto-detect) create an `awaiting_upload` job + presigned S3 POST for one PDF
+POST   /api/import/jobs/{id}/uploaded -- the browser finished its S3 POST: verify the object, queue the job
 GET    /api/import/jobs?status=     -- the requesting admin's jobs, newest first, with progress + worker_alive
 GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
 POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
@@ -37,13 +38,28 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
 
 ### Job routes (admin only; non-admins get `403`)
 
-- `POST /api/import/jobs` (multipart `file`) — a non-`application/pdf` content type is a `422`.
-  The bytes are **not** inspected: a corrupt, password-protected or empty PDF still gets a job, and
-  fails in the worker (below). It puts the PDF at
-  `ingest/{job_id}/source.pdf`, inserts the `ingest_job` (`queued`) with its first task
-  (`section` NULL, stage `register`, status `ready`), and returns `{"job_id": ...}` with `201`.
-  It makes no Claude call, so it returns in well under a second. If the DB insert fails the
-  uploaded object is deleted.
+- `POST /api/import/uploads` `{filename, size}` — step 1 of the **direct-to-S3 upload**; the API
+  never holds the PDF. A `size` outside 1 B to 100 MB is a `422`. It inserts the `ingest_job` in the
+  `awaiting_upload` status with `source_key = ingest/{job_id}/source.pdf` (no task yet) and returns
+  `201` `{job_id, url, fields}`: a presigned S3 POST (`ObjectStore.presign_post`) whose signed policy
+  pins the key, `Content-Type = application/pdf`, `content-length-range` 1 B..100 MB and a 15-minute
+  expiry. The browser POSTs `fields` + the file (the file last) to `url`, using the same
+  `S3_ENDPOINT_URL` as the review-image GET presign, so a local MinIO is reachable the same way.
+  The bucket needs a CORS rule for the app origin ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
+- `POST /api/import/jobs/{id}/uploaded` — step 3. `HEAD`s the object (`ObjectStore.head`): missing is
+  a `409`, a size outside 1 B..100 MB or a content type other than `application/pdf` is a `422`
+  (the job stays `awaiting_upload`; cancel it). Otherwise the job becomes `queued` and the first
+  task (`section` NULL, stage `register`, status `ready`) is inserted: inserting it is what enqueues
+  the job. It logs `ingest_job/created` and writes the `created` event (`filename`, `size`). The
+  status flip is a conditional `UPDATE ... WHERE status = 'awaiting_upload'`, so calling it twice
+  never inserts two tasks: any job not `awaiting_upload` is a `409`. The bytes are **not**
+  inspected: a corrupt, password-protected or empty PDF still gets a job, and fails in the worker
+  (below). No Claude call, so it returns in well under a second.
+- The old multipart `POST /api/import/jobs` no longer exists. Nginx's `client_max_body_size` stays
+  for the Manual tab's `upload-pdf`.
+- An `awaiting_upload` job can be cancelled (`DELETE`, which removes any partial object) but not
+  retried. If the browser cannot finish the S3 POST, the frontend cancels the job itself; an
+  abandoned one is cancelled by the [reconciler](#daily-reconciler) after 1 hour.
 - **PDF validation** is the worker's, not the request's. Before the `register` stage runs,
   `Edges.before_register` (`app/worker/edges.py`) opens the downloaded source with PyMuPDF; a file
   that cannot be opened, is password protected, or has no pages fails the `register` task with
@@ -165,6 +181,7 @@ compares the database with S3 and the scratch disk and reports whatever the happ
 | `orphan_scratch` | scratch folder whose job is not `queued` / `running` / `failed` (or is missing) | 1 day (`updated_at`; folder mtime when the row is gone) |
 | `orphan_paper_image` | key under `papers/` that no `question_page.image_key` references | 7 days |
 | `stuck_job` | `queued` / `running` job with no task holding a live lease and no job/task activity | 6 h; marked `failed` (reason `stuck`; its `ready`/`running` tasks fail too, so Retry works) |
+| `abandoned_upload` | `awaiting_upload` job whose `created_at` is older than the grace (the browser never called `uploaded`) | 1 h; cancelled and its partial object removed |
 | `missing_source` | pending job whose `source_key` object no longer exists | report only, the row is never touched |
 
 Each finding is `{kind, key_or_path, job_id?, age, action}`. It is logged (`WARNING`, with the job
@@ -172,8 +189,8 @@ context when it has a job) and written as an `ingest_event` of kind `reconcile` 
 `data.check`; `job_id` is NULL for findings with no job row: a missing job's prefix, `papers/` and
 `tmp/` keys, an orphan scratch folder of a missing job). Nothing is mutated unless
 **`INGEST_RECONCILE_DELETE=true`** (default off, report-only): that flag gates every deleting action
-*and* marking stuck jobs failed. In dry-run the `action` reads `would_delete` / `would_mark_failed`;
-in delete mode `deleted` / `marked_failed` (`delete_failed` if the delete raised); `report_only` for
+*and* marking stuck jobs failed and cancelling abandoned uploads. In dry-run the `action` reads `would_delete` / `would_mark_failed` / `would_cancel`;
+in delete mode `deleted` / `marked_failed` / `cancelled` (`delete_failed` if the delete raised); `report_only` for
 missing sources. A failing check is logged and never stops the others or the worker. The older
 cancelled/confirmed scratch cleanup above is unchanged and still runs regardless of the flag; the
 reconciler's scratch check covers the rest. Deleting a paper (either route) logs a `paper_deleted`
@@ -183,7 +200,7 @@ event against its source job (`paper.source_job_id` or the job's `confirmed_pape
 
 `ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in
 progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
-compact drop zone (one job per dropped PDF) above the job list. Each row shows the filename (click
+compact drop zone (one job per dropped PDF) above the job list. Each file goes through `api.import.uploadJob`: `POST /uploads`, then an `XMLHttpRequest` POST to S3 with a per-file progress bar (the drop zone's "Uploading" list), then `POST /jobs/{id}/uploaded`; if the S3 POST or `uploaded` fails the job is cancelled (`DELETE`) and the error shown. An `awaiting_upload` row reads "Uploading", can be cancelled, and is not part of **Awaiting review**. Each row shows the filename (click
 to open the job detail), status, the current stage with a `done/total` progress bar, the warnings
 count, a "Needs review" marker, the failure reason of a `failed` job (e.g. "register failed: The PDF is password protected"), created time, and Retry and Cancel buttons. Unsettled jobs (anything but `confirmed`/`cancelled`/`expired`) carry an **age badge** beside the created time ("waiting 12 days", from `created_at`), highlighted amber once past 14 days. An **Awaiting review** checkbox narrows the list to `review_ready` and `failed` jobs (both wait on the admin: review/confirm, or retry/cancel) via `status=review_ready,failed`; it combines with the job-id/paper-id search. The list polls
 `GET /api/import/jobs` every 3 s (`POLL_MS`) while any job is `queued` or `running` and stops when
@@ -326,7 +343,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
 ### 1. `POST /api/import/upload-pdf`
 
 - Accepts a single PDF (multipart). Non-PDF content types → `422`.
-- The handler is a plain `def`, so FastAPI runs it in its thread pool and the blocking work (PDF render, S3 puts, DB commits) never stalls the event loop. `POST /api/import/jobs` and `POST /api/papers/upload-image` follow the same rule: upload routes are `def` and read with `file.file.read()`, never `async def` + `await file.read()`.
+- The handler is a plain `def`, so FastAPI runs it in its thread pool and the blocking work (PDF render, S3 puts, DB commits) never stalls the event loop. `POST /api/papers/upload-image` follows the same rule: upload routes are `def` and read with `file.file.read()`, never `async def` + `await file.read()`.
 - **PyMuPDF** renders each page to an RGB image at 300 dpi. Pages are processed **one at a time**
   (`app/services/ingest.py::iter_pdf_pages` is a generator): a page is rendered, standardised,
   encoded and uploaded, then released before the next is rendered. A 300 dpi page is ~26 MB, so

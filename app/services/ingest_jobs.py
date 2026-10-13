@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.logger import log_job_event
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 # reports it offline. The one place the threshold lives: the UI only reads ``worker_alive``.
 WORKER_STALE_SECONDS = 90
 # Job states retry does not apply to (the API owns them; same set as cancel refuses).
-_NOT_RETRYABLE = ("confirmed", "cancelled", "expired")
+_NOT_RETRYABLE = ("awaiting_upload", "confirmed", "cancelled", "expired")
 _SETTLED = ("done", "skipped")
 
 
@@ -48,42 +49,72 @@ def job_prefix(source_key: str) -> str:
     return source_key.rsplit("/", 1)[0] + "/"
 
 
-def create_job(
-    pdf_bytes: bytes,
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+UPLOAD_TTL_SECONDS = 15 * 60
+PDF_CONTENT_TYPE = "application/pdf"
+
+
+class UploadError(Exception):
+    """The uploaded object is not what ``create_upload`` asked for. ``status`` is the HTTP status."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+def create_upload(
     filename: str,
+    size: int,
     admin: Any,
     db: Session,
     store: ObjectStore,
-) -> IngestJob:
+) -> tuple[IngestJob, dict]:
+    """Create the job in ``awaiting_upload`` (no task yet) and presign the browser's S3 POST.
+
+    ``size`` is the file's declared size; the policy itself allows 1 B to :data:`MAX_UPLOAD_BYTES`."""
+    if not 1 <= size <= MAX_UPLOAD_BYTES:
+        raise UploadError(422, f"A PDF must be between 1 byte and {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     job_id = uuid.uuid4()
     key = source_key_for(job_id)
-
-    store.put(key, pdf_bytes, "application/pdf")
-    try:
-        job = IngestJob(
-            id=job_id,
-            created_by=admin.id,
-            filename=filename,
-            source_key=key,
-            status="queued",
-        )
-        job.tasks.append(IngestTask(section=None, stage="register", status="ready"))
-        db.add(job)
-        db.flush()
-        add_event(
-            db, job_id, "created", actor_user_id=admin.id, filename=filename,
-            size=len(pdf_bytes),
-        )
-        db.flush()
-    except Exception:
-        try:
-            store.delete_prefix(job_prefix(key))
-        except Exception:
-            pass
-        raise
-    log_job_event(
-        job_id, "created", filename=filename, size=len(pdf_bytes), user_id=admin.id,
+    post = store.presign_post(key, PDF_CONTENT_TYPE, 1, MAX_UPLOAD_BYTES, UPLOAD_TTL_SECONDS)
+    job = IngestJob(
+        id=job_id, created_by=admin.id, filename=filename, source_key=key, status="awaiting_upload",
     )
+    db.add(job)
+    db.flush()
+    return job, post
+
+
+def finish_upload(job: IngestJob, admin: Any, db: Session, store: ObjectStore) -> IngestJob:
+    """The browser says the S3 POST finished: check the object, queue the job.
+
+    Idempotent-safe: only an ``awaiting_upload`` job proceeds (anything else is a 409), and the
+    status flip is a conditional UPDATE so two concurrent calls cannot both insert the task."""
+    if job.status != "awaiting_upload":
+        raise UploadError(409, f"A {job.status} job is not awaiting an upload")
+    head = store.head(job.source_key)
+    if head is None:
+        raise UploadError(409, "The upload has not reached storage")
+    if not 1 <= head.size <= MAX_UPLOAD_BYTES:
+        raise UploadError(422, "The uploaded file has an invalid size")
+    if head.content_type != PDF_CONTENT_TYPE:
+        raise UploadError(422, "Only PDF files are accepted")
+    claimed = db.execute(
+        update(IngestJob)
+        .where(IngestJob.id == job.id, IngestJob.status == "awaiting_upload")
+        .values(status="queued")
+    ).rowcount
+    if not claimed:
+        raise UploadError(409, "The upload was already finished")
+    db.add(IngestTask(job_id=job.id, section=None, stage="register", status="ready"))
+    db.flush()
+    db.refresh(job)
+    add_event(
+        db, job.id, "created", actor_user_id=admin.id, filename=job.filename, size=head.size,
+    )
+    db.flush()
+    log_job_event(job.id, "created", filename=job.filename, size=head.size, user_id=admin.id)
     return job
 
 

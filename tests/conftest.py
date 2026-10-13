@@ -156,11 +156,14 @@ class FakeObjectStore:
         self.objects: dict[str, bytes] = {}
         self.deleted_prefixes: list[str] = []
         self.deleted_keys: list[str] = []
+        self.content_types: dict[str, str] = {}
+        self.presigned_posts: list[str] = []
         # key -> last-modified; set at put time, overridden by tests that age an object.
         self.modified: dict[str, datetime] = {}
 
     def put(self, key, data, content_type="application/octet-stream"):
         self.objects[key] = data
+        self.content_types[key] = content_type
         self.modified[key] = datetime.now(UTC)
 
     def delete(self, key):
@@ -178,6 +181,30 @@ class FakeObjectStore:
 
     def presign(self, key, expires_in=3600):
         return f"https://fake.url/{key}"
+
+    def head(self, key):
+        from app.storage.object_store import ObjectHead
+
+        if key not in self.objects:
+            return None
+        return ObjectHead(len(self.objects[key]), self.content_types.get(key, "application/octet-stream"))
+
+    def presign_post(self, key, content_type, min_size, max_size, expires_in):
+        self.presigned_posts.append(key)
+        return {
+            "url": "https://fake.s3/bucket",
+            "fields": {
+                "key": key,
+                "Content-Type": content_type,
+                "policy": {
+                    "expiration_seconds": expires_in,
+                    "conditions": [
+                        {"Content-Type": content_type},
+                        ["content-length-range", min_size, max_size],
+                    ],
+                },
+            },
+        }
 
     def delete_prefix(self, prefix):
         self.deleted_prefixes.append(prefix)

@@ -51,6 +51,31 @@ async function request(method, path, body, signal) {
   return data
 }
 
+// POST a file to a presigned S3 form. XMLHttpRequest, not fetch: only XHR reports upload progress.
+// `fields` go first and the file last, as S3 requires. `onProgress` gets a 0..1 fraction.
+function postToS3(url, fields, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    Object.entries(fields).forEach(([k, v]) => form.append(k, v))
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url)
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(1)
+        resolve()
+      } else {
+        reject({ status: xhr.status, message: 'Upload to storage failed. Please try again.' })
+      }
+    }
+    xhr.onerror = () => reject({ status: 0, message: 'Upload to storage failed. Please check your connection and try again.' })
+    xhr.send(form)
+  })
+}
+
 export const api = {
   import: {
     uploadPdf: (file) => {
@@ -66,19 +91,22 @@ export const api = {
           return res.json()
         })
     },
-    // Auto-detect: submit a PDF as an ingest job -> { job_id }.
-    createJob: (file) => {
-      const form = new FormData()
-      form.append('file', file)
-      return fetch('/api/import/jobs', { method: 'POST', credentials: 'include', body: form })
-        .then(async (res) => {
-          if (!res.ok) {
-            const data = await res.json().catch(() => null)
-            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
-            throw { status: res.status, message: data?.detail || 'Upload failed' }
-          }
-          return res.json()
-        })
+    // Auto-detect: upload a PDF straight to S3 as an ingest job -> { job_id }.
+    // 1. POST /uploads (creates the job `awaiting_upload` + a presigned POST), 2. XHR POST to S3 with
+    // progress, 3. POST /jobs/{id}/uploaded (queues it). If step 2 or 3 fails the job is cancelled.
+    uploadJob: async (file, onProgress) => {
+      const { job_id, url, fields } = await request('POST', '/api/import/uploads', {
+        filename: file.name,
+        size: file.size,
+      })
+      try {
+        await postToS3(url, fields, file, onProgress)
+        await request('POST', `/api/import/jobs/${job_id}/uploaded`)
+      } catch (e) {
+        await request('DELETE', `/api/import/jobs/${job_id}`).catch(() => {})
+        throw e
+      }
+      return { job_id }
     },
     // Every admin's jobs, newest first; optional status, `{ job_id }` or `{ paper_id }` filters.
     // Resolves to { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).

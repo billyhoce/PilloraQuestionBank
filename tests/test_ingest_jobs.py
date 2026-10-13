@@ -22,36 +22,87 @@ def make_pdf(pages: int = 3) -> bytes:
     return data
 
 
-def upload(client, data=None, name="RI_2024_Math_P1.pdf", content_type="application/pdf"):
-    return client.post(
-        "/api/import/jobs",
-        files={"file": (name, make_pdf() if data is None else data, content_type)},
-    )
+def start_upload(client, name="RI_2024_Math_P1.pdf", size=1000):
+    return client.post("/api/import/uploads", json={"filename": name, "size": size})
+
+
+def upload(client, data=None, name="RI_2024_Math_P1.pdf", content_type="application/pdf", store=None):
+    """The whole direct-to-S3 flow with the browser's S3 POST simulated by a put into the fake store.
+    Returns the ``uploaded`` response (``{"job_id", "status"}``)."""
+    from app.deps import get_object_store
+    from app.main import app
+
+    data = make_pdf() if data is None else data
+    created = start_upload(client, name, max(len(data), 1))
+    if created.status_code != 201:
+        return created
+    job_id = created.json()["job_id"]
+    store = store or app.dependency_overrides[get_object_store]()
+    store.put(f"ingest/{job_id}/source.pdf", data, content_type)
+    return client.post(f"/api/import/jobs/{job_id}/uploaded")
 
 
 def test_non_admin_forbidden(public_client, fake_object_store):
-    assert upload(public_client).status_code == 403
+    assert start_upload(public_client).status_code == 403
+    assert public_client.post(f"/api/import/jobs/{uuid.uuid4()}/uploaded").status_code == 403
     assert public_client.get("/api/import/jobs").status_code == 403
     assert public_client.get(f"/api/import/jobs/{uuid.uuid4()}").status_code == 403
     assert public_client.delete(f"/api/import/jobs/{uuid.uuid4()}").status_code == 403
     assert fake_object_store.objects == {}
 
 
-def test_post_does_not_run_filename_extraction(admin_client, fake_object_store):
-    with patch("app.ai.filename_extractor.extract_metadata") as extract:
-        assert upload(admin_client).status_code == 201
-    extract.assert_not_called()
+def test_multipart_route_is_gone(admin_client, fake_object_store):
+    resp = admin_client.post("/api/import/jobs", files={"file": ("a.pdf", make_pdf(), "application/pdf")})
+    assert resp.status_code == 405
 
 
-def test_create_job(admin_client, db_session, admin_user, fake_object_store):
+def test_presign_response_carries_the_conditions(admin_client, db_session, admin_user, fake_object_store):
+    resp = start_upload(admin_client, "RI_2024_Math_P1.pdf", 5000)
+    assert resp.status_code == 201
+    body = resp.json()
+    job_id = body["job_id"]
+    key = f"ingest/{job_id}/source.pdf"
+    assert body["url"] and body["fields"]["key"] == key
+    assert body["fields"]["Content-Type"] == "application/pdf"
+    policy = body["fields"]["policy"]
+    assert policy["expiration_seconds"] == 15 * 60
+    assert {"Content-Type": "application/pdf"} in policy["conditions"]
+    assert ["content-length-range", 1, 100 * 1024 * 1024] in policy["conditions"]
+
+    job = db_session.get(IngestJob, uuid.UUID(job_id))
+    assert (job.status, job.created_by, job.filename, job.source_key) == (
+        "awaiting_upload", admin_user.id, "RI_2024_Math_P1.pdf", key,
+    )
+    assert job.tasks == []
+    assert fake_object_store.objects == {}
+
+
+@pytest.mark.parametrize("size", [0, -5, 100 * 1024 * 1024 + 1])
+def test_presign_rejects_sizes_outside_the_range(admin_client, db_session, fake_object_store, size):
+    assert start_upload(admin_client, size=size).status_code == 422
+    assert db_session.query(IngestJob).count() == 0
+
+
+def test_awaiting_upload_job_is_listed_and_cancellable(admin_client, db_session, fake_object_store):
+    job_id = start_upload(admin_client).json()["job_id"]
+    [row] = admin_client.get("/api/import/jobs").json()["data"]
+    assert (row["id"], row["status"], row["tasks_total"]) == (job_id, "awaiting_upload", 0)
+    assert admin_client.get("/api/import/jobs?status=review_ready,failed").json()["data"] == []
+    assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 409
+    assert admin_client.delete(f"/api/import/jobs/{job_id}").status_code == 204
+    assert fake_object_store.deleted_prefixes == [f"ingest/{job_id}/"]
+    assert db_session.get(IngestJob, uuid.UUID(job_id)).status == "cancelled"
+
+
+def test_uploaded_happy_path(admin_client, db_session, admin_user, fake_object_store):
     pdf = make_pdf(3)
     resp = upload(admin_client, pdf)
-    assert resp.status_code == 201
+    assert resp.status_code == 200
     job_id = resp.json()["job_id"]
+    assert resp.json()["status"] == "queued"
 
     key = f"ingest/{job_id}/source.pdf"
     assert fake_object_store.objects[key] == pdf
-
     job = db_session.get(IngestJob, uuid.UUID(job_id))
     assert job.status == "queued"
     assert job.created_by == admin_user.id
@@ -64,10 +115,46 @@ def test_create_job(admin_client, db_session, admin_user, fake_object_store):
     assert (task.section, task.stage, task.status) == (None, "register", "ready")
 
 
-def test_non_pdf_rejected(admin_client, db_session, fake_object_store):
-    assert upload(admin_client, b"hello", "a.txt", "text/plain").status_code == 422
-    assert db_session.query(IngestJob).count() == 0
-    assert fake_object_store.objects == {}
+def test_uploaded_does_not_run_filename_extraction(admin_client, fake_object_store):
+    with patch("app.ai.filename_extractor.extract_metadata") as extract:
+        assert upload(admin_client).status_code == 200
+    extract.assert_not_called()
+
+
+def test_uploaded_missing_object(admin_client, db_session, fake_object_store):
+    job_id = start_upload(admin_client).json()["job_id"]
+    resp = admin_client.post(f"/api/import/jobs/{job_id}/uploaded")
+    assert resp.status_code == 409
+    job = db_session.get(IngestJob, uuid.UUID(job_id))
+    assert job.status == "awaiting_upload" and job.tasks == []
+
+
+def test_uploaded_wrong_size(admin_client, db_session, fake_object_store, monkeypatch):
+    empty = upload(admin_client, b"")
+    assert empty.status_code == 422
+    monkeypatch.setattr("app.services.ingest_jobs.MAX_UPLOAD_BYTES", 10)
+    big = upload(admin_client, b"x" * 11)
+    assert big.status_code == 422
+    assert {j.status for j in db_session.query(IngestJob)} == {"awaiting_upload"}
+    assert db_session.query(IngestTask).count() == 0
+
+
+def test_uploaded_wrong_content_type(admin_client, db_session, fake_object_store):
+    assert upload(admin_client, b"hello", "a.pdf", "text/plain").status_code == 422
+    assert db_session.query(IngestTask).count() == 0
+
+
+def test_uploaded_twice_inserts_one_task(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    assert admin_client.post(f"/api/import/jobs/{job_id}/uploaded").status_code == 409
+    assert db_session.query(IngestTask).filter(IngestTask.job_id == uuid.UUID(job_id)).count() == 1
+
+
+def test_uploaded_on_other_states_and_unknown_job(admin_client, db_session, fake_object_store):
+    job_id = upload(admin_client).json()["job_id"]
+    db_session.get(IngestJob, uuid.UUID(job_id)).status = "failed"
+    assert admin_client.post(f"/api/import/jobs/{job_id}/uploaded").status_code == 409
+    assert admin_client.post(f"/api/import/jobs/{uuid.uuid4()}/uploaded").status_code == 404
 
 
 def test_pdf_content_type_but_garbage_bytes_still_creates_a_job(
@@ -75,7 +162,7 @@ def test_pdf_content_type_but_garbage_bytes_still_creates_a_job(
 ):
     """Validation is the worker's job now: the upload accepts the bytes, register fails them."""
     resp = upload(admin_client, b"definitely not a pdf")
-    assert resp.status_code == 201
+    assert resp.status_code == 200
     assert db_session.query(IngestJob).count() == 1
     assert len(fake_object_store.objects) == 1
 
@@ -367,44 +454,6 @@ def test_worker_liveness_from_heartbeat(admin_client, db_session, fake_object_st
     assert listing["worker_alive"] is False and listing["heartbeat_age_s"] >= WORKER_STALE_SECONDS
     detail = admin_client.get(f"/api/import/jobs/{job_id}").json()
     assert detail["worker_alive"] is False and detail["status"] == "queued"
-
-
-async def test_slow_upload_does_not_block_the_event_loop(admin_client, fake_object_store):
-    """A slow S3 put runs in the thread pool, so a concurrent health check is answered meanwhile."""
-    import asyncio
-    import threading
-
-    import httpx
-
-    from app.main import app
-
-    in_put = threading.Event()
-    release = threading.Event()
-    real_put = fake_object_store.put
-
-    def slow_put(key, data, content_type="application/octet-stream"):
-        in_put.set()
-        assert release.wait(timeout=10)
-        real_put(key, data, content_type)
-
-    fake_object_store.put = slow_put
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="https://testserver", cookies=dict(admin_client.cookies)
-    ) as ac:
-        post = asyncio.create_task(
-            ac.post("/api/import/jobs", files={"file": ("RI_2024_Math_P1.pdf", make_pdf(), "application/pdf")})
-        )
-        try:
-            while not in_put.is_set():
-                await asyncio.sleep(0.01)
-            # The upload is stuck inside the store; the loop must still serve other requests.
-            health = await asyncio.wait_for(ac.get("/api/health"), timeout=5)
-            assert health.status_code == 200
-            assert not post.done()
-        finally:
-            release.set()
-        assert (await post).status_code == 201
 
 
 # --- per-job Claude cost (report["cost"]) --------------------------------------------------

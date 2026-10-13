@@ -193,6 +193,39 @@ def test_stuck_job_is_retryable(env):
     assert [t.stage for t in reopened] == ["register"]
 
 
+# --- abandoned uploads ------------------------------------------------------------------------------
+def test_abandoned_upload_dry_run_reports_and_delete_cancels_and_removes_the_object(env):
+    objects = env[4]
+    old = job(env, "awaiting_upload", timedelta(hours=2), stages=(), created_at=NOW - timedelta(hours=2))
+    fresh = job(env, "awaiting_upload", timedelta(minutes=10), stages=(), created_at=NOW - timedelta(minutes=10))
+    queued = job(env, "queued", timedelta(hours=2), created_at=NOW - timedelta(hours=2))
+    for j in (old, fresh):
+        put(objects, f"tmp/ingest/{j}/source.pdf", timedelta(minutes=5))
+    with env[1]() as db:
+        for j in (old, fresh):
+            db.get(IngestJob, j).source_key = f"ingest/{j}/source.pdf"
+        db.commit()
+    for j in (old, fresh):
+        objects.objects[f"ingest/{j}/source.pdf"] = objects.objects.pop(f"tmp/ingest/{j}/source.pdf")
+
+    dry = by_kind(Reconciler(env[1], objects, env[3], NOW, delete=False).run(), "abandoned_upload")
+    assert [(f.job_id, f.action) for f in dry] == [(old, "would_cancel")]
+    with env[1]() as db:
+        assert db.get(IngestJob, old).status == "awaiting_upload"
+    assert f"ingest/{old}/source.pdf" in objects.objects
+
+    wet = by_kind(Reconciler(env[1], objects, env[3], NOW, delete=True).run(), "abandoned_upload")
+    assert [(f.job_id, f.action) for f in wet] == [(old, "cancelled")]
+    with env[1]() as db:
+        assert db.get(IngestJob, old).status == "cancelled"
+        assert db.get(IngestJob, fresh).status == "awaiting_upload"
+        assert db.get(IngestJob, queued).status == "queued"
+    assert f"ingest/{old}/source.pdf" not in objects.objects
+    assert f"ingest/{fresh}/source.pdf" in objects.objects
+    kinds = {e.data["check"]: e.data["action"] for e in events(env)}
+    assert kinds["abandoned_upload"] in ("would_cancel", "cancelled")
+
+
 # --- missing source ------------------------------------------------------------------------------------
 @pytest.mark.parametrize("delete", [False, True])
 def test_missing_source_is_report_only(env, delete):
