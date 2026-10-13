@@ -246,9 +246,19 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   `ingest_task.traceback`; the pipeline's SQLite store has the same column). It is returned as
   `traceback` in each task of `GET /api/import/jobs/{id}` and cleared when the task is claimed
   again or reopened by a retry. A failure a stage *reports* (`failed(...)`) has no traceback.
-- **Token logging.** The segment stage's Messages API usage reaches `app.logger.log_tokens` through
-  `ingester.request.usage_listener` (set by the worker). Prices for `claude-haiku-4-5` and
-  `claude-opus-5` (the retry model) are in `_PRICES`.
+- **Token logging and job cost.** Every Claude call made for a job logs `<func>/tokens` with its
+  Anthropic request id (`anthropic_request_id`, distinct from the API `request_id` context field),
+  model, token counts and `cost_usd`, stamped with the job id by the log context. The segment
+  stage's usage reaches `app.ai.job_cost.record_usage` through `ingester.request.usage_listener`
+  (`listener(model, usage, request_id)`, set by the worker); the filename/cover metadata call
+  (`app/ai/filename_extractor.py`) calls the same function. `record_usage` also adds the call to
+  `ingest_job.report["cost"]` (`calls`, `input_tokens`, `output_tokens`, `cache_write`, `cache_hit`,
+  `cost_usd`), returned as `report.cost` by `GET /api/import/jobs/{id}`. The update runs in its own
+  short transaction under `SELECT ... FOR UPDATE` on the job row, so concurrent tasks of one job
+  cannot lose each other's update; writers of other `report` keys re-read the row first
+  (`record_filename_metadata` refreshes, `after_report` locks). Prices live only in
+  `app.logger._PRICES` (`usage_fields`); `claude-haiku-4-5` and `claude-opus-5` (the retry model)
+  are priced.
 - **Testing seam.** `app.deps.get_pipeline_runner()` returns the factory the worker builds its runner
   with; tests pass a factory whose stages write a canned proposal (`tests/test_worker.py`). Setting
   `WORKER_TEST_DATABASE_URL` to a scratch Postgres database runs the worker tests there too.

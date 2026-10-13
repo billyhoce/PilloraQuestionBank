@@ -1,6 +1,7 @@
 import anthropic
 
-from app.logger import Timer, log_event, log_tokens
+from app.ai.job_cost import record_usage
+from app.logger import Timer, log_event
 from app.models.orm import ExamType, Level, School, Subject
 
 _EMPTY: dict = {
@@ -149,7 +150,9 @@ def extract_metadata(filename: str, db) -> dict:
                     ],
                 )
             log_event("extract_metadata", "haiku", seconds=t_call.s)
-            log_tokens("extract_metadata", "claude-haiku-4-5-20251001", resp.usage)
+            record_usage(
+                "extract_metadata", "claude-haiku-4-5-20251001", resp.usage, getattr(resp, "_request_id", None)
+            )
             extracted = resp.content[0].input  # dict — no JSON parsing needed
             result = resolve_metadata(extracted, ref_data)
         except Exception:

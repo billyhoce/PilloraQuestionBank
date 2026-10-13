@@ -64,7 +64,8 @@ _PRICES = {
 }
 
 
-def log_tokens(func: str, model: str, usage) -> None:
+def usage_fields(model: str, usage) -> dict:
+    """Token counts and dollar cost of one Claude call; the one place that applies ``_PRICES``."""
     inp = getattr(usage, "input_tokens", 0) or 0
     out = getattr(usage, "output_tokens", 0) or 0
     cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
@@ -85,5 +86,17 @@ def log_tokens(func: str, model: str, usage) -> None:
             + out * prices["output"]
         ) / 1_000_000
         fields["cost_usd"] = round(cost, 6)
+    return fields
 
+
+def log_tokens(func: str, model: str, usage, request_id: str | None = None) -> dict:
+    """Log one call's tokens/cost (with Anthropic's request id as ``anthropic_request_id``).
+
+    Returns the logged fields. ``request_id`` is not the log context's ``request_id`` (the API
+    request), hence the distinct key.
+    """
+    fields = usage_fields(model, usage)
+    if request_id:
+        fields["anthropic_request_id"] = request_id
     log_event(func, "tokens", **fields)
+    return fields

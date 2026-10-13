@@ -15,17 +15,19 @@ from .segments import READING_ORDERS, TEMPLATES, Segment
 log = logging.getLogger(__name__)
 
 # A caller that wants the Messages API's token usage (the webapp's worker logs it with its
-# prices) sets this: ``listener(model, usage)`` after every request. The ingester knows no
+# prices) sets this: ``listener(model, usage, request_id)`` after every request, where
+# ``request_id`` is Anthropic's id for the call (``None`` if the response carries none). The ingester knows no
 # prices and never imports the app, so the usage is handed out instead of logged here.
-usage_listener: Callable[[str, object], None] | None = None
+usage_listener: Callable[[str, object, str | None], None] | None = None
 
 
 def _report_usage(model: str, response: object) -> None:
     usage = getattr(response, "usage", None)
+    request_id = getattr(response, "_request_id", None) or getattr(response, "id", None)
     if usage_listener is None or usage is None:
         return
     try:
-        usage_listener(model, usage)
+        usage_listener(model, usage, request_id)
     except Exception:  # a logging hook must never fail a segmentation
         log.debug("usage listener failed", exc_info=True)
 
