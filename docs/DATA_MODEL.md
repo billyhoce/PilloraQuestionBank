@@ -239,7 +239,7 @@ schema still builds (`JSON().with_variant(JSONB, "postgresql")`).
 IngestJob: {
   id (uuid, PK),
   created_by (FK -> User, ON DELETE RESTRICT),
-  filename, source_key,          -- source_key = tmp/ingest/{id}/source.pdf
+  filename, source_key,          -- source_key = ingest/{id}/source.pdf (legacy jobs: tmp/ingest/{id}/source.pdf)
   sha256, page_count,            -- computed at upload from the bytes (no rendering)
   status ENUM(queued, running, review_ready, failed, confirmed, cancelled, expired),  -- default queued
   proposal (JSONB, nullable),    -- the pipeline's proposed split
@@ -303,8 +303,10 @@ task is `(section NULL, stage 'register', status 'ready')`.
   papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp
   ```
   Groups all assets for a single question together.
-- **Auto-import source PDFs** live under `tmp/ingest/{job_id}/` (`source.pdf`); the whole prefix is
-  deleted when the job is cancelled.
+- **Auto-import jobs** keep their data under `ingest/{job_id}/` (`source.pdf`, review `pages/`), a
+  prefix with no bucket lifecycle rule; the whole prefix is deleted when the job settles or is
+  cancelled. Jobs created before the move still sit under `tmp/ingest/{job_id}/`: every reader
+  derives the prefix from the stored `source_key` (`job_prefix`), never from the id.
 
 ## Image Dimension Standards
 

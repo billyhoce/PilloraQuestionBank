@@ -208,7 +208,7 @@ inputs are kept until the job is **settled** (`confirmed`, `cancelled`). They ar
 settles. A daily **reconciler** compares the DB with S3 and disk and cleans whatever the happy path
 missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway files.
 
-### 2.1 New S3 layout
+### 2.1 New S3 layout — DONE
 
 | Prefix | Holds | Lifecycle rule |
 |---|---|---|

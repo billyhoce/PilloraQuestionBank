@@ -154,8 +154,8 @@ def _record(job: IngestJob, key: str, outcome: str, paper_id: int | None) -> boo
     return settled
 
 
-def _drop_job_objects(job_id: uuid.UUID, store: ObjectStore) -> None:
-    prefix = job_prefix(job_id)
+def _drop_job_objects(source_key: str, store: ObjectStore) -> None:
+    prefix = job_prefix(source_key)
     try:
         store.delete_prefix(prefix)
     except Exception:
@@ -173,6 +173,7 @@ def confirm_job_paper(
         raise ReviewActionError(422, f"Paper {key!r} has no questions to import; skip it instead")
     payload, _ = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
     job_id = job.id
+    source_key = job.source_key
     settled = False
 
     def link_and_record(paper: Paper) -> None:
@@ -189,7 +190,7 @@ def confirm_job_paper(
     paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
     log_job_event(job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled)
     if settled:
-        _drop_job_objects(job_id, store)
+        _drop_job_objects(source_key, store)
     return paper, settled
 
 
@@ -199,10 +200,11 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin:
     _check_open(job, key)
     _find_paper(job, key)
     job_id = job.id
+    source_key = job.source_key
     settled = _record(job, key, "skipped", None)
     add_event(db, job_id, "paper_skipped", actor_user_id=getattr(admin, "id", None), paper_label=key, job_settled=settled)
     db.commit()
     log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)
     if settled:
-        _drop_job_objects(job_id, store)
+        _drop_job_objects(source_key, store)
     return settled

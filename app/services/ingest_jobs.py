@@ -38,11 +38,16 @@ class JobNotCancellableError(Exception):
 
 
 def source_key_for(job_id: uuid.UUID) -> str:
-    return f"tmp/ingest/{job_id}/source.pdf"
+    """Where a NEW job's source PDF goes: ``ingest/`` has no lifecycle rule, unlike ``tmp/``."""
+    return f"ingest/{job_id}/source.pdf"
 
 
-def job_prefix(job_id: uuid.UUID) -> str:
-    return f"tmp/ingest/{job_id}/"
+def job_prefix(source_key: str) -> str:
+    """The job's S3 prefix (trailing slash), derived from its stored ``source_key``.
+
+    Never rebuilt from the job id: jobs created before the move still live under the legacy
+    ``tmp/ingest/{job_id}/`` and their stored key says so."""
+    return source_key.rsplit("/", 1)[0] + "/"
 
 
 def inspect_pdf(pdf_bytes: bytes) -> int:
@@ -94,7 +99,7 @@ def create_job(
         db.flush()
     except Exception:
         try:
-            store.delete_prefix(job_prefix(job_id))
+            store.delete_prefix(job_prefix(key))
         except Exception:
             pass
         raise
@@ -136,7 +141,7 @@ def cancel_job(job: IngestJob, db: Session | None = None, actor: Any = None) -> 
     if db is not None:
         add_event(db, job.id, "cancelled", actor_user_id=getattr(actor, "id", None), previous_status=previous)
     log_job_event(job.id, "cancelled", previous_status=previous)
-    return job_prefix(job.id)
+    return job_prefix(job.source_key)
 
 
 class JobNotRetryableError(Exception):

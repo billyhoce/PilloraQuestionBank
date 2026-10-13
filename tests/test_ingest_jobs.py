@@ -49,7 +49,7 @@ def test_create_job(admin_client, db_session, admin_user, fake_object_store):
     assert resp.status_code == 201
     job_id = resp.json()["job_id"]
 
-    key = f"tmp/ingest/{job_id}/source.pdf"
+    key = f"ingest/{job_id}/source.pdf"
     assert fake_object_store.objects[key] == pdf
 
     job = db_session.get(IngestJob, uuid.UUID(job_id))
@@ -146,7 +146,7 @@ def test_cancel_marks_cancelled_and_deletes_prefix(
     job_id = upload(admin_client).json()["job_id"]
     assert admin_client.delete(f"/api/import/jobs/{job_id}").status_code == 204
     assert db_session.get(IngestJob, uuid.UUID(job_id)).status == "cancelled"
-    assert fake_object_store.deleted_prefixes == [f"tmp/ingest/{job_id}/"]
+    assert fake_object_store.deleted_prefixes == [f"ingest/{job_id}/"]
     assert fake_object_store.objects == {}
     # Cancelling twice is a conflict, not a second delete.
     assert admin_client.delete(f"/api/import/jobs/{job_id}").status_code == 409
@@ -462,3 +462,27 @@ def test_metadata_call_cost_survives_the_report_write(db_session, admin_user, mo
     record_filename_metadata(job, db_session, extractor)
     assert job.report["filename_metadata"] == {"school_id": 1}
     assert job.report["cost"]["calls"] == 1
+
+
+def test_job_prefix_is_derived_from_the_stored_source_key():
+    from app.services.ingest_jobs import job_prefix, source_key_for
+
+    jid = uuid.uuid4()
+    assert source_key_for(jid) == f"ingest/{jid}/source.pdf"
+    assert job_prefix(source_key_for(jid)) == f"ingest/{jid}/"
+    # A job created before the move keeps its legacy prefix.
+    assert job_prefix(f"tmp/ingest/{jid}/source.pdf") == f"tmp/ingest/{jid}/"
+
+
+def test_cancel_legacy_job_deletes_its_legacy_prefix(admin_client, db_session, admin_user, fake_object_store):
+    jid = uuid.uuid4()
+    key = f"tmp/ingest/{jid}/source.pdf"
+    fake_object_store.put(key, b"%PDF", "application/pdf")
+    db_session.add(IngestJob(
+        id=jid, created_by=admin_user.id, filename="x.pdf", source_key=key,
+        sha256="0" * 64, page_count=1, status="review_ready",
+    ))
+    db_session.commit()
+    assert admin_client.delete(f"/api/import/jobs/{jid}").status_code == 204
+    assert fake_object_store.deleted_prefixes == [f"tmp/ingest/{jid}/"]
+    assert fake_object_store.objects == {}

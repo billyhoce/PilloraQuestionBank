@@ -40,7 +40,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
 - `POST /api/import/jobs` (multipart `file`) — a non-`application/pdf` content type, or bytes
   PyMuPDF cannot open (corrupt, encrypted, zero pages), is a `422`. Otherwise it reads the page
   count and SHA-256 from the bytes (no rendering), puts the PDF at
-  `tmp/ingest/{job_id}/source.pdf`, inserts the `ingest_job` (`queued`) with its first task
+  `ingest/{job_id}/source.pdf`, inserts the `ingest_job` (`queued`) with its first task
   (`section` NULL, stage `register`, status `ready`), and returns `{"job_id": ...}` with `201`.
   It makes no Claude call, so it returns in well under a second. If the DB insert fails the
   uploaded object is deleted.
@@ -79,7 +79,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   the worker drains it.
 - `GET /api/import/jobs/{id}/review` — `proposal_edited` if present, else `proposal`
   (`app/services/ingest_review.py::build_review`), with each page given a presigned `url` (via
-  `ObjectStore.presign` of `tmp/ingest/{id}/{page.image}`; `null` when the page has no image) and its
+  `ObjectStore.presign` of `{job prefix}{page.image}`; `null` when the page has no image) and its
   `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
   `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
   SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `filename_metadata`, and per paper its `key` and `outcome` (`null`, `confirmed` or `skipped`). A job with
@@ -100,8 +100,12 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
 - `POST /api/import/jobs/{id}/confirm` and `/skip` — see [Confirming a paper](#confirming-a-paper).
 - `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
-  `tmp/ingest/{id}/` prefix (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
+  job prefix (`ingest/{id}/`) (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
   `cancelled` or `expired` job is a `409`.
+
+The job prefix is always derived from the stored `source_key` (`job_prefix(source_key)`), so jobs
+created before the move, under legacy `tmp/ingest/{id}/`, are still reviewed, confirmed, cancelled
+and swept correctly.
 
 S3 goes through the `get_object_store` dependency (`put` / `get` / `presign` / `delete_prefix`), so
 tests use the `fake_object_store` fixture.
@@ -116,7 +120,7 @@ tests use the `fake_object_store` fixture.
 | `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
 | `confirmed` | Every proposed paper was confirmed or skipped; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
-| `expired` | Left in `review_ready` or `failed` for more than 7 days; the worker's daily sweep marked it expired and deleted its `tmp/ingest/{job_id}/` prefix and scratch folder |
+| `expired` | Left in `review_ready` or `failed` for more than 7 days; the worker's daily sweep marked it expired and deleted its job prefix and scratch folder |
 
 Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
 
@@ -215,14 +219,14 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
 - **Shutdown.** SIGTERM/SIGINT finish the current task and exit cleanly.
 - **Scratch and S3 edges** (`app/worker/edges.py`, composed around the stages — `ingestion/` knows
   nothing of S3). The job's scratch folder is `$INGEST_SCRATCH_DIR/{job_id}/`
-  (default `/tmp/ingest/`). Resolving it fetches `tmp/ingest/{job_id}/source.pdf` from S3 into it when
+  (default `/tmp/ingest/`). Resolving it fetches `ingest/{job_id}/source.pdf` from S3 into it when
   missing, so `register` finds its input and a restart that lost the folder gets the booklet back
   before any stage reads it. Artefacts lost with the folder are **not** re-downloaded: their tasks'
   outputs are missing, so on start `Runner.revalidate` reopens them and they run again (slower, not
   wrong); with the folder intact, fingerprints keep finished tasks as they are. After `register`
   succeeds the filename metadata is extracted (`report["filename_metadata"]`). After `report`
   succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
-  `tmp/ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
+  `ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
   (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
   `report` next to `filename_metadata`. The images go up from `report`, not `render`, because the
   job-level `pages/` folder the proposal's image paths name is assembled by `report` (`render` writes
@@ -442,7 +446,7 @@ exam_type_id, year, paper_number, is_premium}` (admin, any admin's job; `201`):
 
 `POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (`200`, `{job_status}`; the
 same `404`/`409` rules). When every proposal paper has an outcome the job becomes `confirmed` (an
-all-skipped job too, with `confirmed_paper_ids` null) and its whole `tmp/ingest/{id}/` prefix
+all-skipped job too, with `confirmed_paper_ids` null) and its whole job prefix (`ingest/{id}/`)
 (source, review pages) is deleted after the commit; a failed delete is logged, and the bucket
 lifecycle rule backs it up. A job whose proposal has no paper at all can only be cancelled. The row is
 locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. Because the paper and the

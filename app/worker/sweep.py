@@ -1,8 +1,9 @@
 """The daily sweep: abandoned ingest jobs expire, and their S3 prefix and scratch folder go.
 
 A job that has sat in ``review_ready`` or ``failed`` for more than :data:`EXPIRE_AFTER` is marked
-``expired`` and its ``tmp/ingest/{job_id}/`` prefix deleted (after the commit, as the API's cancel
-does). The bucket lifecycle rule on ``tmp/`` (docs/DEPLOYMENT.md) backs a failed delete up.
+``expired`` and its job prefix (``ingest/{job_id}/``, or legacy ``tmp/ingest/{job_id}/``, derived
+from the stored source key) deleted after the commit, as the API's cancel does. ``ingest/`` has no
+bucket lifecycle rule, so a failed delete leaves objects until the next manual cleanup.
 
 The sweep is claimed by an atomic update of ``worker_heartbeat.last_sweep_at``, so it runs at most
 once per :data:`SWEEP_EVERY` across restarts and across workers.
@@ -28,7 +29,7 @@ from app.services.ingest_jobs import job_prefix
 log = logging.getLogger("pillora.worker")
 
 # A week gives an admin a working week plus a weekend to come back to a proposal; the S3
-# lifecycle rule on tmp/ uses the same figure, so the two agree on when abandoned data goes.
+# S3 lifecycle rule on tmp/ is shorter (2 days); ingest/ has none, so this sweep is what removes abandoned jobs.
 EXPIRE_AFTER = timedelta(days=7)
 # Daily is plenty for a 7-day threshold (a job lingers at most ~1 day past it) and keeps the
 # sweep to one query a day.
@@ -76,9 +77,13 @@ def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: da
     expired: list[uuid.UUID] = []
     with session_factory() as db:
         ids = db.execute(
-            select(IngestJob.id).where(IngestJob.status.in_(STALE_STATUSES), IngestJob.updated_at < cutoff)
-        ).scalars().all()
-        for job_id in ids:
+            select(IngestJob.id, IngestJob.source_key).where(
+                IngestJob.status.in_(STALE_STATUSES), IngestJob.updated_at < cutoff
+            )
+        ).all()
+        prefixes = {}
+        for job_id, source_key in ids:
+            prefixes[job_id] = job_prefix(source_key)
             # Guarded: a job retried or confirmed since the select is left alone.
             won = db.execute(
                 _update_core(IngestJob)
@@ -94,7 +99,7 @@ def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: da
                 add_event(db, job_id, "expired", at=now, reason="stale", max_age_days=EXPIRE_AFTER.days)
         db.commit()
     for job_id in expired:
-        prefix = job_prefix(job_id)
+        prefix = prefixes[job_id]
         try:
             object_store.delete_prefix(prefix)
         except Exception:

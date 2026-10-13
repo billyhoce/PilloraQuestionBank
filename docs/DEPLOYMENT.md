@@ -143,7 +143,7 @@ echoed). `LOG_LEVEL` (default `INFO`) sets the root level.
    - `pillora-question-bank-prod` (images) and `question-bank-backups` (DB dumps).
    - **Block all public access** on both (app uses presigned URLs).
    - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
-   - **Expire temporary uploads.** On `pillora-question-bank-prod` add a lifecycle rule for prefix `tmp/` that expires current objects after 7 days and aborts incomplete multipart uploads after 7 days. `tmp/` holds only in-flight data: manual-import page images (`tmp/{upload_id}/`, moved to `papers/...` when the import is confirmed) and automatic-import jobs (`tmp/ingest/{job_id}/`: source PDF and review pages). The worker's daily sweep expires `review_ready`/`failed` jobs older than 7 days and deletes their prefix itself; this rule is the backstop for failed deletes and abandoned manual uploads. Nothing under `tmp/` is meant to live longer than 7 days. Applying it is a one-time manual step:
+   - **Expire temporary uploads.** On `pillora-question-bank-prod` add a lifecycle rule for prefix `tmp/` that expires current objects after **2 days** and aborts incomplete multipart uploads after 2 days. `tmp/` holds only throwaway files: manual-import page images (`tmp/{upload_id}/`, moved to `papers/...` when the import is confirmed), confirm crops and page-edit replacements. **Do not add any rule on `ingest/`**: automatic-import jobs keep their source PDF and review pages under `ingest/{job_id}/` for as long as they are pending, and the worker/API delete that prefix when the job settles, is cancelled or is swept. (Jobs created before this layout sit under `tmp/ingest/{job_id}/`; finish or cancel them within 2 days of applying the shorter rule, or copy them to `ingest/` first.) Applying the rule is a one-time manual step:
      ```bash
      aws s3api put-bucket-lifecycle-configuration --bucket pillora-question-bank-prod \
        --lifecycle-configuration file://tmp-lifecycle.json
@@ -154,8 +154,8 @@ echoed). `LOG_LEVEL` (default `INFO`) sets the root level.
        {"ID": "expire-noncurrent", "Status": "Enabled", "Filter": {"Prefix": ""},
         "NoncurrentVersionExpiration": {"NoncurrentDays": 30}},
        {"ID": "expire-tmp", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
-        "Expiration": {"Days": 7}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
-        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}
+        "Expiration": {"Days": 2}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 2}}
      ]}
      ```
    - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.

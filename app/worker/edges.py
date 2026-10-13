@@ -76,10 +76,16 @@ class Edges:
         source = folder / SOURCE_NAME
         if not source.is_file():
             log.info("job %s: fetching the source PDF into %s", job_id, folder)
-            artefacts.write_bytes(source, self._objects.get(source_key_for(uuid.UUID(str(job_id)))))
+            artefacts.write_bytes(source, self._objects.get(self._source_key(job_id)))
         if self._fixtures is not None:
             self._place_fixture(job_id, folder)
         return folder
+
+    def _source_key(self, job_id: str) -> str:
+        """The job's stored source key (legacy jobs sit under ``tmp/ingest/``)."""
+        with self._factory() as db:
+            job = db.get(IngestJob, uuid.UUID(str(job_id)))
+            return job.source_key if job is not None else source_key_for(uuid.UUID(str(job_id)))
 
     def _place_fixture(self, job_id: str, folder: Path) -> None:
         target = folder / (Path(SOURCE_NAME).stem + FIXTURE_SUFFIX)
@@ -118,7 +124,7 @@ class Edges:
             if job is None or job.status in API_OWNED:
                 return outcome  # cancelled while it ran: leave no objects behind
             pages = ctx.path(PAGES_DIR)
-            prefix = job_prefix(job_uuid) + PAGES_DIR + "/"
+            prefix = job_prefix(job.source_key) + PAGES_DIR + "/"
             for image in sorted(pages.glob("*.webp")) if pages.is_dir() else ():
                 self._objects.put(prefix + image.name, image.read_bytes(), "image/webp")
             job.proposal = proposal
