@@ -145,6 +145,32 @@ its scratch folder). The sweep is claimed by an atomic update of `worker_heartbe
 runs at most once a day across restarts and workers. `ingest/` has no bucket lifecycle rule; a bucket
 rule on `tmp/` covers manual-import pages ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
 
+### Daily reconciler
+
+Right after the scratch cleanup, the sweep runs the reconciler (`app/worker/reconcile.py`), which
+compares the database with S3 and the scratch disk and reports whatever the happy path missed:
+
+| Check (`kind`) | Rule | Grace |
+|---|---|---|
+| `orphan_job_prefix` | `ingest/{id}/` (and legacy `tmp/ingest/{id}/`) whose job row is missing or settled (`confirmed` / `cancelled` / `expired`) | 1 day after settle (`updated_at`; newest object when the row is gone) |
+| `stale_temp` | any object under `tmp/` except the legacy `tmp/ingest/` (a pending job's source lives there) | 24 h |
+| `orphan_scratch` | scratch folder whose job is not `queued` / `running` / `failed` (or is missing) | 1 day (`updated_at`; folder mtime when the row is gone) |
+| `orphan_paper_image` | key under `papers/` that no `question_page.image_key` references | 7 days |
+| `stuck_job` | `queued` / `running` job with no task holding a live lease and no job/task activity | 6 h; marked `failed` (reason `stuck`; its `ready`/`running` tasks fail too, so Retry works) |
+| `missing_source` | pending job whose `source_key` object no longer exists | report only, the row is never touched |
+
+Each finding is `{kind, key_or_path, job_id?, age, action}`. It is logged (`WARNING`, with the job
+context when it has a job) and written as an `ingest_event` of kind `reconcile` (the check in
+`data.check`; `job_id` is NULL for findings with no job row: a missing job's prefix, `papers/` and
+`tmp/` keys, an orphan scratch folder of a missing job). Nothing is mutated unless
+**`INGEST_RECONCILE_DELETE=true`** (default off, report-only): that flag gates every deleting action
+*and* marking stuck jobs failed. In dry-run the `action` reads `would_delete` / `would_mark_failed`;
+in delete mode `deleted` / `marked_failed` (`delete_failed` if the delete raised); `report_only` for
+missing sources. A failing check is logged and never stops the others or the worker. The older
+cancelled/confirmed scratch cleanup above is unchanged and still runs regardless of the flag; the
+reconciler's scratch check covers the rest. Deleting a paper (either route) logs a `paper_deleted`
+event against its source job (`paper.source_job_id` or the job's `confirmed_paper_ids`).
+
 ### UI
 
 `ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in

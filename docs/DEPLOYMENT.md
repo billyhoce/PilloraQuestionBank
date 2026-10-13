@@ -204,6 +204,7 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 | `ANTHROPIC_API_KEY` | Backend, worker | Claude API auth |
 | `INGEST_OCR_COMMAND` | Worker | Tesseract binary for scanned answer tables. Set to `tesseract` (the image's apt install, 5.3.0); unset = OCR off |
 | `INGEST_SCRATCH_DIR` (optional) | Worker | Per-job working dir, default `/tmp/ingest` (writable by the container's `appuser`) |
+| `INGEST_RECONCILE_DELETE` (optional) | Worker | Default off: the daily reconciler only *reports* orphaned S3 objects / scratch folders / stuck jobs (logs + `ingest_event` rows with `kind='reconcile'`). Set `true` once a week or two of reports look sensible to let it delete them and mark stuck jobs failed. See [features/ingestion.md](./features/ingestion.md#daily-reconciler) |
 | `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` (optional) | Worker | Claude models for the segment stage and its retry (defaults in `deploy/pillora.env.example`) |
 | `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup) and [features/auth.md](./features/auth.md)) |
 | `GOOGLE_CLIENT_SECRET` | Backend | OAuth client secret. Never reaches the browser |

@@ -250,7 +250,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
 - With that in place, settling (`_drop_job_objects`, cancel) deletes **everything** under
   `ingest/{job_id}/`. The invariant for the reconciler becomes: "settled job ⇒ prefix empty".
 
-### 2.5 Reconciler
+### 2.5 Reconciler — DONE
 
 - New `app/worker/reconcile.py`, called from `run_sweep` (already claimed once a day across workers).
 - Each check produces findings `{kind, key_or_path, job_id?, age, action}`. They are logged with the
@@ -268,9 +268,10 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
 - Listing `papers/` is one paginated `ListObjectsV2` pass, which is cheap at ~10k objects/year. Compare
   it against a single `SELECT image_key FROM question_page`.
 - Add a `GET /api/import/reconcile/last` admin route (or a section in the job list) that shows the last
-  run's findings. Optional.
+  run's findings. Optional (skipped).
+- `ingest_event.job_id` became nullable (migration `e1f2a3b4c5d6`) so findings with no job row can be recorded.
 
-### 2.6 Database rows
+### 2.6 Database rows — DONE
 
 - `ingest_job` / `ingest_task` / `ingest_event` rows are kept indefinitely. They are small and form the
   audit trail.

@@ -4,9 +4,17 @@ Routes (and later the worker) take an ``ObjectStore`` through
 ``app.deps.get_object_store`` so tests swap in a fake — see ``tests/conftest.py``.
 """
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from app.storage import s3_client
+
+
+@dataclass(frozen=True)
+class StoredObject:
+    key: str
+    last_modified: datetime  # timezone-aware
 
 
 class ObjectStore(Protocol):
@@ -14,6 +22,8 @@ class ObjectStore(Protocol):
     def get(self, key: str) -> bytes: ...
     def presign(self, key: str, expires_in: int = ...) -> str: ...
     def delete_prefix(self, prefix: str) -> int: ...
+    def delete(self, key: str) -> None: ...
+    def list_objects(self, prefix: str) -> list[StoredObject]: ...
 
 
 class S3ObjectStore:
@@ -28,3 +38,9 @@ class S3ObjectStore:
 
     def delete_prefix(self, prefix: str) -> int:
         return s3_client.delete_prefix(prefix)
+
+    def delete(self, key: str) -> None:
+        s3_client.delete_object(key)
+
+    def list_objects(self, prefix: str) -> list[StoredObject]:
+        return [StoredObject(k, m) for k, m in s3_client.list_objects(prefix)]

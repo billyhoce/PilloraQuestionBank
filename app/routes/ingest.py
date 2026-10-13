@@ -326,7 +326,7 @@ def delete_paper_route(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    image_keys = delete_paper(paper_id, db)
+    image_keys = delete_paper(paper_id, db, current_user)
     # Commit the DB deletion before performing irreversible S3 deletions, so a
     # failed commit can't leave paper rows pointing at already-deleted images.
     db.commit()

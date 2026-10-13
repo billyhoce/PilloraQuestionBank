@@ -1,4 +1,5 @@
-"""The daily sweep: removes the scratch folders of settled (cancelled or confirmed) jobs.
+"""The daily sweep: removes the scratch folders of settled (cancelled or confirmed) jobs, then runs the
+reconciler (``app/worker/reconcile.py``).
 
 Pending jobs (``review_ready`` / ``failed``) never expire: they stay until the admin confirms or
 cancels them. The ``expired`` status survives only on historical rows.
@@ -20,6 +21,7 @@ from sqlalchemy import or_, select
 from sqlalchemy import update as _update
 
 from app.models.orm import IngestJob, WorkerHeartbeat
+from app.worker.reconcile import Reconciler
 
 log = logging.getLogger("pillora.worker")
 
@@ -79,9 +81,20 @@ def run_sweep(
     object_store,
     scratch_root: Path,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    reconcile_delete: bool = False,
 ) -> list[uuid.UUID] | None:
-    """The sweep if it is due (``None`` when not); returns the ids of the jobs whose scratch it removed."""
+    """The sweep if it is due (``None`` when not); returns the ids of the jobs whose scratch it removed.
+
+    After the scratch cleanup the reconciler runs (:mod:`app.worker.reconcile`): report-only unless
+    ``reconcile_delete`` (``INGEST_RECONCILE_DELETE=true``). Settled jobs' scratch is still removed
+    here regardless of that flag, as it always was; the reconciler's orphan-scratch check covers
+    what this does not (a missing job, a ``review_ready`` job whose scratch outlived the report)."""
     now = clock()
     if not claim_sweep(session_factory, now):
         return None
-    return clean_cancelled_scratch(session_factory, scratch_root, now)
+    cleaned = clean_cancelled_scratch(session_factory, scratch_root, now)
+    try:
+        Reconciler(session_factory, object_store, scratch_root, now, delete=reconcile_delete).run()
+    except Exception:
+        log.exception("the reconciler failed")
+    return cleaned
