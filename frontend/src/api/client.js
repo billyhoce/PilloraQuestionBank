@@ -110,11 +110,12 @@ export const api = {
     },
     // Every admin's jobs, newest first; optional status, `{ job_id }` or `{ paper_id }` filters.
     // Resolves to { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
-    listJobs: (status, { job_id, paper_id } = {}) => {
+    listJobs: (status, { job_id, paper_id, unmatched_answers } = {}) => {
       const params = new URLSearchParams()
       if (status) params.set('status', status)
       if (job_id) params.set('job_id', job_id)
       if (paper_id) params.set('paper_id', paper_id)
+      if (unmatched_answers) params.set('unmatched_answers', 'true')
       const qs = params.toString()
       return request('GET', `/api/import/jobs${qs ? `?${qs}` : ''}`).then(r => ({
         jobs: r.data,
@@ -139,6 +140,18 @@ export const api = {
     skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
     // Attach an answer-only paper to an existing paper: { key, paper_id, mode? } -> { attached, unmatched, modes, job_status }.
     attachJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/attach`, payload),
+    // Pending question papers of other review-ready jobs, filtered by metadata (+ exclude_job_id):
+    // { data: [{ ingest_paper_id, job_id, filename, paper_key, metadata, preview }] }.
+    pendingPapers: (filters = {}) => {
+      const params = new URLSearchParams()
+      for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== null && v !== '') params.set(k, v)
+      const qs = params.toString()
+      return request('GET', `/api/import/papers/pending${qs ? `?${qs}` : ''}`).then(r => r.data)
+    },
+    // Link / unlink an answer-only paper (its `key`) with a pending question paper of another job.
+    matchJobPaper: (id, key, ingest_paper_id) =>
+      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, { ingest_paper_id }),
+    unmatchJobPaper: (id, key) => request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),

@@ -17,11 +17,20 @@ from app.deps import (
 from app.log_context import set_context
 from app.services.ingest_events import add_event
 from app.logger import Timer, log, log_event, log_job_event
-from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topic
+from app.models.orm import INGEST_JOB_STATUSES, IngestJob, IngestPaper, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
-from app.services.ingest_papers import get_row as get_paper_row, set_metadata as set_paper_metadata, sync_job_papers
+from app.services.ingest_papers import (
+    MatchError,
+    get_row as get_paper_row,
+    link_papers,
+    paper_links,
+    pending_question_papers,
+    set_metadata as set_paper_metadata,
+    sync_job_papers,
+    unlink_paper,
+)
 from app.services.ingest_confirm import ReviewActionError, attach_answers, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
     InvalidPdfError,
@@ -434,11 +443,13 @@ def list_ingest_jobs(
     status: Optional[str] = None,
     job_id: Optional[uuid.UUID] = None,
     paper_id: Optional[int] = None,
+    unmatched_answers: bool = False,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Every admin's jobs, optionally narrowed by status (one, or several comma-separated), job id, or a paper id (the job that
-    confirmed that paper, by ``paper.source_job_id`` or the job's recorded ``confirmed_paper_ids``)."""
+    confirmed that paper, by ``paper.source_job_id`` or the job's recorded ``confirmed_paper_ids``), or to the jobs
+    with an answer-only paper still pending and linked to no question paper (``unmatched_answers``)."""
     statuses = [s.strip() for s in status.split(",")] if status is not None else None
     if statuses is not None and any(s not in INGEST_JOB_STATUSES for s in statuses):
         raise HTTPException(status_code=422, detail="Unknown job status")
@@ -455,6 +466,17 @@ def list_ingest_jobs(
         ids |= {j.id for j in db.query(IngestJob).filter(IngestJob.confirmed_paper_ids.isnot(None))
                 if paper_id in (j.confirmed_paper_ids or [])}
         q = q.filter(IngestJob.id.in_(ids))
+    if unmatched_answers:
+        q = q.filter(
+            db.query(IngestPaper.id)
+            .filter(
+                IngestPaper.job_id == IngestJob.id,
+                IngestPaper.role == "answer_only",
+                IngestPaper.status == "pending",
+                IngestPaper.matched_ingest_paper_id.is_(None),
+            )
+            .exists()
+        )
     jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
     return {"data": [_job_out(j) for j in jobs], **worker_state(db)}
 
@@ -520,9 +542,11 @@ def review_ingest_job(
 ):
     job = _get_own_job(db, job_id, current_user)
     try:
-        return build_review(job, store)
+        review = build_review(job, store)
     except NoProposalError:
         raise HTTPException(status_code=409, detail="This job has no proposal to review yet")
+    # Papers linked to a paper of another job (by key), for the "linked to ..." note.
+    return {**review, "matches": paper_links(db, job)}
 
 
 @router.put("/jobs/{job_id}/proposal")
@@ -617,6 +641,78 @@ def save_paper_metadata(
     set_paper_metadata(db, job, paper_key, payload.model_dump())
     db.commit()
     return {"saved": True, "metadata_source": row.metadata_source}
+
+
+@router.get("/papers/pending")
+def pending_papers(
+    school_id: Optional[int] = None,
+    year: Optional[int] = None,
+    level_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    exam_type_id: Optional[int] = None,
+    stream_id: Optional[int] = None,
+    paper_number: Optional[str] = None,
+    exclude_job_id: Optional[uuid.UUID] = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Pending question papers of review-ready jobs (not ``exclude_job_id``), the candidates for
+    matching an answer-only paper before the question paper exists in the bank. Every given
+    metadata field must match exactly. Each has a ``preview`` of its first question."""
+    given = {
+        "school_id": school_id, "year": year, "level_id": level_id, "subject_id": subject_id,
+        "exam_type_id": exam_type_id, "stream_id": stream_id, "paper_number": paper_number,
+    }
+    filters = {k: v for k, v in given.items() if v is not None and v != ""}
+    return {"data": pending_question_papers(db, store, filters, exclude_job_id)}
+
+
+class JobMatchIn(BaseModel):
+    ingest_paper_id: int
+
+
+@router.post("/jobs/{job_id}/papers/{paper_key}/match")
+def match_job_paper(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: JobMatchIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Link an answer-only paper to a pending question paper of another job (both rows get each
+    other's id in ``matched_ingest_paper_id``). Nothing is attached yet; confirming the question
+    paper settles the pair."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        link_papers(db, job, paper_key, payload.ingest_paper_id)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return {"matches": paper_links(db, job).get(paper_key)}
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/match", status_code=204)
+def unmatch_job_paper(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove a paper's link (on both sides)."""
+    job = _get_own_job(db, job_id, current_user)
+    db.refresh(job, with_for_update=True)
+    try:
+        unlink_paper(db, job, paper_key)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return None
 
 
 class JobSkipIn(BaseModel):

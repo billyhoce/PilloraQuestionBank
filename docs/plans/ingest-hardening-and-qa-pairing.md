@@ -445,7 +445,9 @@ page.
 - Answer numbers with no matching question are **reported back** to the admin, not dropped.
 - `POST /api/import/jobs/{id}/attach`, body `{key, paper_id, mode}`.
 
-### 4.7 Manual matching UI
+### 4.7 Manual matching UI — DONE (#82)
+
+As built: see [ingestion.md](../features/ingestion.md#matching-an-answer-only-paper-by-hand). The panel shows for answer-only papers only; a pending question paper is linked (`matched_ingest_paper_id` on both rows), not attached, and settling the pair on confirm is left to 4.5.
 
 - On `ReviewPage.jsx`, an answer-only paper (or any unmatched one) gets a **"Match to paper…"** panel:
   - pre-filled filters from its metadata;
