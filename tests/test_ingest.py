@@ -973,3 +973,10 @@ def test_confirm_before_commit_failure_rolls_back_paper(db_session, mock_s3, ref
         confirm_import(payload=payload, created_by=admin_user, db=db_session, before_commit=fail)
     assert db_session.query(Paper).count() == 0
     mock_s3.head_object(Bucket="test-bucket", Key=temp)
+
+
+def test_manual_confirm_leaves_provenance_null(db_session, mock_s3, reference_data, admin_user):
+    test_confirm_creates_question_pages(db_session, mock_s3, reference_data, admin_user)
+    q = db_session.query(Question).first()
+    assert q.section is None and q.proposal_question_index is None
+    assert all(p.source_page is None and p.source_rect is None for p in db_session.query(QuestionPage))

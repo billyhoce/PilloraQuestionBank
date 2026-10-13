@@ -78,17 +78,19 @@ def test_pdf_content_type_but_garbage_bytes_rejected(
     assert fake_object_store.objects == {}
 
 
-def test_list_is_own_jobs_newest_first_and_filters(
+def test_list_is_all_admins_jobs_newest_first_and_filters(
     admin_client, db_session, admin_user, fake_object_store
 ):
     first = upload(admin_client, name="a.pdf").json()["job_id"]
     second = upload(admin_client, name="b.pdf").json()["job_id"]
-    # Another admin's job must not show up.
+    # Another admin's job shows up too (oldest here).
     from tests.conftest import _create_user
     other = _create_user(db_session, "admin2@test.com", "x", "admin")
-    db_session.add(IngestJob(
+    theirs = IngestJob(
         created_by=other.id, filename="theirs.pdf", source_key="k", sha256="0" * 64, page_count=1,
-    ))
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    db_session.add(theirs)
     db_session.flush()
     db_session.get(IngestJob, uuid.UUID(first)).status = "failed"
     # The server default is second-resolution on SQLite; make the order explicit.
@@ -97,12 +99,27 @@ def test_list_is_own_jobs_newest_first_and_filters(
     db_session.flush()
 
     rows = admin_client.get("/api/import/jobs").json()["data"]
-    assert [r["filename"] for r in rows] == ["b.pdf", "a.pdf"]
+    assert [r["filename"] for r in rows] == ["b.pdf", "a.pdf", "theirs.pdf"]
     assert rows[0]["id"] == second and rows[0]["status"] == "queued" and rows[0]["created_at"]
 
     failed = admin_client.get("/api/import/jobs?status=failed").json()["data"]
     assert [r["id"] for r in failed] == [first]
     assert admin_client.get("/api/import/jobs?status=bogus").status_code == 422
+
+    by_id = admin_client.get(f"/api/import/jobs?job_id={theirs.id}").json()["data"]
+    assert [r["id"] for r in by_id] == [str(theirs.id)]
+
+
+def test_list_filters_by_paper_id(admin_client, db_session, admin_user, fake_object_store):
+    from tests.conftest import _create_user
+    other = _create_user(db_session, "admin2@test.com", "x", "admin")
+    via_ids = IngestJob(created_by=other.id, filename="x.pdf", source_key="k", sha256="0" * 64,
+                        page_count=1, confirmed_paper_ids=[9001])
+    via_paper = IngestJob(created_by=other.id, filename="y.pdf", source_key="k", sha256="0" * 64, page_count=1)
+    db_session.add_all([via_ids, via_paper])
+    db_session.flush()
+    assert [r["id"] for r in admin_client.get("/api/import/jobs?paper_id=9001").json()["data"]] == [str(via_ids.id)]
+    assert admin_client.get("/api/import/jobs?paper_id=1234").json()["data"] == []
 
 
 def test_get_job_with_tasks(admin_client, fake_object_store):
@@ -113,14 +130,14 @@ def test_get_job_with_tasks(admin_client, fake_object_store):
     assert admin_client.get(f"/api/import/jobs/{uuid.uuid4()}").status_code == 404
 
 
-def test_other_admins_job_is_404(admin_client, db_session, fake_object_store):
+def test_other_admins_job_is_visible_and_actionable_to_admins(admin_client, db_session, fake_object_store):
     from tests.conftest import _create_user
     other = _create_user(db_session, "admin2@test.com", "x", "admin")
     job = IngestJob(created_by=other.id, filename="t.pdf", source_key="k", sha256="0" * 64, page_count=1)
     db_session.add(job)
     db_session.flush()
-    assert admin_client.get(f"/api/import/jobs/{job.id}").status_code == 404
-    assert admin_client.delete(f"/api/import/jobs/{job.id}").status_code == 404
+    assert admin_client.get(f"/api/import/jobs/{job.id}").status_code == 200
+    assert admin_client.delete(f"/api/import/jobs/{job.id}").status_code == 204
 
 
 def test_cancel_marks_cancelled_and_deletes_prefix(
@@ -291,13 +308,12 @@ def test_retry_non_admin_forbidden(public_client):
     assert public_client.post(f"/api/import/jobs/{uuid.uuid4()}/retry").status_code == 403
 
 
-def test_retry_unknown_or_other_admins_job_is_404(admin_client, db_session, fake_object_store):
+def test_retry_unknown_job_is_404(admin_client, db_session, fake_object_store):
     from tests.conftest import _create_user
     other = _create_user(db_session, "admin2@test.com", "x", "admin")
     job = IngestJob(created_by=other.id, filename="t.pdf", source_key="k", sha256="0" * 64, page_count=1)
     db_session.add(job)
     db_session.flush()
-    assert admin_client.post(f"/api/import/jobs/{job.id}/retry").status_code == 404
     assert admin_client.post(f"/api/import/jobs/{uuid.uuid4()}/retry").status_code == 404
 
 

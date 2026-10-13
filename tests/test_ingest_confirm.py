@@ -124,6 +124,12 @@ def test_confirm_creates_paper_with_cropped_pages(admin_client, db_session, env,
     assert job.report["review_outcome"] == {"q1": "confirmed"}
     stored = db_session.query(QuestionPage).filter_by(page_type="answer").one()
     assert stored.width_px <= 1760
+    # Provenance: where each question and image came from in the booklet.
+    qs = {x.question_number: x for x in paper_row.questions}
+    assert [(qs[n].section, qs[n].proposal_question_index) for n in (1, 2)] == [("q1", 0), ("q1", 1)]
+    assert (stored.source_page, stored.source_rect) == (3, {"x0": 10, "y0": 10, "x1": 200, "y1": 60})
+    q2_page = qs[2].pages[0]
+    assert (q2_page.source_page, q2_page.source_rect) == (2, {"x0": 50, "y0": 400, "x1": 300, "y1": 600})
     # Stored objects are real crops; the temp uploads and the job's prefix are gone.
     keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
     assert sorted(keys) == sorted(

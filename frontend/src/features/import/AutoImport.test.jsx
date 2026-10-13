@@ -42,6 +42,20 @@ describe('AutoImport', () => {
     expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1)
   })
 
+  it('searches by job id or paper id', async () => {
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    await screen.findByText('second.pdf')
+    const box = screen.getByLabelText('Search jobs by job id or paper id')
+    await userEvent.type(box, '42{enter}')
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, { paper_id: '42' }))
+    const id = '0b1c2d3e-0000-4000-8000-000000000001'
+    await userEvent.clear(box)
+    await userEvent.type(box, `${id}{enter}`)
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, { job_id: id }))
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, {}))
+  })
+
   it('shows an empty state', async () => {
     api.import.listJobs.mockResolvedValue(listing([]))
     render(<MemoryRouter><AutoImport /></MemoryRouter>)
