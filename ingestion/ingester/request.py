@@ -50,7 +50,8 @@ What a range covers:
 - From the section's first page of content to its last page of content.
 - Leave out the pages a section opens with that are not its content: the cover
   sheet, the instructions page, the formula sheet. Leave out blank padding
-  printed after a section ends.
+  printed after a section ends. Do not put those front pages in the range, but
+  list them as the section's `cover_pages` (below).
 - Ranges must not overlap, and need not cover the whole PDF. Pages belonging to
   no section are simply left out.
 - A blank page *inside* a section stays inside its range. So does a page
@@ -58,6 +59,12 @@ What a range covers:
   and a page left blank as working space -- all of these are part of the paper
   they are bound into.
 - Report the ranges in the order they appear in the PDF.
+
+Cover pages: for each range, also list in `cover_pages` the cover / instruction
+pages that precede it and belong to it -- the cover sheet, the instructions
+page, the formula sheet. They are page numbers outside every range, and no page
+is listed for two sections. Answer booklets often have none; give `[]` when the
+section has no such pages.
 
 Page numbers are 1-based positions in the PDF file. They are not the page
 numbers printed on the pages: a booklet restarts its own numbering at each paper
@@ -144,6 +151,14 @@ RESPONSE_SCHEMA = {
                         "type": "string",
                         "enum": [*READING_ORDERS, READING_ORDER_NONE],
                         "description": "table answer papers only; `none` otherwise",
+                    },
+                    "cover_pages": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "1-based cover / instruction pages that precede this "
+                            "section and belong to it, outside every range; [] if none"
+                        ),
                     },
                 },
                 "required": [
@@ -316,6 +331,14 @@ def parse_answer(model: str, body: str) -> ModelAnswer:
                 model=model,
                 error=f"segment {position}'s question_columns is not an array",
             )
+        cover_pages = item.get("cover_pages")
+        if cover_pages is None:
+            cover_pages = []
+        if not isinstance(cover_pages, list):
+            return ModelAnswer(
+                model=model,
+                error=f"segment {position}'s cover_pages is not an array",
+            )
         segments.append(
             Segment(
                 label=str(item["label"]),
@@ -328,6 +351,7 @@ def parse_answer(model: str, body: str) -> ModelAnswer:
                 needs_review=item.get("template") == TEMPLATE_UNSURE,
                 question_columns=tuple(columns),
                 reading_order=_reading_order(item.get("reading_order")),
+                cover_pages=tuple(cover_pages),
             )
         )
 

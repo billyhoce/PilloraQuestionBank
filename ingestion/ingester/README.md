@@ -141,6 +141,14 @@ other section carries `[]` and `null`, and so does a table the model could not r
 (`[]`/`none` in the reply). They are a hint for the table reader, which checks them
 against the page (see `question_extractor/README.md`), not a measurement.
 
+**Cover pages.** Each section also carries `cover_pages`: the 1-based cover / instruction
+pages that precede it and belong to it, outside every range (the segment call reports them;
+no second model call). Answer booklets often have none, so `[]` is valid. When the model
+gives none (field absent, `null` or `[]`), the segmenter fills in the unclaimed pages
+immediately before the section's `first_page`, stopping at the previous section's range or
+cover pages or at page 1 (`segments.fill_cover_pages`, applied after validation). A
+committed fixture is read as written, so its `cover_pages` are stored in it.
+
 **The stage**, in order:
 
 1. **Reuse.** Read `output/<paper>/segments.json`, else the committed fixture
@@ -167,13 +175,14 @@ twice), per-kind indices not numbered 1..n down the document, a template on a qu
 section, an answer section with no template (that it didn't flag as `unsure`), a
 column layout on a question or `annotated_booklet` section, and a table layout that is
 unusable: more than `max_question_columns` columns, an index that is negative or not
-strictly ascending, or a reading order outside `down`/`across`. The response schema
+strictly ascending, or a reading order outside `down`/`across`, and cover pages that are not whole numbers,
+fall outside the document, lie inside a section's range, or are claimed by two sections. The response schema
 cannot enforce those limits itself: structured outputs support no array-length or
 numeric bounds.
 **Anomalies** are accepted but warned: no sections at all, an answer paper with no
 matching question paper, an answer section flagged for review, a table section with
 no full layout (the reader measures what is missing), and pages between two sections
-that none claims (usually the next paper's cover — or a section dropped entirely).
+that none claims and no section lists as a cover page (a section dropped entirely, say).
 
 **Split.** `python -m ingester split <pdf|folder> --output-dir output/` reads the
 plan the same way (output folder, then fixture; it never asks a model) and writes each

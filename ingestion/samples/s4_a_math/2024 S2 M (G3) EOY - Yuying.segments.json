@@ -18,7 +18,10 @@
       "template": null,
       "needs_review": false,
       "question_columns": [],
-      "reading_order": null
+      "reading_order": null,
+      "cover_pages": [
+        1
+      ]
     },
     {
       "label": "q2",
@@ -30,7 +33,10 @@
       "template": null,
       "needs_review": false,
       "question_columns": [],
-      "reading_order": null
+      "reading_order": null,
+      "cover_pages": [
+        13
+      ]
     },
     {
       "label": "a1",
@@ -44,7 +50,10 @@
       "question_columns": [
         0
       ],
-      "reading_order": "down"
+      "reading_order": "down",
+      "cover_pages": [
+        24
+      ]
     },
     {
       "label": "a2",
@@ -58,7 +67,8 @@
       "question_columns": [
         0
       ],
-      "reading_order": "down"
+      "reading_order": "down",
+      "cover_pages": []
     }
   ],
   "attempts": [],

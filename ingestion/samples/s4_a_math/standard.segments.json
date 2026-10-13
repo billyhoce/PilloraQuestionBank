@@ -18,7 +18,8 @@
       "template": null,
       "needs_review": false,
       "question_columns": [],
-      "reading_order": null
+      "reading_order": null,
+      "cover_pages": []
     }
   ],
   "attempts": [],

@@ -21,6 +21,7 @@ from .segments import (
     SEGMENTS_NAME,
     Attempt,
     SegmentPlan,
+    fill_cover_pages,
     read_plan,
     write_plan,
     write_plan_to,
@@ -185,7 +186,9 @@ def _segment(pdf: Path, config: IngestConfig) -> SegmentPlan:
             log.info("%s: accepted %s's answer after a retry", paper, model)
         break
 
-    segments = accepted.segments if accepted is not None else ()
+    # Cover pages the model left out are filled after validation, so only what it said is
+    # judged; the fallback's pages are unclaimed by construction.
+    segments = fill_cover_pages(accepted.segments) if accepted is not None else ()
     if accepted is None:
         log.warning(
             "%s: no model produced a usable plan after %d attempt(s); it was not "

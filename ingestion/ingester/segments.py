@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +56,10 @@ class Segment:
     # against the page, not a measurement; empty/None when not given.
     question_columns: tuple[int, ...] = ()
     reading_order: str | None = None
+    # 1-based pages of this paper's cover / instruction sheets: front matter that belongs
+    # to it but lies outside [first_page, last_page]. Empty when it has none (an answer
+    # booklet often has no cover).
+    cover_pages: tuple[int, ...] = ()
 
     @property
     def pages(self) -> list[int]:
@@ -77,6 +81,7 @@ class Segment:
             "needs_review": self.needs_review,
             "question_columns": list(self.question_columns),
             "reading_order": self.reading_order,
+            "cover_pages": list(self.cover_pages),
         }
 
     @classmethod
@@ -92,7 +97,42 @@ class Segment:
             needs_review=entry.get("needs_review", False),
             question_columns=tuple(entry.get("question_columns") or ()),
             reading_order=entry.get("reading_order"),
+            cover_pages=tuple(entry.get("cover_pages") or ()),
         )
+
+
+def fill_cover_pages(segments: tuple[Segment, ...]) -> tuple[Segment, ...]:
+    """Give a segment with no cover pages the unclaimed run just before its first page.
+
+    The fallback for a model that reported none (absent, null or ``[]`` alike). It walks
+    back from ``first_page - 1`` while the page is unclaimed by any segment's range or
+    cover pages, so it never takes a neighbour's pages and stops at page 1. Segments are
+    handled in page order, so an earlier one's claim is respected. A segment that already
+    has cover pages is left as it is.
+    """
+    claimed: set[int] = set()
+    for segment in segments:
+        claimed.update(segment.pages)
+        claimed.update(segment.cover_pages)
+
+    filled: dict[str, tuple[int, ...]] = {}
+    for segment in sorted(segments, key=lambda s: (s.first_page, s.last_page)):
+        if segment.cover_pages:
+            continue
+        run: list[int] = []
+        page = segment.first_page - 1
+        while page >= 1 and page not in claimed:
+            run.append(page)
+            page -= 1
+        run.reverse()
+        claimed.update(run)
+        filled[segment.label] = tuple(run)
+    return tuple(
+        replace(segment, cover_pages=filled[segment.label])
+        if filled.get(segment.label)
+        else segment
+        for segment in segments
+    )
 
 
 @dataclass(frozen=True)

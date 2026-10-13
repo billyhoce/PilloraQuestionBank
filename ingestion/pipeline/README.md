@@ -26,7 +26,7 @@ State lives under `--root` (default `output/pipeline`): `pipeline.db` and one fo
 | stage | scope | kind | needs | writes |
 |---|---|---|---|---|
 | `register` | job | cpu | | `job.json`: sha256, page count, size, config hash, the too-large-to-ask check |
-| `segment` | job | api | register | `segments.json`: the committed `<paper>.segments.json` fixture if there is one, else the Messages API; fails when no sections come out |
+| `segment` | job | api | register | `segments.json`: the committed `<paper>.segments.json` fixture if there is one, else the Messages API; each section carries its `cover_pages`; fails when no sections come out (stage `version` 2: the segment prompt and schema now ask for them) |
 | `split` | job (fans out) | cpu | segment | `_split/<label>.pdf` and `_split/split.json`; creates each section's tasks from its route's chain (below) |
 | `locate` | section (question route) | cpu | split | `<label>/manifest.json` and `<label>/detections.json`; `skipped` when no page has text (a scan) |
 | `render` | section (question route) | cpu | locate | `<label>/pNN.png`, `<label>/review/pNN.webp` and, for a `--debug` job, `<label>/_debug/pNN.png`, drawn from `detections.json` |
