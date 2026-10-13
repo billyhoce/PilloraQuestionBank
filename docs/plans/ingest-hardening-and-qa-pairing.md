@@ -349,7 +349,7 @@ and after, then diff.
 - Add a warning to the proposal when a question section has no answer section, so question-only
   booklets are flagged as such rather than silent.
 
-### 4.2 Cover pages from the segment call
+### 4.2 Cover pages from the segment call — DONE
 
 - Add an optional `cover_pages: [int]` per segment to `RESPONSE_SCHEMA` and `SEGMENT_SYSTEM` in
   `ingestion/ingester/request.py`. The prompt change: "for each range, also list the cover /
@@ -363,6 +363,10 @@ and after, then diff.
 - Committed fixtures (`ingestion/samples/*.segments.json`) lack the field. That is fine because
   `from_entry` uses `.get`, but regenerate them for the diff.
 - Answer booklets often have no cover. An empty list is valid.
+- As built: the fallback runs in `segmenter._segment` (`segments.fill_cover_pages`) after validation, so
+  validation judges only what the model said. Absent, `null` and an explicit `[]` all count as "none" and
+  take the fallback. The committed fixtures are read raw (never through the fallback), so their
+  `cover_pages` were written once by running `fill_cover_pages` over them.
 
 ### 4.3 Metadata from cover pages, per paper
 

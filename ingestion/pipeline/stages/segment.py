@@ -60,4 +60,6 @@ STAGE = Stage(
     inputs=_inputs,
     settings=ingest_settings,
     outputs=lambda ctx: [ctx.path(artefacts.SEGMENTS_NAME)],
+    # 2: segments carry `cover_pages`. The fingerprint does not cover the prompt text.
+    version=2,
 )

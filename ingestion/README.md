@@ -80,7 +80,7 @@ flowchart TD
     seg["segment<br/>label page ranges q1, a1, ...<br/>and each answer paper's template"]
     fixture[("committed fixture<br/>#lt;paper#gt;.segments.json")]
     model[["Claude vision model<br/>only when no fixture is on disk"]]
-    plan[("segments.json<br/>sections, templates, table layout")]
+    plan[("segments.json<br/>sections, templates, table layout, cover pages")]
     split["split<br/>one PDF per section"]
     parts[("_split/#lt;label#gt;.pdf<br/>_split/split.json: page map back to the booklet")]
     route{"route<br/>by kind and template"}

@@ -18,7 +18,11 @@
       "template": null,
       "needs_review": false,
       "question_columns": [],
-      "reading_order": null
+      "reading_order": null,
+      "cover_pages": [
+        1,
+        2
+      ]
     },
     {
       "label": "a1",
@@ -33,7 +37,8 @@
         0,
         2
       ],
-      "reading_order": "across"
+      "reading_order": "across",
+      "cover_pages": []
     }
   ],
   "attempts": [],

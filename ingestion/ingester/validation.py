@@ -23,6 +23,7 @@ def validate(
     problems.extend(_check_each(segments, page_count, config))
     problems.extend(_check_order(segments))
     problems.extend(_check_overlap(segments))
+    problems.extend(_check_covers(segments, page_count))
     problems.extend(_check_indices(segments))
     return problems
 
@@ -152,6 +153,47 @@ def _check_overlap(segments: Sequence[Segment]) -> list[str]:
     return problems
 
 
+def _check_covers(segments: Sequence[Segment], page_count: int) -> list[str]:
+    """Cover pages are real pages, outside every section, each claimed once.
+
+    An empty list is valid. A shape error (a non-integer) is reported and that segment's
+    other checks skipped; ranges that are themselves malformed are left to the other checks.
+    """
+    problems: list[str] = []
+    ranges = [
+        (segment.first_page, segment.last_page)
+        for segment in segments
+        if all(
+            isinstance(v, int) and not isinstance(v, bool)
+            for v in (segment.first_page, segment.last_page)
+        )
+    ]
+    owner: dict[int, str] = {}
+    for position, segment in enumerate(segments, 1):
+        where = f"segment {position} ({segment.label!r})"
+        pages = segment.cover_pages
+        if any(not isinstance(p, int) or isinstance(p, bool) for p in pages):
+            problems.append(f"{where}: cover_pages {list(pages)} are not all whole numbers")
+            continue
+        for page in pages:
+            if page < 1 or page > page_count:
+                problems.append(
+                    f"{where}: cover page {page} falls outside the document "
+                    f"(1-{page_count})"
+                )
+            elif any(first <= page <= last for first, last in ranges):
+                problems.append(
+                    f"{where}: cover page {page} lies inside a section's pages"
+                )
+            elif page in owner:
+                problems.append(
+                    f"{where}: cover page {page} is also claimed by {owner[page]!r}"
+                )
+            else:
+                owner[page] = segment.label
+    return problems
+
+
 def _check_indices(segments: Sequence[Segment]) -> list[str]:
     problems: list[str] = []
     for kind in sorted(KIND_PREFIXES):
@@ -218,6 +260,7 @@ def _uncovered(segments: Sequence[Segment], page_count: int) -> list[str]:
     covered = set()
     for segment in segments:
         covered.update(segment.pages)
+        covered.update(segment.cover_pages)
 
     first = min(segment.first_page for segment in segments)
     last = max(segment.last_page for segment in segments)
