@@ -416,7 +416,7 @@ As built: `ingest_paper` (see DATA_MODEL.md) is written by `after_report`, the r
     instead?".
 - Check the live DB first (see [Open questions](#open-questions)).
 
-### 4.5 Automatic matching — confirmed-paper cases DONE (#83); pending↔pending linking is #84
+### 4.5 Automatic matching — DONE (#83 confirmed-paper cases, #84 pending↔pending linking and combined confirm)
 
 As built: see [ingestion.md](../features/ingestion.md#automatic-matching-to-a-confirmed-paper).
 

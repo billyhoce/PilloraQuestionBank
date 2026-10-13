@@ -597,12 +597,40 @@ finds the paper an answer-only paper belongs to.
   an answer-only paper and the target a pending question paper of another review-ready job).
   `DELETE` on the same path unlinks both sides. The review response carries `matches`
   (`{paper key: {ingest_paper_id, job_id, filename, paper_key}}`); both review pages show
-  "Linked to <filename> <key>" with an Unlink button. Confirming the question paper to pull in the
-  linked answers is not built yet.
+  "Linked to <filename> <key>" with an Unlink button on the answer paper's page; the question paper's
+  page shows "Answers available from <filename> (<key>) — they will be attached when you confirm" (Unlink
+  too). Confirming the question paper pulls the answers in: see
+  [Confirming a linked pair](#confirming-a-linked-question-and-answer-pair).
   A pending-paper link takes precedence over an automatic proposal (see below), which is hidden while it exists.
 - **Job list**: the "Unmatched answers" checkbox sends `unmatched_answers=true`, keeping jobs with
   at least one `answer_only` paper that is `pending` and has no `matched_ingest_paper_id`. It combines
   with the other filters.
+
+### Confirming a linked question and answer pair
+
+When question paper `key` is linked (`matched_ingest_paper_id`) to a pending answer-only paper of
+another job, `POST .../confirm` brings those answers in and settles both papers in one transaction
+(`confirm_job_paper`):
+
+- **Locking**: both job rows are locked `FOR UPDATE`, lowest job id first (no deadlock between two
+  confirms of one pair).
+- **Usable only if** the answer job is still `review_ready`, its paper still `pending`, undecided, and
+  still linked back; otherwise the confirm proceeds without it and logs a warning.
+- **Crops**: the answer rectangles of the answer paper (its job's `proposal_edited`, else `proposal`) are
+  cropped from **that** job's `source.pdf` and mapped to the new paper's questions by question number.
+  They are added as answer pages **after** the question paper's own answer pages (`page_order` continues
+  from the last one), with provenance (`source_page`, `source_rect`) from the answer job's PDF.
+- **Unmatched numbers** (no such question, or not a plain number) are not attached; they come back in
+  `unmatched`. If nothing matches, the answer paper is left pending (and linked) and `answers_from` is null.
+- **Same transaction (`before_commit`)**: the question paper is recorded `confirmed` and the answer paper
+  `attached` (with `paper_id`) in both jobs' `review_outcome`, `confirmed_paper_ids` and `ingest_paper`
+  rows, each job gets its event (`paper_confirmed` with `answers_from_job`; `paper_attached` with `via_job`,
+  `attached`, `unmatched`), and each job whose papers are all decided becomes `confirmed`. After the commit
+  each settled job's prefix is dropped. A failure rolls everything back and deletes the temp crops.
+- **Response** adds `answers_from` (`{job_id, filename, paper_key, attached}` or null) and `unmatched`;
+  `ReviewPage` shows both above the topic review.
+
+Skipping a linked question paper releases the link and the answer paper is matched afresh.
 
 ### Automatic matching to a confirmed paper
 
@@ -622,6 +650,18 @@ until the admin accepts.
 (`"2A"` matches `" 2a "`, not `"02A"`). A row linked to a pending question paper (`matched_ingest_paper_id`)
 is left alone: the admin's link wins, and unlinking re-runs matching. Settling a paper (attach or skip,
 via `set_status`) clears the proposal.
+
+**Pending-to-pending auto link (#84).** For a pending answer-only paper with all seven fields known and
+no exact confirmed paper (a single confirmed match wins and stays a proposal), the pending `question`
+papers of *other* `review_ready` jobs, still unlinked, with the exact key (same `paper_number` rule) are
+looked up: exactly one is linked on both rows (`match_status` `auto`, note "auto-linked"); several give
+`manual` ("N pending question papers have this key"). The same is tried from the question side
+(`match_job` of a question job links older pending answer jobs; if several answer papers share the key,
+none is linked). Rules: a link the admin set (via Match panel, `match_status` NULL) is never touched; an
+**auto link is recomputed from scratch** on every re-evaluation (metadata edit, `match_job`, new paper), so
+it drops when a metadata change breaks the key; **Unlink** leaves both rows `unlinked`, which stops
+auto-linking until a metadata edit of either paper resets it. The `matches` in the review response cover
+auto and manual links alike.
 
 **When it runs**
 - End of the worker's `after_report` (`match_job`), in the same transaction as the proposal and `ingest_paper` upsert.

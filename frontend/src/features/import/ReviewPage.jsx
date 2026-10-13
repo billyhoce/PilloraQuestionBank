@@ -312,7 +312,10 @@ export default function ReviewPage() {
         paper_number: metadata.paper_number,
         is_premium: metadata.is_premium,
       })
-      setTopicStep({ paperId: result.paper_id, questions: result.questions || [], jobStatus: result.job_status })
+      setTopicStep({
+        paperId: result.paper_id, questions: result.questions || [], jobStatus: result.job_status,
+        answersFrom: result.answers_from ?? null, unmatched: result.unmatched ?? [],
+      })
     } catch (e) {
       setConfirmError(e.message)
     } finally {
@@ -369,16 +372,33 @@ export default function ReviewPage() {
   if (!review) return <Spinner />
 
   if (topicStep) {
+    const { answersFrom, unmatched } = topicStep
     return (
-      <TopicReview
-        paperId={topicStep.paperId}
-        questions={topicStep.questions}
-        subjectId={metadata.subject_id}
-        streamId={metadata.stream_id}
-        onDone={() => decided('confirmed', topicStep.jobStatus)}
-        onCancel={() => decided('confirmed', topicStep.jobStatus)}
-        cancelLabel="Skip topics (set them later in Manage Papers)"
-      />
+      <>
+        {(answersFrom || unmatched.length > 0) && (
+          <div role="status" className="mx-4 mt-4 text-sm bg-blue-50 border border-blue-200 rounded px-3 py-2">
+            {answersFrom && (
+              <p>
+                Attached answers for question{answersFrom.attached.length === 1 ? '' : 's'} {answersFrom.attached.join(', ')} from {answersFrom.filename} ({answersFrom.paper_key}).
+              </p>
+            )}
+            {unmatched.length > 0 && (
+              <p className="text-amber-800">
+                Answers for {unmatched.length === 1 ? 'question' : 'questions'} {unmatched.join(', ')} matched no question and were not attached.
+              </p>
+            )}
+          </div>
+        )}
+        <TopicReview
+          paperId={topicStep.paperId}
+          questions={topicStep.questions}
+          subjectId={metadata.subject_id}
+          streamId={metadata.stream_id}
+          onDone={() => decided('confirmed', topicStep.jobStatus)}
+          onCancel={() => decided('confirmed', topicStep.jobStatus)}
+          cancelLabel="Skip topics (set them later in Manage Papers)"
+        />
+      </>
     )
   }
 
@@ -575,7 +595,7 @@ export default function ReviewPage() {
               )}
               {!answerOnly && matches[paper.key] && (
                 <p role="status" className="w-52 mb-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
-                  Linked to {matches[paper.key].filename} {matches[paper.key].paper_key}.{' '}
+                  Answers available from {matches[paper.key].filename} ({matches[paper.key].paper_key}) — they will be attached when you confirm.{' '}
                   <button type="button" onClick={unlinkPaper} className="text-blue-700 hover:underline">Unlink</button>
                 </p>
               )}

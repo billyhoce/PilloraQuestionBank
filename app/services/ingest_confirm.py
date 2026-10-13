@@ -18,7 +18,7 @@ from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
-from app.services.ingest_papers import set_metadata, set_status
+from app.services.ingest_papers import get_row, set_metadata, set_status
 from app.services.paper_admin import apply_page_changes, commit_with_page_moves
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
@@ -164,11 +164,78 @@ def _drop_job_objects(source_key: str, store: ObjectStore) -> None:
         log.error("confirm_job_paper/s3_delete failed prefix=%s", prefix)
 
 
+def _linked_answers(db: Any, job: IngestJob, key: str):
+    """The pending answer-only ``ingest_paper`` linked to question paper ``key`` and its job, or
+    ``(None, None)``. A read only: ``confirm_job_paper`` re-checks it once both jobs are locked."""
+    row = get_row(db, job, key)
+    if row is None or row.role != "question" or row.matched_ingest_paper_id is None:
+        return None, None
+    partner = row.matched_ingest_paper
+    if partner is None or partner.job_id == job.id:
+        return None, None
+    return partner, db.get(IngestJob, partner.job_id)
+
+
+def _answers_usable(db: Any, job: IngestJob, key: str, partner, partner_job) -> bool:
+    row = get_row(db, job, key)
+    db.refresh(partner)
+    return (
+        partner_job.status == "review_ready" and partner.status == "pending" and partner.role == "answer_only"
+        and partner.matched_ingest_paper_id == getattr(row, "id", None)
+        and partner.paper_key not in outcomes(partner_job)
+    )
+
+
+def _linked_answer_payload(partner_job, partner, payload: dict, store: ObjectStore):
+    """Crop the linked answer paper's answer rects (from ITS job's source.pdf) and add them to the
+    question ``payload`` as answer pages, after the question's own answer pages. Returns
+    ``(attached_numbers, unmatched_numbers, temp_keys)``."""
+    paper_data = _find_paper(partner_job, partner.paper_key)
+    by_number = {}
+    for pq in payload["questions"]:
+        n = _question_number(pq["question_number"])
+        if n is not None:
+            by_number.setdefault(n, pq)
+    rects_by_number: dict[int, list[dict]] = {}
+    unmatched: list[Any] = []
+    for q in paper_data.get("questions", []):
+        if not q.get("answer_rects"):
+            continue
+        number = _question_number(q["number"])
+        if number is None or number not in by_number:
+            unmatched.append(q["number"])
+        else:
+            rects_by_number.setdefault(number, []).extend(q["answer_rects"])
+    if not rects_by_number:
+        return [], unmatched, []
+    numbers = sorted(rects_by_number)
+    cropped = {**paper_data, "questions": [
+        {"number": n, "question_rects": [], "answer_rects": rects_by_number[n]} for n in numbers
+    ]}
+    extra, temp_keys = build_confirm_payload(store.get(partner_job.source_key), cropped, {})
+    for number, eq in zip(numbers, extra["questions"]):
+        target = by_number[number]
+        base = sum(1 for p in target["pages"] if p["page_type"] == "answer")
+        for p in eq["pages"]:
+            target["pages"].append({**p, "page_order": base + p["page_order"]})
+    return numbers, unmatched, temp_keys
+
+
 def confirm_job_paper(
-    job: IngestJob, key: str, metadata: dict, admin: Any, db: Any, store: ObjectStore
+    job: IngestJob, key: str, metadata: dict, admin: Any, db: Any, store: ObjectStore,
+    answers_info: dict | None = None,
 ) -> tuple[Paper, bool]:
-    """Create the paper for proposal paper ``key``. Returns ``(paper, job_settled)``."""
-    db.refresh(job, with_for_update=True)  # serialise two clicks on the same paper
+    """Create the paper for proposal paper ``key``. Returns ``(paper, job_settled)``.
+
+    If the paper is linked to a pending answer-only paper of another job (#84), that job's answers
+    come in too: cropped from the other job's ``source.pdf``, appended after this paper's own answer
+    pages, and the answer paper is recorded ``attached`` in the same transaction. ``answers_info``,
+    if given, is filled with ``answers_from`` (``{job_id, filename, paper_key, attached}`` or None),
+    ``unmatched`` (answer numbers with no question) and ``answers_job_settled``."""
+    partner, partner_job = _linked_answers(db, job, key)
+    # Lock both jobs, lowest id first, so two confirms of a linked pair cannot deadlock.
+    for j in sorted([j for j in (job, partner_job) if j is not None], key=lambda j: str(j.id)):
+        db.refresh(j, with_for_update=True)  # also serialises two clicks on the same paper
     _check_open(job, key)
     paper_data = _find_paper(job, key)
     if paper_data.get("role") == "answer_only":
@@ -177,15 +244,36 @@ def confirm_job_paper(
         )
     if not paper_data.get("questions"):
         raise ReviewActionError(422, f"Paper {key!r} has no questions to import; skip it instead")
-    payload, _ = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
+    if partner is not None and not _answers_usable(db, job, key, partner, partner_job):
+        log.warning(
+            "confirm_job_paper/linked_answers_unavailable job=%s key=%s answer_job=%s", job.id, key, partner_job.id
+        )
+        partner = partner_job = None
+    payload, temp_keys = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
+    attached: list[int] = []
+    unmatched: list[Any] = []
+    if partner is not None:
+        try:
+            attached, unmatched, extra_keys = _linked_answer_payload(partner_job, partner, payload, store)
+        except Exception:
+            _delete_quietly(temp_keys)
+            raise
+        temp_keys += extra_keys
+        if not attached:
+            partner = partner_job = None  # nothing to bring in: the answer paper stays pending
     job_id = job.id
     source_key = job.source_key
     settled = False
+    answers_settled = False
+    partner_key = partner.paper_key if partner is not None else None
+    partner_filename = partner_job.filename if partner_job is not None else None
+    partner_job_id = partner_job.id if partner_job is not None else None
+    partner_source = partner_job.source_key if partner_job is not None else None
 
     def link_and_record(paper: Paper) -> None:
         # Runs inside confirm_import's transaction, so the paper, its source job and the
-        # job's outcome commit together or not at all.
-        nonlocal settled
+        # job's outcome (and the answer job's) commit together or not at all.
+        nonlocal settled, answers_settled
         paper.source_job_id = job_id
         settled = _record(job, key, "confirmed", paper.id)
         set_metadata(db, job, key, metadata)  # what the admin confirmed (admin-sourced if it differs)
@@ -193,13 +281,58 @@ def confirm_job_paper(
         add_event(
             db, job_id, "paper_confirmed", actor_user_id=getattr(admin, "id", None),
             paper_id=paper.id, paper_label=key, job_settled=settled,
+            answers_from_job=str(partner_job_id) if partner_job_id else None,
         )
+        if partner is not None:
+            answers_settled = _record(partner_job, partner_key, "attached", paper.id)
+            set_status(db, partner_job, partner_key, "attached", paper.id)
+            add_event(
+                db, partner_job_id, "paper_attached", actor_user_id=getattr(admin, "id", None),
+                paper_id=paper.id, paper_label=partner_key, attached=attached,
+                unmatched=[str(n) for n in unmatched], job_settled=answers_settled,
+                via_job=str(job_id),
+            )
 
-    paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
-    log_job_event(job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled)
+    try:
+        paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
+    except Exception:
+        _delete_quietly(temp_keys)
+        raise
+    log_job_event(
+        job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled,
+        answers_from_job=str(partner_job_id) if partner_job_id else None,
+    )
     if settled:
         _drop_job_objects(source_key, store)
+    if partner_job_id is not None:
+        log_job_event(
+            partner_job_id, "paper_attached", paper_id=paper.id, paper_label=partner_key, attached=attached,
+            unmatched=[str(n) for n in unmatched], job_settled=answers_settled, via_job=str(job_id),
+        )
+        if answers_settled:
+            _drop_job_objects(partner_source, store)
+    if answers_info is not None:
+        answers_info["unmatched"] = unmatched
+        answers_info["answers_from"] = (
+            {"job_id": str(partner_job_id), "filename": partner_filename, "paper_key": partner_key, "attached": attached}
+            if partner_job_id is not None else None
+        )
+        answers_info["answers_job_settled"] = answers_settled
     return paper, settled
+
+
+def _release_link(db: Any, job: IngestJob, key: str) -> None:
+    """A skipped paper gives up its link; the partner (if still pending) is looked at afresh."""
+    from app.services.ingest_matching import match_row
+    from app.services.ingest_papers import _clear_link
+
+    row = get_row(db, job, key)
+    if row is None or row.matched_ingest_paper_id is None:
+        return
+    partner = row.matched_ingest_paper
+    _clear_link(row)
+    if partner is not None and partner.status == "pending":
+        match_row(db, partner)
 
 
 def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin: Any = None) -> bool:
@@ -211,6 +344,7 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin:
     source_key = job.source_key
     settled = _record(job, key, "skipped", None)
     set_status(db, job, key, "skipped")
+    _release_link(db, job, key)
     add_event(db, job_id, "paper_skipped", actor_user_id=getattr(admin, "id", None), paper_label=key, job_settled=settled)
     db.commit()
     log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)

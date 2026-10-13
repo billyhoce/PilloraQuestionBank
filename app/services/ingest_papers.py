@@ -182,12 +182,18 @@ def pending_question_papers(
     return out
 
 
-def _clear_link(row: IngestPaper) -> None:
-    """Break ``row``'s link, on both sides."""
+def _clear_link(row: IngestPaper, decline: bool = False) -> None:
+    """Break ``row``'s link, on both sides. ``decline`` marks both ``unlinked`` so automatic
+    matching does not re-make it (until a metadata edit resets that)."""
     other = row.matched_ingest_paper
     row.matched_ingest_paper_id = None
     if other is not None and other.matched_ingest_paper_id == row.id:
         other.matched_ingest_paper_id = None
+    for r in (row, other):
+        if r is not None:
+            r.match_status = "unlinked" if decline else None
+            r.match_note = None
+            r.proposed_paper_id = None
 
 
 def link_papers(db: Session, job: IngestJob, key: str, other_id: int) -> IngestPaper:
@@ -212,6 +218,8 @@ def link_papers(db: Session, job: IngestJob, key: str, other_id: int) -> IngestP
             _clear_link(r)
     row.matched_ingest_paper_id = other.id
     other.matched_ingest_paper_id = row.id
+    for r in (row, other):  # an admin's link: no automatic status
+        r.match_status = r.match_note = r.proposed_paper_id = None
     db.flush()
     return row
 
@@ -221,7 +229,7 @@ def unlink_paper(db: Session, job: IngestJob, key: str) -> None:
     row = _row_or_sync(db, job, key)
     if row is None:
         raise MatchError(404, f"This job has no paper {key!r}")
-    _clear_link(row)
+    _clear_link(row, decline=True)
     db.flush()
     from app.services.ingest_matching import match_row  # imports this module's constants
 
