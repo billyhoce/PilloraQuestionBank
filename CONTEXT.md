@@ -46,7 +46,9 @@ rectangles, with every flag raised along the way. A proposal is a suggestion for
 review and correct; nothing in it is a stored question until the admin confirms it. It is
 `proposal.json`, written by the `report` stage with the booklet-numbered review images in
 `pages/`: one paper per question section, paired with its answer section by segment index, with
-rectangles in PDF points on booklet pages (shape in `ingestion/README.md`).
+rectangles in PDF points on booklet pages (shape in `ingestion/README.md`). Each paper has a `role`:
+`question`, or `answer_only` for an answer section with no question section, whose answers keep their
+question numbers and are attached to a question paper rather than confirmed (docs/adr/0002-qa-booklet-pairing.md).
 
 **Fingerprint**
 A hash of what a task's artefact was produced from (the content of the input artefacts, the

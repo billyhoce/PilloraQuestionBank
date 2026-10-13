@@ -145,6 +145,10 @@ After confirm, the browser fires `POST /api/import/ai-topics` once per question 
 rate-limited queue (`REQUEST_INTERVAL_MS`, staggering request *starts*) and shows per-question
 progress with a Re-run/Retry button.
 
+An `answer_only` proposal paper (answers uploaded apart from the questions) is never confirmed as a paper, so
+it never reaches this step; its answers are attached to the question paper instead (see
+[ingestion.md](./ingestion.md) and `docs/adr/0002-qa-booklet-pairing.md`).
+
 For each question it renders the question image(s) beside a `<PartsEditor />` pre-filled with the
 AI's suggested split. The admin can edit any part's label, marks and topics, **add or delete parts**,
 then save the whole paper with `POST /api/import/save-topics`. Marks are entered per part — there is

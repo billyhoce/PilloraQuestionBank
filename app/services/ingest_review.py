@@ -92,6 +92,12 @@ _QUESTION_KEYS = {"number", "question_rects", "answer_rects", "flags"}
 _PAPER_KEYS = {"questions", "orphan_answers"}
 
 
+def is_answer_only(paper: dict) -> bool:
+    """Whether a proposal paper holds answers only. A proposal from before roles existed has no
+    ``role`` and is a question paper."""
+    return paper.get("role") == "answer_only"
+
+
 def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
@@ -122,6 +128,7 @@ def _check_paper(edit: Any, original: dict, i: int) -> dict:
     if not isinstance(edit["questions"], list) or not isinstance(edit["orphan_answers"], list):
         raise ProposalEditError(f"{where}: questions and orphan_answers must be lists")
     pages = {p["page"]: p for p in original.get("pages", [])}
+    answer_only = is_answer_only(original)  # the role is the original's: an edit cannot change it
     questions, seen = [], set()
     for q in edit["questions"]:
         if not isinstance(q, dict) or set(q) != _QUESTION_KEYS:
@@ -135,7 +142,7 @@ def _check_paper(edit: Any, original: dict, i: int) -> dict:
         qwhere = f"{where}, question {number}"
         if not isinstance(q["question_rects"], list) or not isinstance(q["answer_rects"], list):
             raise ProposalEditError(f"{qwhere}: rectangles must be lists")
-        if not q["question_rects"]:
+        if not q["question_rects"] and not answer_only:
             raise ProposalEditError(f"{qwhere}: a question needs at least one rectangle")
         if not isinstance(q["flags"], list) or not all(isinstance(f, str) for f in q["flags"]):
             raise ProposalEditError(f"{qwhere}: flags must be a list of text")

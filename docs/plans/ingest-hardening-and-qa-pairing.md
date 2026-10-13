@@ -331,10 +331,10 @@ itself.
 ## Phase 4 — Question/answer booklet pairing
 
 Write [docs/adr/0002-qa-booklet-pairing.md](../adr/0002-qa-booklet-pairing.md) first, summarising this
-phase. Changes in `ingestion/` follow its own verification rule: run over `ingestion/samples/` before
+phase (written). Changes in `ingestion/` follow its own verification rule: run over `ingestion/samples/` before
 and after, then diff.
 
-### 4.1 Answer-only papers keep their question numbers (prerequisite)
+### 4.1 Answer-only papers keep their question numbers (prerequisite) — DONE
 
 - **Where:** `ingestion/pipeline/proposal.py:123-127, 195-201, 251-254`.
 - When an answer section has no question section, build `questions` from the answer section's numbered
