@@ -980,3 +980,42 @@ def test_manual_confirm_leaves_provenance_null(db_session, mock_s3, reference_da
     q = db_session.query(Question).first()
     assert q.section is None and q.proposal_question_index is None
     assert all(p.source_page is None and p.source_rect is None for p in db_session.query(QuestionPage))
+
+
+def _job_for(db_session, admin_user, **kw):
+    import uuid as _uuid
+    from app.models.orm import IngestJob
+
+    job = IngestJob(
+        id=_uuid.uuid4(), created_by=admin_user.id, filename="x.pdf", source_key="ingest/x/source.pdf",
+        sha256="0" * 64, page_count=1, status="confirmed", **kw,
+    )
+    db_session.add(job)
+    db_session.flush()
+    return job
+
+
+@pytest.mark.parametrize("route", ["/api/import/papers/{}", "/api/papers/{}"])
+def test_delete_paper_logs_event_on_source_job(admin_client, sample_paper, db_session, admin_user, route):
+    from app.models.orm import IngestEvent
+
+    job = _job_for(db_session, admin_user)
+    sample_paper.source_job_id = job.id
+    db_session.flush()
+    paper_id = sample_paper.id
+
+    with patch("app.routes.ingest.delete_object"), patch("app.routes.papers.delete_object"):
+        assert admin_client.delete(route.format(paper_id)).status_code == 204
+
+    events = db_session.query(IngestEvent).filter_by(job_id=job.id, kind="paper_deleted").all()
+    assert len(events) == 1
+    assert events[0].data["paper_id"] == paper_id
+    assert events[0].actor_user_id == admin_user.id
+
+
+def test_delete_paper_without_source_job_logs_nothing(admin_client, sample_paper, db_session):
+    from app.models.orm import IngestEvent
+
+    with patch("app.routes.ingest.delete_object"):
+        assert admin_client.delete(f"/api/import/papers/{sample_paper.id}").status_code == 204
+    assert db_session.query(IngestEvent).filter_by(kind="paper_deleted").count() == 0

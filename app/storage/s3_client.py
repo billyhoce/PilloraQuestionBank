@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import boto3
 
@@ -60,3 +61,14 @@ def delete_prefix(prefix: str) -> int:
             client.delete_objects(Bucket=bucket, Delete={"Objects": keys})
             deleted += len(keys)
     return deleted
+
+
+def list_objects(prefix: str) -> list[tuple[str, "datetime"]]:
+    """Every ``(key, last_modified)`` under ``prefix`` (one paginated ListObjectsV2 pass);
+    ``last_modified`` is timezone-aware UTC."""
+    client = _get_client()
+    found = []
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=os.environ["S3_BUCKET"], Prefix=prefix):
+        for o in page.get("Contents", []):
+            found.append((o["Key"], o["LastModified"]))
+    return found

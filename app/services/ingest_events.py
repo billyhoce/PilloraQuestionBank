@@ -3,7 +3,8 @@
 Every call adds to the caller's session and never commits: the event lands in the same
 transaction as the state change it describes. Kinds: ``created``, ``task_claimed``,
 ``task_finished`` (``status`` done/skipped/failed), ``retry``, ``cancelled``,
-``proposal_edited``, ``paper_confirmed``, ``paper_skipped``. (``expired`` appears only on historical rows.)
+``proposal_edited``, ``paper_confirmed``, ``paper_skipped``, ``paper_deleted``, ``reconcile`` (a
+reconciler finding; ``job_id`` is NULL when the finding has no job). (``expired`` appears only on historical rows.)
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from app.models.orm import IngestEvent
 
 def add_event(
     db: Session,
-    job_id: uuid.UUID,
+    job_id: uuid.UUID | None,
     kind: str,
     *,
     task_id: int | None = None,

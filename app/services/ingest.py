@@ -7,8 +7,9 @@ import fitz  # PyMuPDF
 from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
-from app.logger import Timer, log, log_event
-from app.models.orm import Paper, Question, QuestionPage, QuestionPart
+from app.logger import Timer, log, log_event, log_job_event
+from app.models.orm import IngestJob, Paper, Question, QuestionPage, QuestionPart
+from app.services.ingest_events import add_event
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
@@ -186,9 +187,11 @@ def confirm_import(
     return paper
 
 
-def delete_paper(paper_id: int, db: Any) -> list[str]:
+def delete_paper(paper_id: int, db: Any, actor: Any = None) -> list[str]:
     """Delete a paper and its DB cascades; return S3 image keys that the caller
-    should clean up after the surrounding transaction commits."""
+    should clean up after the surrounding transaction commits. When the paper came from an
+    auto-import job (``source_job_id``, or the job's ``confirmed_paper_ids``) a ``paper_deleted``
+    event is logged against that job."""
     paper = (
         db.query(Paper)
         .filter(Paper.id == paper_id)
@@ -201,6 +204,20 @@ def delete_paper(paper_id: int, db: Any) -> list[str]:
         page.image_key for question in paper.questions for page in question.pages
     ]
 
+    job_ids = {paper.source_job_id} if paper.source_job_id is not None else set()
+    job_ids |= {
+        j.id for j in db.query(IngestJob).filter(IngestJob.confirmed_paper_ids.isnot(None))
+        if paper_id in (j.confirmed_paper_ids or [])
+    }
+    details = dict(
+        paper_id=paper_id, year=paper.year, paper_number=paper.paper_number,
+        school_id=paper.school_id, questions=len(paper.questions), images=len(image_keys),
+    )
+
     db.delete(paper)
+    db.flush()
+    for job_id in sorted(job_ids, key=str):
+        add_event(db, job_id, "paper_deleted", actor_user_id=getattr(actor, "id", None), **details)
+        log_job_event(job_id, "paper_deleted", user_id=getattr(actor, "id", None), **details)
     db.flush()
     return image_keys

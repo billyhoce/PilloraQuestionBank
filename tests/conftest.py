@@ -155,9 +155,23 @@ class FakeObjectStore:
     def __init__(self):
         self.objects: dict[str, bytes] = {}
         self.deleted_prefixes: list[str] = []
+        self.deleted_keys: list[str] = []
+        # key -> last-modified; set at put time, overridden by tests that age an object.
+        self.modified: dict[str, datetime] = {}
 
     def put(self, key, data, content_type="application/octet-stream"):
         self.objects[key] = data
+        self.modified[key] = datetime.now(UTC)
+
+    def delete(self, key):
+        self.deleted_keys.append(key)
+        self.objects.pop(key, None)
+        self.modified.pop(key, None)
+
+    def list_objects(self, prefix):
+        from app.storage.object_store import StoredObject
+
+        return [StoredObject(k, self.modified.get(k) or datetime.now(UTC)) for k in sorted(self.objects) if k.startswith(prefix)]
 
     def get(self, key):
         return self.objects[key]

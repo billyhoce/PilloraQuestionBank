@@ -504,8 +504,9 @@ class IngestEvent(Base):
     __table_args__ = (Index("ix_ingest_event_job_id_id", "job_id", "id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False
+    # NULL only for reconciler findings about something with no job row (see app/worker/reconcile.py).
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=True
     )
     task_id: Mapped[int | None] = mapped_column(
         ForeignKey("ingest_task.id", ondelete="SET NULL"), nullable=True

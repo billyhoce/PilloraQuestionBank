@@ -48,6 +48,8 @@ class WorkerSettings:
     lease_seconds: float = LEASE_SECONDS
     heartbeat_seconds: float = HEARTBEAT_SECONDS
     poll_seconds: float = POLL_SECONDS
+    # INGEST_RECONCILE_DELETE: the daily reconciler only reports unless this is true.
+    reconcile_delete: bool = False
 
 
 def load_settings(env=None) -> WorkerSettings:
@@ -70,6 +72,7 @@ def load_settings(env=None) -> WorkerSettings:
         scratch_dir=Path(env.get("INGEST_SCRATCH_DIR") or "/tmp/ingest"),
         pipeline=PipelineConfig(lease_seconds=LEASE_SECONDS, ingest=ingest, extract=extract),
         fixtures_dir=Path(env["INGEST_FIXTURES_DIR"]) if env.get("INGEST_FIXTURES_DIR") else None,
+        reconcile_delete=(env.get("INGEST_RECONCILE_DELETE") or "").strip().lower() in ("1", "true", "yes"),
     )
 
 
@@ -138,7 +141,10 @@ class Worker:
             return
         self._sweep_checked = now
         try:
-            run_sweep(self._session_factory, self._objects, self.settings.scratch_dir, self._clock)
+            run_sweep(
+                self._session_factory, self._objects, self.settings.scratch_dir, self._clock,
+                self.settings.reconcile_delete,
+            )
         except Exception:
             log.exception("the expiry sweep failed")
 
