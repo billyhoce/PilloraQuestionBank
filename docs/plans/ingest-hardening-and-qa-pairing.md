@@ -432,7 +432,7 @@ page.
 - If several candidates match, or only some fields match, do not auto-link. Mark the paper for manual
   matching.
 
-### 4.6 Attach answers to an existing paper
+### 4.6 Attach answers to an existing paper — DONE (#80)
 
 - New `attach_answers(job, paper_key, paper_id, mode)` in `app/services/ingest_confirm.py`:
   1. Crop the answer rectangles with the existing `render_crop` / `build_confirm_payload` logic.

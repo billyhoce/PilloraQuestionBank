@@ -272,3 +272,121 @@ def test_failed_outcome_record_leaves_no_paper(admin_client, db_session, env, mo
     # No canonical copies leaked either.
     keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
     assert not [k for k in keys if k.startswith("papers/")]
+
+
+# --- #80: attaching an answer-only paper to an existing paper ------------------------------------
+
+def answers_only(*questions, label="a1"):
+    return {**paper(None, label, questions=list(questions)), "role": "answer_only"}
+
+
+@pytest.fixture
+def attach_env(db_session, env, admin_client, mock_s3):
+    """A confirmed question paper (questions 1, 2; question 1 has one answer page) and a helper
+    that sets up an answer-only job and attaches it."""
+    setup, meta = env
+    base = setup()
+    resp = admin_client.post(f"/api/import/jobs/{base.id}/confirm", json={**meta, "paper_label": "q1"})
+    paper_id = resp.json()["paper_id"]
+
+    def attach(*questions, mode=None, paper=paper_id, label="a1"):
+        job = setup(prop=proposal(answers_only(*questions, label=label)))
+        body = {"key": label, "paper_id": paper, **({"mode": mode} if mode else {})}
+        return job, admin_client.post(f"/api/import/jobs/{job.id}/attach", json=body)
+
+    return attach, paper_id
+
+
+def answer_pages(db_session, paper_id, number):
+    from app.models.orm import Question
+
+    qn = db_session.query(Question).filter_by(paper_id=paper_id, question_number=number).one()
+    db_session.refresh(qn)
+    return sorted((p for p in qn.pages if p.page_type == "answer"), key=lambda p: p.page_order)
+
+
+def test_attach_defaults_replace_without_answers_and_append_with(attach_env, db_session, mock_s3):
+    attach, paper_id = attach_env
+    old = [p.image_key for p in answer_pages(db_session, paper_id, 1)]
+    assert len(old) == 1 and answer_pages(db_session, paper_id, 2) == []
+    job, resp = attach(q(1, [], [r(3, 10, 70, 200, 120)]), q(2, [], [r(3, 10, 130, 200, 180)]))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["attached"] == [1, 2] and body["unmatched"] == []
+    assert body["modes"] == {"1": "append", "2": "replace"}
+    assert body["job_status"] == "confirmed"
+    pages1, pages2 = answer_pages(db_session, paper_id, 1), answer_pages(db_session, paper_id, 2)
+    assert [p.page_order for p in pages1] == [1, 2] and pages1[0].image_key == old[0]
+    assert [p.page_order for p in pages2] == [1]
+    assert pages2[0].source_page == 3 and pages2[0].source_rect == {"x0": 10, "y0": 130, "x1": 200, "y1": 180}
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert not [k for k in keys if k.startswith("tmp/")]
+    db_session.refresh(job)
+    assert job.report["review_outcome"] == {"a1": "attached"} and job.status == "confirmed"
+    assert paper_id in job.confirmed_paper_ids
+
+
+def test_attach_replace_removes_existing_answer_pages(attach_env, db_session, mock_s3):
+    attach, paper_id = attach_env
+    old = answer_pages(db_session, paper_id, 1)[0].image_key
+    _, resp = attach(q(1, [], [r(3, 10, 70, 200, 120)]), mode="replace")
+    assert resp.status_code == 200 and resp.json()["modes"] == {"1": "replace"}
+    pages = answer_pages(db_session, paper_id, 1)
+    assert len(pages) == 1 and pages[0].image_key != old
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert old not in keys and pages[0].image_key in keys
+
+
+def test_attach_append_forced_on_question_without_answers(attach_env, db_session):
+    attach, paper_id = attach_env
+    _, resp = attach(q(2, [], [r(3)]), mode="append")
+    assert resp.status_code == 200 and resp.json()["modes"] == {"2": "append"}
+    assert [p.page_order for p in answer_pages(db_session, paper_id, 2)] == [1]
+
+
+def test_attach_reports_unmatched_numbers(attach_env, db_session):
+    from app.models.orm import IngestEvent, IngestPaper
+
+    attach, paper_id = attach_env
+    job, resp = attach(q(2, [], [r(3)]), q(9, [], [r(3)]), q("3a", [], [r(3)]))
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["attached"] == [2] and body["unmatched"] == [9, "3a"]
+    assert len(answer_pages(db_session, paper_id, 2)) == 1
+    row = db_session.query(IngestPaper).filter_by(job_id=job.id, paper_key="a1").one()
+    assert (row.status, row.paper_id) == ("attached", paper_id)
+    ev = db_session.query(IngestEvent).filter_by(job_id=job.id, kind="paper_attached").one()
+    assert ev.data["unmatched"] == ["9", "3a"] and ev.data["attached"] == [2]
+
+
+def test_attach_with_no_matching_number_is_rejected_and_changes_nothing(attach_env, db_session):
+    attach, paper_id = attach_env
+    job, resp = attach(q(9, [], [r(3)]))
+    assert resp.status_code == 422 and "9" in resp.json()["detail"]
+    db_session.refresh(job)
+    assert not (job.report or {}).get("review_outcome")
+
+
+def test_attach_rejections(attach_env, db_session, env, admin_client):
+    attach, paper_id = attach_env
+    assert attach(q(1, [], [r(3)]), paper=99999)[1].status_code == 404
+    setup, _ = env
+    job = setup()  # a question paper cannot be attached
+    resp = admin_client.post(f"/api/import/jobs/{job.id}/attach", json={"key": "q1", "paper_id": paper_id})
+    assert resp.status_code == 422
+    job2, ok = attach(q(1, [], [r(3)]))
+    assert ok.status_code == 200
+    again = admin_client.post(f"/api/import/jobs/{job2.id}/attach", json={"key": "a1", "paper_id": paper_id})
+    assert again.status_code == 409
+
+
+def test_failed_outcome_record_leaves_paper_unchanged(attach_env, db_session, mock_s3, monkeypatch, admin_client):
+    attach, paper_id = attach_env
+    before = [(p.id, p.image_key) for p in answer_pages(db_session, paper_id, 1)]
+    monkeypatch.setattr("app.services.ingest_confirm._record", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no")))
+    with pytest.raises(RuntimeError):
+        attach(q(1, [], [r(3)]), mode="replace")
+    assert [(p.id, p.image_key) for p in answer_pages(db_session, paper_id, 1)] == before
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert not [k for k in keys if k.startswith("tmp/")]
+    assert before[0][1] in keys

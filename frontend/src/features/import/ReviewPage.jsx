@@ -8,6 +8,7 @@ import {
   deleteRect, getRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 import { startManualImport } from './manualHandoff'
+import AttachPanel from './AttachPanel'
 import MetadataSidebar from './MetadataSidebar'
 import TopicReview from './TopicReview'
 import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
@@ -556,22 +557,32 @@ export default function ReviewPage() {
                   A paper without questions cannot be imported; skip it.
                 </p>
               )}
-              <MetadataSidebar
-                metadata={metadata}
-                onChange={setMetadata}
-                refs={refs}
-                questionCount={paper.questions.length}
-                answerCount={paper.questions.filter(q => q.answer_rects.length > 0).length}
-                onNext={handleConfirmPaper}
-                onCancel={handleSkipPaper}
-                loading={confirming}
-                error={confirmError}
-                confirmLabel={answerOnly ? 'Attach to paper…' : 'Confirm paper →'}
-                cancelLabel="Skip this paper"
-                // An answer-only paper cannot be confirmed as a paper of its own: its answers are
-                // attached to a question paper instead (a later step wires the button up).
-                canConfirm={!answerOnly && paper.questions.length > 0}
-              />
+              {answerOnly ? (
+                <AttachPanel
+                  key={paper.key}
+                  jobId={jobId}
+                  paper={paper}
+                  onFlush={async () => { if (timer.current) await flush() }}
+                  onAttached={jobStatus => decided('attached', jobStatus)}
+                  onSkip={handleSkipPaper}
+                  busy={confirming}
+                />
+              ) : (
+                <MetadataSidebar
+                  metadata={metadata}
+                  onChange={setMetadata}
+                  refs={refs}
+                  questionCount={paper.questions.length}
+                  answerCount={paper.questions.filter(q => q.answer_rects.length > 0).length}
+                  onNext={handleConfirmPaper}
+                  onCancel={handleSkipPaper}
+                  loading={confirming}
+                  error={confirmError}
+                  confirmLabel="Confirm paper →"
+                  cancelLabel="Skip this paper"
+                  canConfirm={paper.questions.length > 0}
+                />
+              )}
             </div>
           )}
         </div>

@@ -137,6 +137,8 @@ export const api = {
     // Confirm resolves like `confirm` plus job_status; skip to { job_status }.
     confirmJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/confirm`, payload),
     skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
+    // Attach an answer-only paper to an existing paper: { key, paper_id, mode? } -> { attached, unmatched, modes, job_status }.
+    attachJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/attach`, payload),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),
