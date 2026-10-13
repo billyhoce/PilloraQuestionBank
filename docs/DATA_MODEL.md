@@ -271,6 +271,31 @@ IngestTask: {
   UNIQUE (job_id, stage) WHERE section IS NULL   -- partial index, see below
 }
 
+IngestPaper: {                -- one row per paper an ingest job proposed; the queryable mirror of the per-paper
+                              -- bits of proposal/report (see "Source of truth" below)
+  id,
+  job_id (FK -> IngestJob, ON DELETE CASCADE),
+  paper_key (string(64)),     -- the proposal's key: question label `q1`, else answer label `a1`, else `paperN`
+  role ("question" | "answer_only"),
+  school_id, level_id, subject_id, exam_type_id, stream_id (nullable FKs, ON DELETE SET NULL),
+  year (int, nullable), paper_number (string(32), nullable),   -- stored as given (no normalisation yet)
+  metadata_source ("cover" | "filename" | "admin", nullable),  -- NULL: nothing known
+  status ("pending" | "confirmed" | "skipped" | "attached"),   -- default pending
+  paper_id (nullable FK -> Paper, ON DELETE SET NULL),         -- the paper confirming it created
+  matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- reserved for automatic matching
+  created_at, updated_at,
+  UNIQUE (job_id, paper_key)
+}
+-- Written by the worker's `report` hook in the same transaction as the proposal (an upsert on
+-- (job_id, paper_key), so a re-run never duplicates; metadata from report.paper_metadata[key] -> `cover`, else
+-- the old report.filename_metadata -> `filename`). `PUT /api/import/jobs/{id}/papers/{key}/metadata`
+-- (the review sidebar, debounced) and confirm store the admin's values and set `metadata_source = admin` when a value
+-- changed; confirm and skip set `status` (and `paper_id`) in the same transaction as the outcome. `attached` is
+-- written by the attach flow (not built yet). Source of truth: `proposal`/`proposal_edited` for the paper's
+-- contents and `report.review_outcome` for the decision (the review flow reads only those); `ingest_paper` mirrors
+-- role, metadata and status and is what matching reads, kept in step on every write. The migration backfilled
+-- a row for every existing job with a proposal (`paper_id` left NULL; ids no longer in the reference tables dropped).
+
 IngestEvent: {                -- append-only audit trail, kept indefinitely (never pruned)
   id,
   job_id (FK -> IngestJob, ON DELETE CASCADE),

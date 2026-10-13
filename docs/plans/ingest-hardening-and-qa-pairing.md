@@ -377,7 +377,7 @@ same function `pipeline/proposal.py` pairs with, so a key cannot drift from the 
 `label` / `answer_label`), cuts each paper's cover pages (an answer-only paper: the answer section's;
 none: the section's first page) with `ingest_review.extract_pages` (runs of `extract_page_range`), and
 stores `report["paper_metadata"][paper_key]` under the job-row lock. `after_register` no longer extracts
-anything. 4.4 will move the results into `ingest_paper`.
+anything. 4.4 mirrors the results into `ingest_paper` (`report["paper_metadata"]` stays as the worker wrote it).
 
 - Generalise `app/ai/filename_extractor.py` into `extract_paper_metadata(filename, db, cover=None)`.
   It sends the cover pages as a `document` block, a sub-PDF cut with `extract_page_range`. If there are
@@ -394,7 +394,9 @@ anything. 4.4 will move the results into `ingest_paper`.
   (`tests/test_ingestion_independence.py`).
 - Update `tests/test_ai_filename_extractor.py`, `tests/test_ingest_jobs.py` and `tests/test_ingest.py`.
 
-### 4.4 A queryable per-paper record and duplicate protection
+### 4.4 A queryable per-paper record and duplicate protection — table part DONE (#79); normalisation and unique index skipped (#81)
+
+As built: `ingest_paper` (see DATA_MODEL.md) is written by `after_report`, the review-metadata endpoint, confirm and skip; the migration backfills existing jobs.
 
 - New table `ingest_paper`:
   - `id`, `job_id` FK, `paper_key` (the proposal key), `role`;

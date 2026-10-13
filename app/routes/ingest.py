@@ -21,6 +21,7 @@ from app.models.orm import INGEST_JOB_STATUSES, IngestJob, Paper, Question, Topi
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.ingest_papers import get_row as get_paper_row, set_metadata as set_paper_metadata, sync_job_papers
 from app.services.ingest_confirm import ReviewActionError, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
     InvalidPdfError,
@@ -580,6 +581,42 @@ def manual_pages(
 class JobConfirmIn(PaperMetadataIn):
     # Which proposal paper: its question label, else its answer label (see paper_key).
     paper_label: str
+
+
+class PaperMetadataEditIn(BaseModel):
+    """The review sidebar's seven fields as the admin has them so far; any may be unset."""
+
+    school_id: Optional[int] = None
+    year: Optional[int] = None
+    level_id: Optional[int] = None
+    subject_id: Optional[int] = None
+    exam_type_id: Optional[int] = None
+    stream_id: Optional[int] = None
+    paper_number: Optional[str] = None
+
+
+@router.put("/jobs/{job_id}/papers/{paper_key}/metadata")
+def save_paper_metadata(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: PaperMetadataEditIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Record the admin's edits to one paper's metadata on its ``ingest_paper`` row (source
+    ``admin`` when a value changed). Called as the admin edits the review sidebar."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's metadata cannot be edited")
+    db.refresh(job, with_for_update=True)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    if row.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} was already {row.status}")
+    set_paper_metadata(db, job, paper_key, payload.model_dump())
+    db.commit()
+    return {"saved": True, "metadata_source": row.metadata_source}
 
 
 class JobSkipIn(BaseModel):

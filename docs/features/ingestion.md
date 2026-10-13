@@ -21,6 +21,7 @@ GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ prog
 POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
 GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
 PUT    /api/import/jobs/{id}/proposal -- save the admin's corrections as `proposal_edited`
+PUT    /api/import/jobs/{id}/papers/{key}/metadata -- record the admin's sidebar edits on the paper's `ingest_paper` row
 POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
 POST   /api/import/jobs/{id}/confirm -- crop one reviewed paper into the bank (same response as /confirm)
 POST   /api/import/jobs/{id}/skip   -- skip one proposed paper
@@ -514,11 +515,18 @@ exam_type_id, year, paper_number, is_premium}` (admin, any admin's job; `201`):
 4. `confirm_import` runs with a `before_commit` callback: after the S3 copies and just before its one
    commit, the callback sets `paper.source_job_id`, appends the paper id to `confirmed_paper_ids` and
    stores `report.review_outcome[key] = "confirmed"`. The paper, its `source_job_id` and the job
-   outcome therefore commit in **one** transaction (if the callback raises, nothing is committed and
+   outcome therefore commit in **one** transaction, and so does the paper's `ingest_paper` row (`status = confirmed`, `paper_id`, and the
+   confirmed metadata, `metadata_source = admin` if it differs from what the row held) (if the callback raises, nothing is committed and
    the canonical copies are removed); the temp-image deletes run after the commit, and a failed
    delete is logged with its key and skipped (the `tmp/` lifecycle rule picks up leftovers). The response is `/confirm`'s (`paper_id`, `questions`) plus `job_status`.
 
-`POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (`200`, `{job_status}`; the
+`PUT .../papers/{key}/metadata` `{school_id, year, level_id, subject_id, exam_type_id, stream_id,
+paper_number}` (all optional; `review_ready` job and still-pending paper, else `409`; unknown key `404`) stores the
+sidebar's values on the paper's `ingest_paper` row (source `admin` when something changed). `ReviewPage` calls it
+debounced (800 ms) as the admin edits; it is best effort, since confirm sends the final metadata anyway. The table is
+described in [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
+
+`POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (and `ingest_paper.status = skipped`, same transaction) (`200`, `{job_status}`; the
 same `404`/`409` rules). When every proposal paper has an outcome the job becomes `confirmed` (an
 all-skipped job too, with `confirmed_paper_ids` null) and its whole job prefix (`ingest/{id}/`)
 (source, review pages) is deleted after the commit; a failed delete is logged, and the bucket

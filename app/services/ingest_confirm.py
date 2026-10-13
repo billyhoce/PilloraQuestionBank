@@ -18,6 +18,7 @@ from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
+from app.services.ingest_papers import set_metadata, set_status
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
 
@@ -186,6 +187,8 @@ def confirm_job_paper(
         nonlocal settled
         paper.source_job_id = job_id
         settled = _record(job, key, "confirmed", paper.id)
+        set_metadata(db, job, key, metadata)  # what the admin confirmed (admin-sourced if it differs)
+        set_status(db, job, key, "confirmed", paper.id)
         add_event(
             db, job_id, "paper_confirmed", actor_user_id=getattr(admin, "id", None),
             paper_id=paper.id, paper_label=key, job_settled=settled,
@@ -206,6 +209,7 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin:
     job_id = job.id
     source_key = job.source_key
     settled = _record(job, key, "skipped", None)
+    set_status(db, job, key, "skipped")
     add_event(db, job_id, "paper_skipped", actor_user_id=getattr(admin, "id", None), paper_label=key, job_settled=settled)
     db.commit()
     log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)
