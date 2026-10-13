@@ -225,7 +225,7 @@ missed. The S3 lifecycle rule stays only as a backstop for genuinely throwaway f
 - Update `docs/DEPLOYMENT.md`'s lifecycle step: the `tmp/` rule shortens to 2 days, and there is
   explicitly **no** rule on `ingest/`. Applying it is a one-time manual step.
 
-### 2.2 No auto-expiry for pending jobs
+### 2.2 No auto-expiry for pending jobs (DONE)
 
 - In `app/worker/sweep.py`, drop `review_ready` / `failed` from `expire_stale_jobs`. Keep the
   `expired` status value for historical rows; don't delete it from the enum.

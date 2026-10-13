@@ -1,9 +1,7 @@
-"""The daily sweep: abandoned ingest jobs expire, and their S3 prefix and scratch folder go.
+"""The daily sweep: removes the scratch folders of settled (cancelled or confirmed) jobs.
 
-A job that has sat in ``review_ready`` or ``failed`` for more than :data:`EXPIRE_AFTER` is marked
-``expired`` and its job prefix (``ingest/{job_id}/``, or legacy ``tmp/ingest/{job_id}/``, derived
-from the stored source key) deleted after the commit, as the API's cancel does. ``ingest/`` has no
-bucket lifecycle rule, so a failed delete leaves objects until the next manual cleanup.
+Pending jobs (``review_ready`` / ``failed``) never expire: they stay until the admin confirms or
+cancels them. The ``expired`` status survives only on historical rows.
 
 The sweep is claimed by an atomic update of ``worker_heartbeat.last_sweep_at``, so it runs at most
 once per :data:`SWEEP_EVERY` across restarts and across workers.
@@ -21,24 +19,15 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy import update as _update
 
-from app.logger import log_job_event
 from app.models.orm import IngestJob, WorkerHeartbeat
-from app.services.ingest_events import add_event
-from app.services.ingest_jobs import job_prefix
 
 log = logging.getLogger("pillora.worker")
 
-# A week gives an admin a working week plus a weekend to come back to a proposal; the S3
-# S3 lifecycle rule on tmp/ is shorter (2 days); ingest/ has none, so this sweep is what removes abandoned jobs.
-EXPIRE_AFTER = timedelta(days=7)
-# Daily is plenty for a 7-day threshold (a job lingers at most ~1 day past it) and keeps the
-# sweep to one query a day.
+# Daily keeps the sweep to one query a day.
 SWEEP_EVERY = timedelta(days=1)
 # A cancelled job's scratch folder may still be in use by the task that was running when it was
 # cancelled; leave it this long before removing it.
 CANCELLED_SCRATCH_GRACE = timedelta(days=1)
-
-STALE_STATUSES = ("review_ready", "failed")
 
 
 def _update_core(model):
@@ -71,44 +60,6 @@ def _remove_scratch(scratch_root: Path, job_id) -> None:
         log.exception("sweep: could not remove scratch %s", folder)
 
 
-def expire_stale_jobs(session_factory, object_store, scratch_root: Path, now: datetime) -> list[uuid.UUID]:
-    """Expire the stale jobs, then delete their S3 prefixes and scratch folders."""
-    cutoff = now - EXPIRE_AFTER
-    expired: list[uuid.UUID] = []
-    with session_factory() as db:
-        ids = db.execute(
-            select(IngestJob.id, IngestJob.source_key).where(
-                IngestJob.status.in_(STALE_STATUSES), IngestJob.updated_at < cutoff
-            )
-        ).all()
-        prefixes = {}
-        for job_id, source_key in ids:
-            prefixes[job_id] = job_prefix(source_key)
-            # Guarded: a job retried or confirmed since the select is left alone.
-            won = db.execute(
-                _update_core(IngestJob)
-                .where(
-                    IngestJob.id == job_id,
-                    IngestJob.status.in_(STALE_STATUSES),
-                    IngestJob.updated_at < cutoff,
-                )
-                .values(status="expired", updated_at=now)
-            ).rowcount
-            if won:
-                expired.append(job_id)
-                add_event(db, job_id, "expired", at=now, reason="stale", max_age_days=EXPIRE_AFTER.days)
-        db.commit()
-    for job_id in expired:
-        prefix = prefixes[job_id]
-        try:
-            object_store.delete_prefix(prefix)
-        except Exception:
-            log.exception("sweep: could not delete %s (the bucket lifecycle rule will)", prefix)
-        _remove_scratch(scratch_root, job_id)
-        log_job_event(job_id, "expired", reason="stale", max_age_days=EXPIRE_AFTER.days)
-    return expired
-
-
 def clean_cancelled_scratch(session_factory, scratch_root: Path, now: datetime) -> list[uuid.UUID]:
     """Remove the scratch folders of jobs cancelled or confirmed more than the grace period ago.
     (Confirming deletes the job's S3 prefix itself; only the worker knows the scratch folder.)"""
@@ -129,10 +80,8 @@ def run_sweep(
     scratch_root: Path,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> list[uuid.UUID] | None:
-    """The sweep if it is due (``None`` when not); returns the ids of the jobs it expired."""
+    """The sweep if it is due (``None`` when not); returns the ids of the jobs whose scratch it removed."""
     now = clock()
     if not claim_sweep(session_factory, now):
         return None
-    expired = expire_stale_jobs(session_factory, object_store, scratch_root, now)
-    clean_cancelled_scratch(session_factory, scratch_root, now)
-    return expired
+    return clean_cancelled_scratch(session_factory, scratch_root, now)

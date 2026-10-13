@@ -51,7 +51,7 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
   so the review/confirm step can pre-fill the metadata sidebar. It stays in `app/` because it
   needs the DB reference data (`ingestion/` never imports `app`).
 - `GET /api/import/jobs?status=&job_id=&paper_id=` — **every admin's jobs**, newest first, optionally
-  narrowed by `status`, by `job_id` (a UUID), or by `paper_id` (the job that confirmed that paper:
+  narrowed by `status` (one value, or several comma-separated, e.g. `review_ready,failed`), by `job_id` (a UUID), or by `paper_id` (the job that confirmed that paper:
   `paper.source_job_id` or the job's `confirmed_paper_ids`). Any admin may also open, retry, cancel,
   review and confirm any other admin's job (`_get_own_job` only scopes non-admins to their own). Returns
   `{"data": [...], "worker_alive": bool, "heartbeat_age_s": int|null}`; an unknown `status` is `422`.
@@ -120,7 +120,7 @@ tests use the `fake_object_store` fixture.
 | `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
 | `confirmed` | Every proposed paper was confirmed or skipped; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
 | `cancelled` | The admin cancelled it; its S3 prefix is removed |
-| `expired` | Left in `review_ready` or `failed` for more than 7 days; the worker's daily sweep marked it expired and deleted its job prefix and scratch folder |
+| `expired` | Historical only: an earlier version of the daily sweep expired jobs left in `review_ready`/`failed` for 7 days. Nothing sets it any more; such rows (and their read-only handling) remain |
 
 Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
 
@@ -132,13 +132,13 @@ them as failed, flagged for the admin). It is `failed` when a job-level stage (`
 extracted from — or when the pipeline ends with no proposal. A job in an API-owned state
 (`cancelled`, `confirmed`, `expired`) is never touched.
 
-**Expiry.** Once a day the worker (`app/worker/sweep.py`) expires jobs whose `updated_at` — when they
-became `review_ready`/`failed` — is more than 7 days old: it sets `expired`, commits, then deletes the
-S3 prefix (a failure is logged and does not stop the sweep) and the job's scratch folder. It also
-removes the scratch folders of jobs cancelled or confirmed over a day ago (confirming deletes the S3
-prefix itself; only the worker knows its scratch folder). The sweep is claimed by an atomic update
-of `worker_heartbeat.last_sweep_at`, so it runs at most once a day across restarts and workers. A
-bucket lifecycle rule on `tmp/` backs it up ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
+**Retention.** Unconfirmed jobs never expire: a `review_ready` or `failed` job stays, with its S3 prefix
+and scratch, until the admin confirms, skips or cancels it (the job list's age badge, below, keeps old
+ones visible). Once a day the worker (`app/worker/sweep.py`) removes the scratch folders of jobs
+cancelled or confirmed over a day ago (confirming deletes the S3 prefix itself; only the worker knows
+its scratch folder). The sweep is claimed by an atomic update of `worker_heartbeat.last_sweep_at`, so it
+runs at most once a day across restarts and workers. `ingest/` has no bucket lifecycle rule; a bucket
+rule on `tmp/` covers manual-import pages ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
 
 ### UI
 
@@ -146,7 +146,7 @@ bucket lifecycle rule on `tmp/` backs it up ([DEPLOYMENT.md](../DEPLOYMENT.md), 
 progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
 compact drop zone (one job per dropped PDF) above the job list. Each row shows the filename (click
 to open the job detail), status, the current stage with a `done/total` progress bar, the warnings
-count, a "Needs review" marker, created time, and Retry and Cancel buttons. The list polls
+count, a "Needs review" marker, created time, and Retry and Cancel buttons. Unsettled jobs (anything but `confirmed`/`cancelled`/`expired`) carry an **age badge** beside the created time ("waiting 12 days", from `created_at`), highlighted amber once past 14 days. An **Awaiting review** checkbox narrows the list to `review_ready` and `failed` jobs (both wait on the admin: review/confirm, or retry/cancel) via `status=review_ready,failed`; it combines with the job-id/paper-id search. The list polls
 `GET /api/import/jobs` every 3 s (`POLL_MS`) while any job is `queued` or `running` and stops when
 none is and on unmount; Refresh is still there. While a job is active and `worker_alive` is false
 the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
@@ -246,7 +246,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   `ingest_event` audit table, see [DATA_MODEL.md](../DATA_MODEL.md), by `app/services/ingest_events.py`
   in the transaction of the change they describe, the task ones inside `SqlStore`), `ingest_job/proposal_stored` (the worker saved the
   proposal) and `proposal_saved` (the admin saved an edit), `paper_confirmed` (paper_id),
-  `paper_skipped`, `retry` (reopened tasks), `cancelled`, `expired` (the sweep). The API-side events
+  `paper_skipped`, `retry` (reopened tasks), `cancelled`, and (historical rows only) `expired`. The API-side events
   go through `app.logger.log_job_event`. A stage that raises is logged at ERROR with the exception
   attached (`exc`), and the runner stores the last `PipelineConfig.traceback_chars` (4096)
   characters of the traceback on the task (`Outcome.traceback` -> `Store.fail` ->

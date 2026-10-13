@@ -5,6 +5,7 @@ import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
 import UploadDropZone from './UploadDropZone'
 import JobDetail from './JobDetail'
+import { AWAITING_QUERY, STALE_AFTER_DAYS, waitingDays, waitingLabel } from './jobAge'
 
 // Statuses a job can still be cancelled from (mirrors the server).
 const CANCELLABLE = ['queued', 'running', 'review_ready', 'failed']
@@ -14,6 +15,25 @@ const ACTIVE = ['queued', 'running']
 // Jobs retry applies to (the server refuses cancelled/confirmed/expired).
 const RETRYABLE = ['queued', 'running', 'review_ready', 'failed']
 export const POLL_MS = 3000
+
+// The age badge: unsettled jobs only, highlighted once they pass STALE_AFTER_DAYS.
+function AgeBadge({ job }) {
+  if (['confirmed', 'cancelled', 'expired'].includes(job.status)) return null
+  const days = waitingDays(job.created_at)
+  if (days === null) return null
+  const stale = days > STALE_AFTER_DAYS
+  return (
+    <span
+      data-testid="age-badge"
+      data-stale={stale ? 'true' : 'false'}
+      className={`ml-2 inline-block rounded px-1.5 py-0.5 text-xs ${
+        stale ? 'bg-amber-100 text-amber-800 font-medium' : 'bg-gray-100 text-gray-600'
+      }`}
+    >
+      {waitingLabel(days)}
+    </span>
+  )
+}
 
 const STATUS_LABELS = {
   queued: 'Queued',
@@ -51,6 +71,8 @@ export default function AutoImport() {
   const [uploadError, setUploadError] = useState(null)
   const [term, setTerm] = useState('')
   const [filter, setFilter] = useState({})
+  const [awaiting, setAwaiting] = useState(false)
+  const statusFilter = awaiting ? AWAITING_QUERY : undefined
 
   const applyList = useCallback(res => {
     setJobs(res.jobs)
@@ -61,19 +83,19 @@ export default function AutoImport() {
 
   const refresh = useCallback(async () => {
     try {
-      applyList(await api.import.listJobs(undefined, filter))
+      applyList(await api.import.listJobs(statusFilter, filter))
     } catch (e) {
       setListError(e.message)
     }
-  }, [applyList, filter])
+  }, [applyList, filter, statusFilter])
 
   useEffect(() => {
     let live = true
-    api.import.listJobs(undefined, filter)
+    api.import.listJobs(statusFilter, filter)
       .then(res => { if (live) applyList(res) })
       .catch(e => { if (live) setListError(e.message) })
     return () => { live = false }
-  }, [applyList, filter])
+  }, [applyList, filter, statusFilter])
 
   // Poll every POLL_MS while any job is queued or running; stops when none is, and on unmount.
   const anyActive = !!jobs && jobs.some(j => ACTIVE.includes(j.status))
@@ -163,6 +185,10 @@ export default function AutoImport() {
           </button>
         )}
       </form>
+      <label className="flex items-center gap-2 mb-2 text-sm text-gray-700">
+        <input type="checkbox" checked={awaiting} onChange={e => setAwaiting(e.target.checked)} />
+        Awaiting review
+      </label>
       {parsed === null && (
         <p className="mb-2 text-xs text-gray-500">Enter a job id (UUID) or a numeric paper id.</p>
       )}
@@ -176,7 +202,7 @@ export default function AutoImport() {
       {jobs === null && !listError ? (
         <Spinner />
       ) : jobs && jobs.length === 0 ? (
-        <p className="text-sm text-gray-500">{filter.job_id || filter.paper_id ? 'No jobs match.' : 'No import jobs yet.'}</p>
+        <p className="text-sm text-gray-500">{filter.job_id || filter.paper_id || awaiting ? 'No jobs match.' : 'No import jobs yet.'}</p>
       ) : jobs ? (
         <table className="w-full text-sm bg-white border border-gray-200 rounded">
           <thead>
@@ -226,7 +252,10 @@ export default function AutoImport() {
                       <div className="text-xs text-amber-700">{job.warnings_count} warning{job.warnings_count === 1 ? '' : 's'}</div>
                     )}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{formatCreated(job.created_at)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {formatCreated(job.created_at)}
+                    <AgeBadge job={job} />
+                  </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {job.status === 'review_ready' && (
                       <Link
