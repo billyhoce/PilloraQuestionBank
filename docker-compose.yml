@@ -28,5 +28,16 @@ services:
       exit 0;
       "
 
+  # docker compose run --rm tesseract <image|list.txt> <outbase|stdout> [-l eng] [--dpi N] [pdf|hocr|tsv|txt]
+  # ingestion/ is mounted at /work, so paths are given relative to ingestion/.
+  # Built on demand (never started by `up`): `docker compose build tesseract`.
+  tesseract:
+    build: ingestion/docker/tesseract
+    image: pillora-tesseract
+    network_mode: none
+    profiles: [tools]
+    volumes:
+      - ./ingestion:/work
+
 volumes:
   minio_data:

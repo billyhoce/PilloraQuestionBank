@@ -50,6 +50,21 @@ _PRICES = {
         "cache_hit": 0.10,
         "output": 5.00,
     },
+    # The ingest worker's segment stage asks by alias (ingestion's IngestConfig.model),
+    # the same model and price as the dated id above.
+    "claude-haiku-4-5": {
+        "input": 1.00,
+        "cache_write": 1.25,
+        "cache_hit": 0.10,
+        "output": 5.00,
+    },
+    # IngestConfig.retry_model, asked once when claude-haiku-4-5's segment answer is invalid.
+    "claude-opus-5": {
+        "input": 5.00,
+        "cache_write": 6.25,
+        "cache_hit": 0.50,
+        "output": 25.00,
+    },
 }
 
 

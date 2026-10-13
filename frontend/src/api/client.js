@@ -66,6 +66,43 @@ export const api = {
           return res.json()
         })
     },
+    // Auto-detect: submit a PDF as an ingest job -> { job_id }.
+    createJob: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return fetch('/api/import/jobs', { method: 'POST', credentials: 'include', body: form })
+        .then(async (res) => {
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            if (res.status === 401 && _onUnauthorized) _onUnauthorized()
+            throw { status: res.status, message: data?.detail || 'Upload failed' }
+          }
+          return res.json()
+        })
+    },
+    // The admin's own jobs, newest first; optional status filter. Resolves to
+    // { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
+    listJobs: (status) =>
+      request('GET', `/api/import/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`).then(r => ({
+        jobs: r.data,
+        workerAlive: r.worker_alive,
+        heartbeatAgeS: r.heartbeat_age_s,
+      })),
+    getJob: (id) => request('GET', `/api/import/jobs/${id}`),
+    // The proposal under review, with presigned page-image URLs and pixel sizes.
+    review: (id) => request('GET', `/api/import/jobs/${id}/review`),
+    // Save the corrected proposal ({papers: [{questions, orphan_answers}]}); 422 carries a message.
+    saveProposal: (id, body) => request('PUT', `/api/import/jobs/${id}/proposal`, body),
+    // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
+    manualPages: (id, first_page, last_page) =>
+      request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),
+    // Confirm / skip one proposed paper (paper_label = the paper's `key` from the review).
+    // Confirm resolves like `confirm` plus job_status; skip to { job_status }.
+    confirmJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/confirm`, payload),
+    skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
+    cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
+    // Failed/blocked tasks and everything downstream go back to ready.
+    retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
     aiTopicsForQuestion: (question_id, signal) =>
       request('POST', '/api/import/ai-topics', { question_id }, signal),

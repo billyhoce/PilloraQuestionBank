@@ -19,7 +19,8 @@ function SelectField({ label, value, onChange, options }) {
   )
 }
 
-export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error }) {
+export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error,
+  confirmLabel = 'Confirm & Import →', cancelLabel = 'Cancel Import', canConfirm = true }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -87,11 +88,11 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
       <button
         type="button"
         onClick={onNext}
-        disabled={!isComplete || loading}
+        disabled={!isComplete || !canConfirm || loading}
         className="mt-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium flex items-center justify-center gap-2"
       >
         {loading && <Spinner size="sm" />}
-        Confirm &amp; Import →
+        {confirmLabel}
       </button>
       <button
         type="button"
@@ -99,7 +100,7 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
         disabled={loading}
         className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50"
       >
-        Cancel Import
+        {cancelLabel}
       </button>
     </div>
   )

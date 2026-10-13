@@ -23,7 +23,12 @@ from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
 from app.db import Base, get_db
-from app.deps import get_image_fetcher, get_presigner, get_question_labeller
+from app.deps import (
+    get_image_fetcher,
+    get_object_store,
+    get_presigner,
+    get_question_labeller,
+)
 from app.main import app
 from app.models.orm import (
     ExamType,
@@ -142,6 +147,55 @@ def fake_image_bytes():
     app.dependency_overrides[get_image_fetcher] = lambda: (lambda key: data)
     yield data
     app.dependency_overrides.pop(get_image_fetcher, None)
+
+
+class FakeObjectStore:
+    """In-memory ObjectStore; records every call for assertions."""
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+        self.deleted_prefixes: list[str] = []
+
+    def put(self, key, data, content_type="application/octet-stream"):
+        self.objects[key] = data
+
+    def get(self, key):
+        return self.objects[key]
+
+    def presign(self, key, expires_in=3600):
+        return f"https://fake.url/{key}"
+
+    def delete_prefix(self, prefix):
+        self.deleted_prefixes.append(prefix)
+        gone = [k for k in self.objects if k.startswith(prefix)]
+        for k in gone:
+            del self.objects[k]
+        return len(gone)
+
+
+@pytest.fixture
+def fake_object_store():
+    store = FakeObjectStore()
+    app.dependency_overrides[get_object_store] = lambda: store
+    yield store
+    app.dependency_overrides.pop(get_object_store, None)
+
+
+@pytest.fixture
+def fake_metadata_extractor():
+    """Stand-in for `get_metadata_extractor()`'s callable (no Claude call); set `.result` per test."""
+
+    class _Stub:
+        result = {"school_id": None, "year": 2024, "paper_number": "1"}
+        calls: list = []
+
+        def __call__(self, filename, db):
+            self.calls.append(filename)
+            return self.result
+
+    stub = _Stub()
+    stub.calls = []
+    return stub
 
 
 @pytest.fixture

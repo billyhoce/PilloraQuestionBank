@@ -1,0 +1,30 @@
+{
+  "pdf": "samples/answer_tables/two_pairs_column_break.pdf",
+  "paper": "two_pairs_column_break",
+  "page_count": 4,
+  "generated_at": "2026-10-06T00:00:00+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 1,
+      "last_page": 4,
+      "note": "Synthetic answer key from generate.py: p1 two pairs read down with Q4 across the column break, p2 two pairs read across, p3 one pair of fragmented fills, p4 borderless; the section reads down, so p2 is expected to be flagged for disagreeing",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0,
+        2
+      ],
+      "reading_order": "down"
+    }
+  ],
+  "attempts": [],
+  "warnings": [],
+  "config": null
+}

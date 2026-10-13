@@ -2,6 +2,8 @@ from app.models.orm import (
     CoverTitle,
     ExamType,
     GenerationConfig,
+    IngestJob,
+    IngestTask,
     Level,
     Paper,
     Question,
@@ -20,12 +22,15 @@ from app.models.orm import (
     Topic,
     User,
     UserPremiumSchoolLevel,
+    WorkerHeartbeat,
 )
 
 __all__ = [
     "CoverTitle",
     "ExamType",
     "GenerationConfig",
+    "IngestJob",
+    "IngestTask",
     "Level",
     "Paper",
     "Question",
@@ -44,4 +49,5 @@ __all__ = [
     "Topic",
     "User",
     "UserPremiumSchoolLevel",
+    "WorkerHeartbeat",
 ]

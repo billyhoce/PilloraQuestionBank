@@ -1,0 +1,67 @@
+{
+  "pdf": "samples/s4_a_math/coverpage_formulae_blankpageinmiddle_endofpaper.pdf",
+  "paper": "coverpage_formulae_blankpageinmiddle_endofpaper",
+  "page_count": 72,
+  "generated_at": "2026-10-03T19:55:19+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 4,
+      "last_page": 20,
+      "note": "Paper 1 question paper, ending on the End of Paper marker; p1-3 advert, cover and formula sheet, p21 blank padding",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "q2",
+      "kind": "question",
+      "index": 2,
+      "first_page": 24,
+      "last_page": 42,
+      "note": "Paper 2 question paper, ending on END OF PAPER; p22-23 its own cover and formula sheet, p43 blank padding",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 45,
+      "last_page": 54,
+      "note": "Paper 1 marking scheme; p44 is a blank separator",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0
+      ],
+      "reading_order": "down"
+    },
+    {
+      "label": "a2",
+      "kind": "answer",
+      "index": 2,
+      "first_page": 55,
+      "last_page": 72,
+      "note": "Paper 2 marking scheme, to the last page of the PDF; each question reprinted above its worked answer",
+      "template": "annotated_booklet",
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    }
+  ],
+  "attempts": [],
+  "warnings": [
+    "5 page(s) between sections belong to none of them (21-23, 43-44); front matter for the section that follows reads this way, and so does a section left out altogether"
+  ],
+  "config": null
+}

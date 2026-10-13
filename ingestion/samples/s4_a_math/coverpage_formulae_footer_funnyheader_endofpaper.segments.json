@@ -1,0 +1,42 @@
+{
+  "pdf": "samples/s4_a_math/coverpage_formulae_footer_funnyheader_endofpaper.pdf",
+  "paper": "coverpage_formulae_footer_funnyheader_endofpaper",
+  "page_count": 23,
+  "generated_at": "2026-10-03T19:55:19+00:00",
+  "source": "hand",
+  "model": null,
+  "retried": false,
+  "segmented": true,
+  "segments": [
+    {
+      "label": "q1",
+      "kind": "question",
+      "index": 1,
+      "first_page": 3,
+      "last_page": 21,
+      "note": "Paper 1 question paper, ending on the End of Paper marker; p1 cover, p2 formula sheet",
+      "template": null,
+      "needs_review": false,
+      "question_columns": [],
+      "reading_order": null
+    },
+    {
+      "label": "a1",
+      "kind": "answer",
+      "index": 1,
+      "first_page": 22,
+      "last_page": 22,
+      "note": "Paper 1 answer key, one page of table; p23 blank padding",
+      "template": "table",
+      "needs_review": false,
+      "question_columns": [
+        0,
+        2
+      ],
+      "reading_order": "across"
+    }
+  ],
+  "attempts": [],
+  "warnings": [],
+  "config": null
+}

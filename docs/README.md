@@ -24,7 +24,14 @@ question by reading one file instead of three.
 | [features/paper-generation.md](./features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
 | [features/generation-config.md](./features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
 | [features/site-config.md](./features/site-config.md) | Public About page + its WYSIWYG editor and sanitizer, and the image-copy deterrent toggle |
+| [../ingestion/README.md](../ingestion/README.md) | The PDF ingester package (booklet segmentation, splitting, question-rectangle location, answer tables + OCR); verified by diffing `ingestion/samples/` output, not by unit tests |
 | [features/pdf-rendering.md](./features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
+
+## Plans
+
+| Doc | What's inside |
+|---|---|
+| [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Proposed: ingest bug fixes, per-job log tracing, retention + reconciler, direct-to-S3 upload, question/answer booklet pairing, API auth hardening |
 
 ## Operations
 

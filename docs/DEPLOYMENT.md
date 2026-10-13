@@ -7,7 +7,7 @@
 | Component | Service | Tier | Notes |
 |---|---|---|---|
 | Database | Supabase managed PostgreSQL | Free | 500 MB. **No managed backups/PITR on the free tier** — see [Backup Strategy](#backup-strategy) |
-| App server | Oracle Cloud Free Tier — 1 Ampere ARM VM (`VM.Standard.A1.Flex`) | Always-free | 1 OCPU, 6 GB RAM, **arm64/aarch64**. Runs the Dockerized FastAPI backend + host Nginx |
+| App server | Oracle Cloud Free Tier — 1 Ampere ARM VM (`VM.Standard.A1.Flex`) | Always-free | 2 OCPU, 12 GB RAM, **arm64/aarch64**. Runs the Dockerized FastAPI backend and ingest worker + host Nginx |
 | Object storage | AWS S3 | Paid (small) | ~$0.023/GB/month after 5 GB / 12-month free tier expires |
 | Container registry | GitHub Container Registry (GHCR) | Free | Stores the `pillora-api` image (`linux/arm64`) built by CI |
 | Edge / CDN / TLS | Cloudflare (proxied DNS) | Free | Browser TLS, DDoS protection, caching, hides the origin IP |
@@ -75,9 +75,20 @@ Two GitHub Actions workflows:
 IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
 ```
 
+## Ingest worker
+
+The `worker` service in `deploy/docker-compose.prod.yml` runs `python -m app.worker` from the same
+image and `/opt/pillora/.env` as the API: no ports, `restart: unless-stopped`, `cpus: "1.0"`,
+`mem_limit: 6g`. It claims queued ingest tasks from Postgres, reads/writes S3 and runs the
+`ingestion/` pipeline (PDF→question images, OCR via the image's Tesseract). The deploy workflow is
+unchanged: `docker compose up -d` starts both services, and a rollback by `IMAGE_TAG` rolls both.
+The image installs `tesseract-ocr` from Debian bookworm (5.3.0, the version `ingestion/docker`
+pins for OCR calibration) and the `ingestion/` package non-editable, with its PDF corpus excluded
+by `.dockerignore`. Check memory with `docker stats` after a large booklet (80 pages should stay under 6 GB).
+
 ## One-Time VM Provisioning
 
-1. **Provision the VM** — Oracle Cloud, 1 Ampere ARM VM (`VM.Standard.A1.Flex`, up to 4 OCPU / 24 GB RAM, always-free), **Ubuntu 24.04 LTS (aarch64)**. The CI image is built for `linux/arm64` to match this shape. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.
+1. **Provision the VM** — Oracle Cloud, 1 Ampere ARM VM (`VM.Standard.A1.Flex`, **2 OCPU / 12 GB RAM** — the API plus the ingest worker, which is capped at 1 CPU / 6 GB; the always-free allowance goes up to 4 OCPU / 24 GB), **Ubuntu 24.04 LTS (aarch64)**. The CI image is built for `linux/arm64` to match this shape. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.
 2. **Install host packages:**
    ```bash
    sudo apt update
@@ -85,7 +96,7 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
                        postgresql-client git curl unzip
    sudo usermod -aG docker "$USER"   # log out/in for group to take effect
    ```
-   *(No Poppler — PDF→image uses PyMuPDF, which bundles its own libraries.)*
+   *(No Poppler — PDF→image uses PyMuPDF, which bundles its own libraries. Tesseract is installed inside the image, not on the host.)*
 
    **AWS CLI v2** (not via `apt` — Ubuntu dropped the `awscli` package due to an upstream botocore dependency conflict; v2 is also the only AWS-supported version):
    ```bash
@@ -116,6 +127,21 @@ IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
    - `pillora-question-bank-prod` (images) and `question-bank-backups` (DB dumps).
    - **Block all public access** on both (app uses presigned URLs).
    - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
+   - **Expire temporary uploads.** On `pillora-question-bank-prod` add a lifecycle rule for prefix `tmp/` that expires current objects after 7 days and aborts incomplete multipart uploads after 7 days. `tmp/` holds only in-flight data: manual-import page images (`tmp/{upload_id}/`, moved to `papers/...` when the import is confirmed) and automatic-import jobs (`tmp/ingest/{job_id}/`: source PDF and review pages). The worker's daily sweep expires `review_ready`/`failed` jobs older than 7 days and deletes their prefix itself; this rule is the backstop for failed deletes and abandoned manual uploads. Nothing under `tmp/` is meant to live longer than 7 days. Applying it is a one-time manual step:
+     ```bash
+     aws s3api put-bucket-lifecycle-configuration --bucket pillora-question-bank-prod \
+       --lifecycle-configuration file://tmp-lifecycle.json
+     ```
+     Note this call **replaces** the bucket's whole lifecycle configuration, so put the noncurrent-version rule above in the same file:
+     ```json
+     {"Rules": [
+       {"ID": "expire-noncurrent", "Status": "Enabled", "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 30}},
+       {"ID": "expire-tmp", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
+        "Expiration": {"Days": 7}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}
+     ]}
+     ```
    - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.
 7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
    - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
@@ -159,7 +185,10 @@ Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.exa
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | Backend, backups | AWS S3 (boto3 / awscli) credentials and region |
 | `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
 | `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-backups`) |
-| `ANTHROPIC_API_KEY` | Backend | Claude API auth |
+| `ANTHROPIC_API_KEY` | Backend, worker | Claude API auth |
+| `INGEST_OCR_COMMAND` | Worker | Tesseract binary for scanned answer tables. Set to `tesseract` (the image's apt install, 5.3.0); unset = OCR off |
+| `INGEST_SCRATCH_DIR` (optional) | Worker | Per-job working dir, default `/tmp/ingest` (writable by the container's `appuser`) |
+| `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` (optional) | Worker | Claude models for the segment stage and its retry (defaults in `deploy/pillora.env.example`) |
 | `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup) and [features/auth.md](./features/auth.md)) |
 | `GOOGLE_CLIENT_SECRET` | Backend | OAuth client secret. Never reaches the browser |
 | `GOOGLE_REDIRECT_URI` | Backend | `https://questionbank.pillora.com.sg/api/auth/google/callback` — must match a URI registered on the OAuth client exactly |
