@@ -76,7 +76,7 @@ When a phase ships, move the facts it establishes into the owning feature doc
 
 One small PR. Each fix comes with a regression test.
 
-### B1. `del img` in `confirm_import` cleanup
+### B1. `del img` in `confirm_import` cleanup — DONE
 
 - **Where:** `app/services/ingest.py:166-170`.
 - **Bug:** after the commit, a failed temp-key delete runs `except Exception: del img`. `img` is
@@ -91,7 +91,7 @@ One small PR. Each fix comes with a regression test.
 - **Test:** add a test in `tests/test_ingest.py` where `delete_object` raises for the temp key. It
   asserts that the paper is returned, no exception escapes and the other temp keys are still deleted.
 
-### B1b. Make auto-confirm atomic
+### B1b. Make auto-confirm atomic — DONE
 
 This is the same failure family as B1.
 

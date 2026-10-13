@@ -164,10 +164,16 @@ def confirm_job_paper(
         raise ReviewActionError(422, f"Paper {key!r} has no questions to import; skip it instead")
     payload, _ = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
     job_id = job.id
-    paper = confirm_import(payload, admin, db)  # commits
-    paper.source_job_id = job_id
-    settled = _record(job, key, "confirmed", paper.id)
-    db.commit()
+    settled = False
+
+    def link_and_record(paper: Paper) -> None:
+        # Runs inside confirm_import's transaction, so the paper, its source job and the
+        # job's outcome commit together or not at all.
+        nonlocal settled
+        paper.source_job_id = job_id
+        settled = _record(job, key, "confirmed", paper.id)
+
+    paper = confirm_import(payload, admin, db, before_commit=link_and_record)  # commits once
     if settled:
         _drop_job_objects(job_id, store)
     return paper, settled

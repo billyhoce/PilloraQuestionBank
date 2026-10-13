@@ -933,3 +933,43 @@ def test_delete_paper_removes_rows_and_s3(admin_client, sample_paper, db_session
 def test_delete_paper_missing_returns_204(admin_client):
     resp = admin_client.delete("/api/import/papers/99999")
     assert resp.status_code == 204
+
+
+def test_confirm_survives_failed_temp_delete_and_deletes_the_rest(db_session, mock_s3, reference_data, admin_user):
+    temp0, temp1 = "tmp/upload-del/page_0.webp", "tmp/upload-del/page_1.webp"
+    for k in (temp0, temp1):
+        mock_s3.put_object(Bucket="test-bucket", Key=k, Body=b"fake")
+    pages = [
+        {"temp_key": temp0, "page_type": "question", "page_order": 1, "width_px": 100, "height_px": 100},
+        {"temp_key": temp1, "page_type": "answer", "page_order": 1, "width_px": 100, "height_px": 100},
+    ]
+    payload = _make_confirm_payload(reference_data, admin_user, [{"question_number": 1, "pages": pages}])
+    from app.storage.s3_client import delete_object as real_delete
+
+    def flaky(key):
+        if key == temp0:
+            raise RuntimeError("S3 down")
+        real_delete(key)
+
+    with patch("app.services.ingest.delete_object", side_effect=flaky):
+        paper = confirm_import(payload=payload, created_by=admin_user, db=db_session)
+
+    assert paper.id is not None and db_session.query(Paper).count() == 1
+    mock_s3.head_object(Bucket="test-bucket", Key=temp0)  # leaked, left to the lifecycle rule
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert temp1 not in keys
+
+
+def test_confirm_before_commit_failure_rolls_back_paper(db_session, mock_s3, reference_data, admin_user):
+    temp = "tmp/upload-bc/page_0.webp"
+    mock_s3.put_object(Bucket="test-bucket", Key=temp, Body=b"fake")
+    payload = _make_confirm_payload(reference_data, admin_user, [{"question_number": 1, "pages": [
+        {"temp_key": temp, "page_type": "question", "page_order": 1, "width_px": 100, "height_px": 100}]}])
+
+    def fail(paper):
+        raise RuntimeError("nope")
+
+    with pytest.raises(RuntimeError):
+        confirm_import(payload=payload, created_by=admin_user, db=db_session, before_commit=fail)
+    assert db_session.query(Paper).count() == 0
+    mock_s3.head_object(Bucket="test-bucket", Key=temp)

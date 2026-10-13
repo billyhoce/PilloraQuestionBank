@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, UTC
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import fitz  # PyMuPDF
@@ -93,7 +93,15 @@ def upload_pages(
     return {"pages": pages, "suggested_metadata": suggested}
 
 
-def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
+def confirm_import(
+    payload: dict,
+    created_by: Any,
+    db: Any,
+    before_commit: Callable[[Paper], None] | None = None,
+) -> Paper:
+    """Create the paper and its images. ``before_commit(paper)``, if given, runs after the S3
+    copies and just before the commit, so whatever it writes (e.g. ``source_job_id`` and a job
+    outcome) commits in the same transaction as the paper; if it raises, nothing is committed."""
     try:
         paper = Paper(
             subject_id=payload["subject_id"],
@@ -153,6 +161,8 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         for temp_key, canonical_key in pages_to_move:
             copy_only(temp_key, canonical_key)
             copied_keys.append(canonical_key)
+        if before_commit is not None:
+            before_commit(paper)
         db.commit()
     except Exception:
         db.rollback()
@@ -167,7 +177,7 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         try:
             delete_object(temp_key)
         except Exception:
-            del img
+            log.warning(f"{'confirm_import':<22}| temp_delete_failed | key={temp_key}", exc_info=True)
 
     return paper
 
