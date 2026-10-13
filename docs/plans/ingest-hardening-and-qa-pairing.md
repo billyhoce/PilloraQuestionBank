@@ -451,129 +451,11 @@ page.
 
 ---
 
-## Phase 5 — API auth hardening
-
-An audit on 2026-10-13 read the live route table (every `APIRoute` in `app/routes/*`, walking each
-dependency tree for `require_admin` / `get_current_user` / `get_current_user_optional`) and then
-checked the logic inside the non-admin routes.
-
-**Result: auth is enforced on the server, not only by the frontend's page guards.** Calling the API
-directly gets the same 401/403 as using the UI. Every route has its own auth dependency; there are no
-router-level dependencies to forget.
-
-### What the audit found
-
-| Level | Count | Routes |
-|---|---|---|
-| **Admin** (`require_admin` → 401 without a cookie, 403 for non-admins) | 60 | **Writes:** every reference-data write (subjects, streams, levels, school levels, schools, exam types, topics, subtopics, tags, `PUT /topics/sync`). **Import:** all of `/api/import/*`, including jobs, review, confirm, skip, manual-pages, upload-pdf, ai-topics, save-topics and paper delete. **Papers:** all of `/api/papers*` except `/api/papers/years`, plus question edit, tag and delete. **Config:** `PUT /generation-config` and cover-title writes. **Users:** all of `/api/users*`. |
-| **Signed in** (`get_current_user`) | 5 | `GET /auth/me`, `GET /cover-titles`, `GET /generation-config`, `POST /generate/select`, `POST /generate/paper` |
-| **Optional** (anonymous allowed; premium images withheld) | 2 | `GET /questions`, `GET /questions/{id}` |
-| **Public** | 25 + health | Reference-data reads (`GET` on subjects, streams, levels, school levels, schools, exam types, topics, subtopics, tags, `/papers/years`), `/auth/login`, `/auth/register`, `/auth/logout`, `/auth/providers`, the Google login and callback, `/api/health` |
-
-**Checked and correct:**
-- **Premium gating.** The browse endpoints withhold image URLs through `premium_gate` /
-  `can_view_paper`.
-  - `/generate/select` drops unaffordable papers with `restrict_premium_pool`.
-  - `/generate/paper` re-checks every posted `question_id` and returns 403. A hand-crafted request
-    can't render a premium question.
-- **Non-admin generation.** `_resolve_generation_options` forces the cover on and the admin presets
-  for body, header, instructions and footer. A cover title outside the configured list gets a 400.
-- **Registration and role changes.**
-  - `register` always creates `role="public"`; `RegisterRequest` has no role field.
-  - Google sign-in keeps an existing account's role.
-  - An admin cannot change their own role.
-- **Role and premium are re-read from the DB on every request** (`get_current_user` loads the
-  `User`). Demoting a user or revoking a school level takes effect immediately, despite the 7-day JWT.
-- **Ingest jobs** are scoped to their creator (`_get_own_job`) on top of `require_admin`.
-- **CSRF.**
-  - The session cookie is `httpOnly`, `secure` and `SameSite=Lax`.
-  - There is no CORS middleware, so the API is same-origin only.
-  - No state-changing `GET` exists apart from the OAuth callback, which checks `state`.
-- **Docs and port exposure.**
-  - FastAPI's `/docs` and `/openapi.json` sit outside `/api/`, so nginx serves the SPA there and they
-    are not reachable from outside.
-  - Uvicorn is bound to `127.0.0.1:8000` (`deploy/docker-compose.prod.yml:19`).
-
-### S1. Refuse to start with the default JWT secret (high; ship with PR 1)
-
-- **Where:** `app/services/auth.py:8`.
-- **Problem:** `os.environ.get("JWT_SECRET_KEY", "change-me-in-production")` silently falls back to a
-  public string.
-  - If the variable is ever missing in production (a renamed env file, a typo, a new container), anyone
-    can sign a token for any user id. That includes the admin's, and it bypasses every gate above.
-  - The audit could not see the production env file.
-- **Fix:** at import time, outside tests, raise if `JWT_SECRET_KEY` is unset, equal to a known
-  placeholder, or shorter than 32 characters. `tests/conftest.py` already sets its own value.
-  `.env.example`'s `some-secret-key` would then fail locally on purpose; change it to a
-  `<run: openssl rand -hex 32>` hint.
-- **Test:** importing with the default or a short secret raises.
-- **Action now, without a code change:** confirm that `JWT_SECRET_KEY` is set on the VM to a
-  64-hex-character value.
-
-### S2. Pin the auth level of every route in a test (medium)
-
-- Add `tests/test_route_auth.py`. It walks the routers the same way the audit did and asserts every
-  route against an explicit table: `admin` / `user` / `optional` / `public`.
-- A new route that is not classified fails CI. So does one whose dependency changes, for example
-  `require_admin` dropped in a refactor.
-- Add a behavioural check: for every `admin` route, a request with no cookie gets 401 and a request as
-  a `public` user gets 403. Build each request from the route's path and method with dummy ids; the
-  auth dependency runs before body validation.
-- This turns the one-off audit into a guarantee that holds as routes are added (Phases 3–4 add
-  several).
-
-### S3. Rate-limit login and registration (medium)
-
-- Nothing limits `POST /api/auth/login` or `/register`: there is no `limit_req` in
-  `deploy/nginx/pillora.conf`, and no app-level limiter. Bcrypt slows each guess but does not stop
-  credential stuffing against the 1–2 admin accounts.
-- **Fix:**
-  - nginx `limit_req_zone` keyed on the client IP, e.g. 5 requests/min with a small burst on
-    `/api/auth/login` and `/api/auth/register`.
-  - Use `CF-Connecting-IP`, since all traffic arrives through Cloudflare, via `real_ip_header` and
-    `set_real_ip_from` for Cloudflare's ranges.
-  - A Cloudflare rate-limiting rule is an alternative with no code.
-- Document it in [DEPLOYMENT.md](../DEPLOYMENT.md) and [features/auth.md](../features/auth.md).
-
-### S4. Bound request sizes on public and user routes (low–medium)
-
-- `page_size` on `GET /api/questions` (public) and `GET /api/papers` is unbounded. A request for
-  `page_size=1000000` loads and presigns every row. Use `Query(50, ge=1, le=200)` and `page ≥ 1`.
-- `GeneratePaperRequest.question_ids` has `min_length=1` but no maximum. Each id becomes S3 fetches
-  and PDF rendering on a 2-core VM. Cap it (e.g. `max_length=200`), and cap
-  `SelectRequest.exclude_question_ids` and `target_value`.
-- **Tests:** a 422 for each bound.
-
-### S5. Session revocation (low)
-
-- Logout only clears the cookie. A copied token stays valid for 7 days. Role changes are already
-  immediate (see above), so the remaining risk is a stolen cookie.
-- **Option A (recommended):** add a `token_version` integer on `app_user`, put it in the JWT, and
-  check it in `get_current_user`. Bump it on logout, on password change and from an admin "sign out
-  everywhere" button.
-- **Option B:** shorten the expiry, e.g. to 1 day, and accept more frequent logins.
-
-### S6. Premium image URL lifetime (low)
-
-- Presigned URLs live for 1 hour (`app/storage/s3_client.py:19`). An entitled user can share a premium
-  image URL that keeps working for that hour.
-- Shorten it to about 10–15 minutes for browse responses. The page re-fetches on navigation anyway.
-- This is acceptable as is at current scale; note it in
-  [features/users-and-premium.md](../features/users-and-premium.md) either way.
-
-### S7. Fix the stale auth doc
-
-[features/auth.md](../features/auth.md) "Admin routes" lists only reference-data writes, `/api/import/*`
-and `/api/users`. Replace that list with the four-level summary above, or point to the S2 test as the
-source of truth.
-
----
-
 ## Suggested order and PR slicing
 
 | PR | Contents | Depends on |
 |---|---|---|
-| 1 | Phase 0 (B1, B1b, B2) + S1 (JWT secret fail-fast) | — |
+| 1 | Phase 0 (B1, B1b, B2)| — |
 | 2 | Phase 1.1–1.4 (context, JSON stdout, lifecycle logs, tracebacks) | — |
 | 3 | Phase 1.5–1.7 (`ingest_event`, Claude request ids + cost, provenance, job-id UI) | 2 |
 | 4 | Phase 2.1–2.4 (prefix, no expiry, scratch cache, debug bundle) + DEPLOYMENT.md lifecycle change | 1 |
@@ -606,5 +488,3 @@ After PR 5 has run in production for a week or two with sensible reports, flip
 3. **Attach mode default** when a question already has answer pages: replace or append? The plan
    proposes asking each time and defaulting to append.
 4. **Age-badge threshold** for highlighting stale reviews (plan: 14 days).
-5. **Production `JWT_SECRET_KEY`.** Confirm it is set on the VM before S1 ships; otherwise S1 would stop the API from starting.
-6. **Anonymous browsing.** `GET /api/questions` and the reference reads work without signing in (metadata only, no premium images). That matches [features/auth.md](../features/auth.md) ("public browse endpoints"), but `CLAUDE.md`'s role table describes Public/Normal as *registered*. Decide which is intended; if browsing should need an account, switch the two question routes to `get_current_user`.
