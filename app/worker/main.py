@@ -25,6 +25,7 @@ from pipeline.config import PipelineConfig
 from question_extractor import ExtractConfig
 
 from app.logger import log_tokens
+from app.logging_setup import configure_logging
 from app.worker.edges import Edges
 from app.worker.store import SqlStore
 from app.worker.sweep import run_sweep
@@ -184,7 +185,7 @@ def main() -> int:
     from app.db import SessionLocal
     from app.deps import get_metadata_extractor, get_object_store, get_pipeline_runner
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    configure_logging()
     # The segment stage's Messages API usage goes to the app log with the others' (and prices).
     segment_request.usage_listener = lambda model, usage: log_tokens("ingest_segment", model, usage)
 

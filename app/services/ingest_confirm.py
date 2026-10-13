@@ -150,7 +150,7 @@ def _drop_job_objects(job_id: uuid.UUID, store: ObjectStore) -> None:
     try:
         store.delete_prefix(prefix)
     except Exception:
-        log.error(f"{'confirm_job_paper':<22}| s3_delete | prefix={prefix}")
+        log.error("confirm_job_paper/s3_delete failed prefix=%s", prefix)
 
 
 def confirm_job_paper(

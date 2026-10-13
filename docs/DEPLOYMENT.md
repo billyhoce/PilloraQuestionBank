@@ -86,6 +86,22 @@ The image installs `tesseract-ocr` from Debian bookworm (5.3.0, the version `ing
 pins for OCR calibration) and the `ingestion/` package non-editable, with its PDF corpus excluded
 by `.dockerignore`. Check memory with `docker stats` after a large booklet (80 pages should stay under 6 GB).
 
+## Logs
+
+Both containers write **one JSON object per line to stdout** (`ts, level, logger, msg, job_id,
+section, stage, request_id, user_id`, plus `task_attempt` and any structured fields such as
+`seconds` or `cost_usd`). There is no log file in the container. The `json-file` Docker driver
+(`max-size: 10m`, `max-file: 5` per container, set for `api` and `worker` in
+`deploy/docker-compose.prod.yml`) keeps a bounded history that survives container restarts:
+
+```bash
+docker logs pillora-api-1 2>&1 | grep <job-uuid>     # same for the worker container
+```
+
+Every ingest-job line from the worker (pipeline stages, `ingester.*`, `question_extractor.*`) and from
+the job routes carries the job id; every API response carries an `X-Request-ID` (a supplied one is
+echoed). `LOG_LEVEL` (default `INFO`) sets the root level.
+
 ## One-Time VM Provisioning
 
 1. **Provision the VM** — Oracle Cloud, 1 Ampere ARM VM (`VM.Standard.A1.Flex`, **2 OCPU / 12 GB RAM** — the API plus the ingest worker, which is capped at 1 CPU / 6 GB; the always-free allowance goes up to 4 OCPU / 24 GB), **Ubuntu 24.04 LTS (aarch64)**. The CI image is built for `linux/arm64` to match this shape. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.

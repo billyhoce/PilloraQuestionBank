@@ -63,7 +63,10 @@ app/
 │                   #   edges.py (S3 + DB hooks composed around the pipeline's stages)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
 ├── deps.py         # FastAPI providers for outbound I/O (presigner, image fetcher, AI labeller)
-├── logger.py       # file logger + Timer + token/cost logging helper
+├── logger.py       # `log`, `log_event` (structured fields), Timer, token/cost logging helper
+├── logging_setup.py # configure_logging(): root logger, JSON lines to stdout (API + worker)
+├── log_context.py  # logging filter stamping job_id/section/stage/request_id/user_id on records
+├── middleware.py   # RequestIdMiddleware (X-Request-ID)
 └── main.py
 ```
 
@@ -184,6 +187,16 @@ there is no "Admin" button to unlock it:
   outside click / Escape; logging out returns to `/`). Signed-out visitors see **Log in**.
 
 ## Cross-cutting conventions
+
+**Logging.** `app/logging_setup.py` configures the root logger once (called from `app/main.py` and
+`app/worker/main.py`): JSON lines on stdout, so `app.*`, `pillora.*`, `pipeline.*`, `ingester.*` and
+`question_extractor.*` all reach it; no log file. A filter (`app/log_context.py`) stamps `job_id`,
+`section`, `stage`, `task_attempt`, `request_id` and `user_id` from a context variable that lives in
+`ingestion/question_extractor/logcontext.py` (so `ingestion/` never imports `app`): the pipeline
+runner opens it around each claimed task, the API job routes set `job_id`/`user_id`, and
+`RequestIdMiddleware` sets `request_id` (echoed as `X-Request-ID`). Timing and token helpers emit
+structured fields (`log_event`). Logs live in Docker's `json-file` store; see
+[DEPLOYMENT.md](./DEPLOYMENT.md#logs).
 
 **Page layout.** Content pages span ~90% of the viewport via `max-w-[90%] mx-auto` (Browse,
 Generate, admin Reference, Papers list/editor, import Topic Review). Exceptions: the import review
