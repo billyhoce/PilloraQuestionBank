@@ -11,7 +11,7 @@ from pipeline.registry import CPU, JOB, Registry, Stage
 from pipeline.runner import Runner
 from sqlalchemy import select
 
-from app.models.orm import IngestJob, IngestTask
+from app.models.orm import IngestJob, IngestPaper, IngestTask
 from app.worker.main import Worker, WorkerSettings, load_settings
 from tests.conftest import FakeObjectStore
 from tests.worker_support import PDF_BYTES, LOCKED_PDF_BYTES, make_job, make_session_factory, make_user
@@ -154,6 +154,10 @@ def test_job_goes_queued_running_review_ready_with_the_proposal(setup):
     assert objects.objects[f"tmp/ingest/{job}/pages/p01.webp"] == b"webp"
     with factory() as db:
         assert {t.status for t in db.scalars(select(IngestTask))} == {"done"}
+        # one queryable ingest_paper row per proposed paper, with its role and cover metadata
+        (paper,) = db.scalars(select(IngestPaper)).all()
+        assert (paper.job_id, paper.paper_key, paper.role, paper.status) == (job, "q1", "question", "pending")
+        assert (paper.year, paper.metadata_source, paper.school_id) == (2024, "cover", None)
 
 
 def test_a_failing_metadata_call_never_fails_the_segment_task(setup):

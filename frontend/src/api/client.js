@@ -127,6 +127,9 @@ export const api = {
     review: (id) => request('GET', `/api/import/jobs/${id}/review`),
     // Save the corrected proposal ({papers: [{questions, orphan_answers}]}); 422 carries a message.
     saveProposal: (id, body) => request('PUT', `/api/import/jobs/${id}/proposal`, body),
+    // Record the admin's sidebar edits for one paper (its `key`) on its ingest_paper row.
+    savePaperMetadata: (id, key, body) =>
+      request('PUT', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/metadata`, body),
     // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
     manualPages: (id, first_page, last_page) =>
       request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),

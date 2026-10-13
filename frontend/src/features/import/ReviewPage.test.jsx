@@ -8,7 +8,7 @@ import { api } from '../../api/client'
 vi.mock('../../api/client', () => ({
   api: {
     import: {
-      review: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
+      review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
       confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
@@ -247,6 +247,18 @@ describe('ReviewPage', () => {
       expect(api.import.confirmJobPaper).toHaveBeenCalledWith('j1', {
         paper_label: 'q2', ...q2, year: 2023, paper_number: '2', is_premium: true,
       })
+    })
+
+    it('mirrors sidebar edits to the server, debounced', async () => {
+      api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1: FILLED } })
+      api.import.savePaperMetadata.mockResolvedValue({ saved: true })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const paperNo = await screen.findByPlaceholderText('1')
+      fireEvent.change(paperNo, { target: { value: '2' } })
+      expect(api.import.savePaperMetadata).not.toHaveBeenCalled()
+      await waitFor(() => expect(api.import.savePaperMetadata).toHaveBeenCalledTimes(1), { timeout: 3000 })
+      expect(api.import.savePaperMetadata).toHaveBeenCalledWith('j1', 'q1', { ...FILLED, paper_number: '2' })
     })
 
     it('skipping the last undecided paper leaves for the import page', async () => {

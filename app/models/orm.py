@@ -497,6 +497,47 @@ class IngestJob(Base):
     )
 
 
+INGEST_PAPER_STATUSES = ("pending", "confirmed", "skipped", "attached")
+INGEST_PAPER_ROLES = ("question", "answer_only")
+INGEST_METADATA_SOURCES = ("cover", "filename", "admin")
+
+
+class IngestPaper(Base):
+    """One paper proposed by an ingest job: a queryable mirror of the per-paper bits of the job's
+    proposal and report (role, metadata, outcome), so papers can be matched across jobs.
+    See docs/DATA_MODEL.md."""
+
+    __tablename__ = "ingest_paper"
+    __table_args__ = (UniqueConstraint("job_id", "paper_key", name="uq_ingest_paper_job_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The proposal's key for the paper (``q1``, ``a1`` or ``paperN``; see ``paper_key``).
+    paper_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="question", server_default="question")
+    # The seven fields that identify a paper; NULL until known.
+    school_id: Mapped[int | None] = mapped_column(ForeignKey("school.id", ondelete="SET NULL"), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    level_id: Mapped[int | None] = mapped_column(ForeignKey("level.id", ondelete="SET NULL"), nullable=True)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subject.id", ondelete="SET NULL"), nullable=True)
+    exam_type_id: Mapped[int | None] = mapped_column(ForeignKey("exam_type.id", ondelete="SET NULL"), nullable=True)
+    stream_id: Mapped[int | None] = mapped_column(ForeignKey("stream.id", ondelete="SET NULL"), nullable=True)
+    paper_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Where the metadata came from: ``cover``, ``filename`` or ``admin`` (NULL: nothing known).
+    metadata_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
+    matched_ingest_paper_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class IngestEvent(Base):
     """Append-only audit trail of an ingest job (created, claimed, finished, retried, ...).
 

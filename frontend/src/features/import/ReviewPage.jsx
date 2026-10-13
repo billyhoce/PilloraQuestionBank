@@ -176,6 +176,28 @@ export default function ReviewPage() {
 
   latest.current = review
 
+  // The sidebar's edits are mirrored to the server (debounced, one timer per paper) so the paper's
+  // ingest_paper row stays current. Best effort: confirm sends the final metadata regardless.
+  const metaTimers = useRef({})
+  const queueMetadataSave = (key, m) => {
+    if (!key) return
+    clearTimeout(metaTimers.current[key])
+    metaTimers.current[key] = setTimeout(() => {
+      delete metaTimers.current[key]
+      api.import.savePaperMetadata(jobId, key, {
+        subject_id: m.subject_id, stream_id: m.stream_id, level_id: m.level_id,
+        school_id: m.school_id, exam_type_id: m.exam_type_id,
+        year: m.year === '' || m.year == null ? null : Number(m.year),
+        paper_number: m.paper_number === '' ? null : m.paper_number,
+      }).catch(() => {})
+    }, 800)
+  }
+  const dropMetadataSave = key => {
+    clearTimeout(metaTimers.current[key])
+    delete metaTimers.current[key]
+  }
+  useEffect(() => () => Object.values(metaTimers.current).forEach(clearTimeout), [])
+
   const flush = useCallback(async () => {
     clearTimeout(timer.current)
     timer.current = null
@@ -199,7 +221,11 @@ export default function ReviewPage() {
   // Pre-filled from the paper's own cover; an old job has only the filename's guess for the booklet.
   const metadata = metadataEdits[paper?.key]
     ?? mergeSuggested(emptyMetadata, review?.paper_metadata?.[paper?.key] ?? review?.filename_metadata ?? {})
-  const setMetadata = m => setMetadataEdits(e => ({ ...e, [paper?.key]: m }))
+  const setMetadata = m => {
+    const key = paper?.key
+    setMetadataEdits(e => ({ ...e, [key]: m }))
+    queueMetadataSave(key, m)
+  }
   const answerOnly = isAnswerOnly(paper)
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
 
@@ -262,6 +288,7 @@ export default function ReviewPage() {
   }
 
   async function handleConfirmPaper() {
+    dropMetadataSave(paper.key)  // confirm carries the final metadata itself
     setConfirming(true)
     setConfirmError(null)
     try {
@@ -288,6 +315,7 @@ export default function ReviewPage() {
 
   async function handleSkipPaper() {
     if (!window.confirm(`Skip ${paperTitle(paper, paperIdx)}? It will not be imported.`)) return
+    dropMetadataSave(paper.key)
     setConfirming(true)
     setConfirmError(null)
     try {
