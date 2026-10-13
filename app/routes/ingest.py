@@ -23,6 +23,7 @@ from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
 from app.services.ingest_matching import match_info, match_row
 from app.services.ingest_papers import (
+    METADATA_FIELDS,
     MatchError,
     get_row as get_paper_row,
     link_papers,
@@ -621,6 +622,10 @@ class PaperMetadataEditIn(BaseModel):
     paper_number: Optional[str] = None
 
 
+def _metadata_tuple(row) -> tuple:
+    return tuple(getattr(row, f) for f in METADATA_FIELDS)
+
+
 @router.put("/jobs/{job_id}/papers/{paper_key}/metadata")
 def save_paper_metadata(
     job_id: uuid.UUID,
@@ -640,7 +645,10 @@ def save_paper_metadata(
         raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
     if row.status != "pending":
         raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} was already {row.status}")
+    before = _metadata_tuple(row)
     set_paper_metadata(db, job, paper_key, payload.model_dump())
+    if row.match_status == "unlinked" and _metadata_tuple(row) != before:
+        row.match_status = None  # a new key deserves a fresh look (an unlinked pair may match now)
     match_row(db, row)  # the key may now match (or stop matching) a confirmed paper
     db.commit()
     return {"saved": True, "metadata_source": row.metadata_source, "proposal": match_info(db, job).get(paper_key)}
@@ -738,12 +746,18 @@ def confirm_job(
     if conflict:
         raise HTTPException(status_code=422, detail=conflict)
     metadata = payload.model_dump(exclude={"paper_label"})
+    answers: dict = {}
     try:
-        paper, settled = confirm_job_paper(job, payload.paper_label, metadata, current_user, db, store)
+        paper, settled = confirm_job_paper(
+            job, payload.paper_label, metadata, current_user, db, store, answers_info=answers
+        )
     except ReviewActionError as e:
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)
-    return {**_confirm_response(db, paper.id), "job_status": "confirmed" if settled else "review_ready"}
+    return {
+        **_confirm_response(db, paper.id), "job_status": "confirmed" if settled else "review_ready",
+        "answers_from": answers.get("answers_from"), "unmatched": answers.get("unmatched", []),
+    }
 
 
 @router.post("/jobs/{job_id}/skip")

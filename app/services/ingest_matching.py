@@ -11,6 +11,16 @@ Rules, for a pending ``answer_only`` ``ingest_paper`` that is not linked to anot
   with the row are *partial* candidates -> ``manual`` if any ("partial: ...").
 * Otherwise NULL: nothing to do.
 
+Pending <-> pending (#84): when all seven fields are known and *no* confirmed paper has the key, the
+row is auto-linked to the one pending ``question`` ``ingest_paper`` of another ``review_ready`` job
+with the exact key (``matched_ingest_paper_id`` on both rows, ``match_status`` ``auto``, ``match_note``
+"auto-linked"); several such papers -> ``manual``. A single confirmed-paper match wins over this
+(the #83 proposal). The same runs from the question side (``match_job`` of a question job tries the
+older pending answer papers). An *auto* link is recomputed from scratch on every re-evaluation
+(metadata edit, new job, new paper), so it follows the data; a link the admin set (``match_status``
+NULL) is never touched; unlinking an auto link leaves ``match_status`` ``unlinked`` on both rows so it
+is not re-made until a metadata edit resets it.
+
 ``paper_number`` is not normalised in the bank, so it is compared after trimming and case-folding
 only. Nothing here commits; callers run it inside their own transaction.
 """
@@ -53,18 +63,74 @@ def partial_candidates(db: Session, row: IngestPaper) -> list[Paper]:
     return list(db.scalars(q.order_by(Paper.id)))
 
 
+def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
+    """Unlinked pending question papers of other review-ready jobs with ``row``'s exact key."""
+    q = (
+        select(IngestPaper)
+        .join(IngestJob, IngestJob.id == IngestPaper.job_id)
+        .where(
+            IngestPaper.role == "question", IngestPaper.status == "pending",
+            IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
+            IngestPaper.match_status.is_distinct_from("unlinked"), IngestJob.status == "review_ready",
+        )
+    )
+    for f in METADATA_FIELDS:
+        value = getattr(row, f)
+        q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
+    return list(db.scalars(q.order_by(IngestPaper.id)))
+
+
+def _ip_number_clause(value):
+    return func.lower(func.trim(IngestPaper.paper_number)) == _norm(value)
+
+
+def _break_link(row: IngestPaper) -> None:
+    other = row.matched_ingest_paper
+    row.matched_ingest_paper_id = None
+    if other is not None and other.matched_ingest_paper_id == row.id:
+        other.matched_ingest_paper_id = None
+    for r in (row, other):
+        if r is not None and r.match_status == "auto":
+            r.match_status = r.match_note = None
+
+
 def _set(row: IngestPaper, status, paper_id=None, note=None) -> None:
     row.match_status, row.proposed_paper_id, row.match_note = status, paper_id, note
 
 
 def match_row(db: Session, row: IngestPaper) -> None:
-    """(Re)compute the automatic match of ``row``. A no-op unless it is a pending answer-only paper
-    with no pending-paper link; a settled paper's proposal is cleared."""
+    """(Re)compute the automatic match of ``row`` (see the module doc). A settled paper's proposal is
+    cleared; an admin's link is left alone; an auto link is dropped and re-made if it still holds."""
+    partner = None
+    if row.status == "pending" and row.matched_ingest_paper_id is not None and row.match_status == "auto":
+        partner = row.matched_ingest_paper
+        _break_link(row)
+    _match(db, row)
+    if partner is not None and partner.status == "pending" and partner.matched_ingest_paper_id is None:
+        _match(db, partner)  # freed: it may fit another paper
+
+
+def _match(db: Session, row: IngestPaper) -> None:
     if row.status != "pending":
         _set(row, None)
         return
-    if row.role != "answer_only" or row.matched_ingest_paper_id is not None:
+    if row.matched_ingest_paper_id is not None:
         return
+    if row.role == "question":
+        candidates = _answer_candidates(db, row)
+        if not candidates and row.match_status == "manual":
+            _set(row, None)  # an earlier ambiguity that no longer holds
+        if len(candidates) == 1:
+            _match(db, candidates[0])
+        elif len(candidates) > 1:
+            note = f"{len(candidates)} pending answer papers have this key"
+            _set(row, "manual", None, note)
+            for c in candidates:
+                _set(c, "manual", None, note)
+        return
+    if row.role != "answer_only":
+        return
+    declined = row.match_status == "unlinked"
     unknown = [f for f in METADATA_FIELDS if getattr(row, f) is None]
     if not unknown:
         exact = exact_candidates(db, row)
@@ -74,9 +140,21 @@ def match_row(db: Session, row: IngestPaper) -> None:
         if len(exact) > 1:
             _set(row, "manual", None, f"{len(exact)} papers have this key")
             return
+        if not declined:
+            pending = pending_question_candidates(db, row)
+            if len(pending) == 1:
+                other = pending[0]
+                row.matched_ingest_paper_id, other.matched_ingest_paper_id = other.id, row.id
+                _set(row, "auto", None, "auto-linked")
+                _set(other, "auto", None, "auto-linked")
+                db.flush()
+                return
+            if len(pending) > 1:
+                _set(row, "manual", None, f"{len(pending)} pending question papers have this key")
+                return
     partial = partial_candidates(db, row)
     if not partial:
-        _set(row, None)
+        _set(row, "unlinked" if declined else None)
     elif unknown:
         _set(row, "manual", None, "partial: unknown " + ", ".join(_LABELS[f] for f in unknown))
     else:
@@ -90,10 +168,33 @@ def match_row(db: Session, row: IngestPaper) -> None:
         _set(row, "manual", None, "partial: " + (", ".join(differ) or "key") + " differ")
 
 
+def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
+    """Pending, unlinked answer-only papers of other review-ready jobs with question paper ``row``'s
+    exact key (so each can be matched from its own side, which decides uniqueness)."""
+    if row.status != "pending" or row.matched_ingest_paper_id is not None or row.match_status == "unlinked":
+        return []
+    if any(getattr(row, f) is None for f in METADATA_FIELDS):
+        return []
+    q = (
+        select(IngestPaper)
+        .join(IngestJob, IngestJob.id == IngestPaper.job_id)
+        .where(
+            IngestPaper.role == "answer_only", IngestPaper.status == "pending",
+            IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
+            IngestPaper.match_status.is_distinct_from("unlinked"), IngestJob.status == "review_ready",
+        )
+    )
+    for f in METADATA_FIELDS:
+        value = getattr(row, f)
+        q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
+    return list(db.scalars(q.order_by(IngestPaper.id)))
+
+
 def match_job(db: Session, job: IngestJob) -> None:
-    """Match every pending answer-only paper of ``job``."""
+    """Match every pending answer-only paper of ``job``, and link the older pending answer papers
+    that fit its question papers."""
     for row in db.scalars(select(IngestPaper).where(IngestPaper.job_id == job.id)):
-        if row.role == "answer_only":
+        if row.role in ("answer_only", "question"):
             match_row(db, row)
 
 
@@ -127,7 +228,9 @@ def match_info(db: Session, job: IngestJob) -> dict[str, dict]:
     out = {}
     rows = db.scalars(
         select(IngestPaper).where(
-            IngestPaper.job_id == job.id, IngestPaper.match_status.isnot(None), IngestPaper.status == "pending",
+            IngestPaper.job_id == job.id, IngestPaper.match_status.in_(("proposed", "manual")),
+            IngestPaper.role == "answer_only",
+            IngestPaper.status == "pending",
         )
     )
     for row in rows:

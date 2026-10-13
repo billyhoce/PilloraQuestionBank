@@ -235,6 +235,22 @@ describe('ReviewPage', () => {
       expect(await screen.findByRole('button', { name: /Confirm & Save Topics/ })).toBeInTheDocument()
     })
 
+    it('shows the linked answer job as a banner and what a confirm attached', async () => {
+      api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { filename: 'answers.pdf', paper_key: 'a1', job_id: 'j2' } } })
+      api.import.confirmJobPaper.mockResolvedValue({
+        paper_id: 7, job_status: 'review_ready', questions: [],
+        answers_from: { job_id: 'j2', filename: 'answers.pdf', paper_key: 'a1', attached: [1, 2] }, unmatched: [9],
+      })
+      renderPage()
+      expect(await screen.findByText(/Answers available from answers\.pdf \(a1\) — they will be attached when you confirm/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unlink' })).toBeInTheDocument()
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(await screen.findByText(/Attached answers for questions 1, 2 from answers\.pdf \(a1\)/)).toBeInTheDocument()
+      expect(screen.getByText(/Answers for question 9 matched no question/)).toBeInTheDocument()
+    })
+
     it('pre-fills each paper from its own cover metadata, not the filename', async () => {
       const q1 = { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' }
       const q2 = { ...q1, stream_id: 9, year: 2023, paper_number: '2' }
