@@ -462,8 +462,10 @@ class IngestJob(Base):
     )
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     source_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Unknown until the worker's ``register`` task reads the PDF (null before, and forever for a
+    # PDF that failed validation).
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
         Enum(*INGEST_JOB_STATUSES, name="ingest_job_status"),
         nullable=False,

@@ -1,6 +1,5 @@
 """Auto-import jobs: create, list, cancel, retry and progress. Processing lives in the worker."""
 
-import hashlib
 import logging
 import uuid
 from contextlib import contextmanager
@@ -8,7 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
 from app.logger import log_job_event
@@ -50,23 +48,6 @@ def job_prefix(source_key: str) -> str:
     return source_key.rsplit("/", 1)[0] + "/"
 
 
-def inspect_pdf(pdf_bytes: bytes) -> int:
-    """Return the page count; raise InvalidPdfError if the bytes are not a usable PDF.
-    Only the page tree is read — nothing is rendered."""
-    try:
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            if doc.needs_pass:
-                raise InvalidPdfError("The PDF is password protected")
-            n = doc.page_count
-    except InvalidPdfError:
-        raise
-    except Exception as e:
-        raise InvalidPdfError("The file is not a readable PDF") from e
-    if n < 1:
-        raise InvalidPdfError("The PDF has no pages")
-    return n
-
-
 def create_job(
     pdf_bytes: bytes,
     filename: str,
@@ -74,7 +55,6 @@ def create_job(
     db: Session,
     store: ObjectStore,
 ) -> IngestJob:
-    page_count = inspect_pdf(pdf_bytes)
     job_id = uuid.uuid4()
     key = source_key_for(job_id)
 
@@ -85,8 +65,6 @@ def create_job(
             created_by=admin.id,
             filename=filename,
             source_key=key,
-            sha256=hashlib.sha256(pdf_bytes).hexdigest(),
-            page_count=page_count,
             status="queued",
         )
         job.tasks.append(IngestTask(section=None, stage="register", status="ready"))
@@ -94,7 +72,7 @@ def create_job(
         db.flush()
         add_event(
             db, job_id, "created", actor_user_id=admin.id, filename=filename,
-            size=len(pdf_bytes), sha256=job.sha256, page_count=page_count,
+            size=len(pdf_bytes),
         )
         db.flush()
     except Exception:
@@ -104,8 +82,7 @@ def create_job(
             pass
         raise
     log_job_event(
-        job_id, "created", filename=filename, size=len(pdf_bytes), sha256=job.sha256,
-        page_count=page_count, user_id=admin.id,
+        job_id, "created", filename=filename, size=len(pdf_bytes), user_id=admin.id,
     )
     return job
 

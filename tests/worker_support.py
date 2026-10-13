@@ -12,6 +12,24 @@ from app.db import Base
 from app.models.orm import IngestJob, IngestTask, User
 
 
+def _pdf(pages=1, password=None):
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page()
+    if password:
+        data = doc.tobytes(encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=password, owner_pw=password)
+    else:
+        data = doc.tobytes()
+    doc.close()
+    return data
+
+
+PDF_BYTES = _pdf(2)
+LOCKED_PDF_BYTES = _pdf(1, password="secret")
+
+
 def make_session_factory(path):
     """A SQLite file per test; set WORKER_TEST_DATABASE_URL to a *scratch* Postgres database to run
     the same tests there (it is truncated first), which exercises the real FOR UPDATE SKIP LOCKED."""

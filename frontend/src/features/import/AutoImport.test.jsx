@@ -36,6 +36,14 @@ beforeEach(() => {
 const daysAgo = n => new Date(Date.now() - n * 24 * 60 * 60 * 1000 - 60 * 1000).toISOString()
 
 describe('AutoImport', () => {
+  it('shows a failed job\'s reason in the list', async () => {
+    api.import.listJobs.mockResolvedValue(listing([
+      { id: 'f', filename: 'locked.pdf', status: 'failed', error: 'register failed: The PDF is password protected', created_at: daysAgo(1) },
+    ]))
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    expect(await screen.findByText(/The PDF is password protected/)).toBeInTheDocument()
+  })
+
   it('shows an age badge on unsettled jobs, highlighted past 14 days', async () => {
     api.import.listJobs.mockResolvedValue(listing([
       { id: 'a', filename: 'young.pdf', status: 'review_ready', created_at: daysAgo(12) },

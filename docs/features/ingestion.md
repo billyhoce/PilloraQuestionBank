@@ -37,13 +37,21 @@ a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-
 
 ### Job routes (admin only; non-admins get `403`)
 
-- `POST /api/import/jobs` (multipart `file`) — a non-`application/pdf` content type, or bytes
-  PyMuPDF cannot open (corrupt, encrypted, zero pages), is a `422`. Otherwise it reads the page
-  count and SHA-256 from the bytes (no rendering), puts the PDF at
+- `POST /api/import/jobs` (multipart `file`) — a non-`application/pdf` content type is a `422`.
+  The bytes are **not** inspected: a corrupt, password-protected or empty PDF still gets a job, and
+  fails in the worker (below). It puts the PDF at
   `ingest/{job_id}/source.pdf`, inserts the `ingest_job` (`queued`) with its first task
   (`section` NULL, stage `register`, status `ready`), and returns `{"job_id": ...}` with `201`.
   It makes no Claude call, so it returns in well under a second. If the DB insert fails the
   uploaded object is deleted.
+- **PDF validation** is the worker's, not the request's. Before the `register` stage runs,
+  `Edges.before_register` (`app/worker/edges.py`) opens the downloaded source with PyMuPDF; a file
+  that cannot be opened, is password protected, or has no pages fails the `register` task with
+  "The file is not a readable PDF" / "The PDF is password protected" / "The PDF has no pages". A
+  failed task is not retried on its own, so the job ends `failed` with `error` =
+  `register failed: <reason>`, which the job list shows under the status. After `register`
+  succeeds, `after_register` copies `page_count` and `sha256` from its `job.json` onto the job row
+  (both are `NULL` until then, and stay `NULL` for a rejected PDF) and logs `ingest_job/registered`.
 - **Filename metadata** is not extracted in the request. The worker runs the existing filename
   extraction ([ai-labelling.md](./ai-labelling.md#filename-metadata-extraction)) as part of the
   `register` task, via `record_filename_metadata` in `app/services/ingest_jobs.py`, and stores the
@@ -177,7 +185,7 @@ event against its source job (`paper.source_job_id` or the job's `confirmed_pape
 progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
 compact drop zone (one job per dropped PDF) above the job list. Each row shows the filename (click
 to open the job detail), status, the current stage with a `done/total` progress bar, the warnings
-count, a "Needs review" marker, created time, and Retry and Cancel buttons. Unsettled jobs (anything but `confirmed`/`cancelled`/`expired`) carry an **age badge** beside the created time ("waiting 12 days", from `created_at`), highlighted amber once past 14 days. An **Awaiting review** checkbox narrows the list to `review_ready` and `failed` jobs (both wait on the admin: review/confirm, or retry/cancel) via `status=review_ready,failed`; it combines with the job-id/paper-id search. The list polls
+count, a "Needs review" marker, the failure reason of a `failed` job (e.g. "register failed: The PDF is password protected"), created time, and Retry and Cancel buttons. Unsettled jobs (anything but `confirmed`/`cancelled`/`expired`) carry an **age badge** beside the created time ("waiting 12 days", from `created_at`), highlighted amber once past 14 days. An **Awaiting review** checkbox narrows the list to `review_ready` and `failed` jobs (both wait on the admin: review/confirm, or retry/cancel) via `status=review_ready,failed`; it combines with the job-id/paper-id search. The list polls
 `GET /api/import/jobs` every 3 s (`POLL_MS`) while any job is `queued` or `running` and stops when
 none is and on unmount; Refresh is still there. While a job is active and `worker_alive` is false
 the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
@@ -255,7 +263,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
   before any stage reads it. Artefacts lost with the folder are **not** re-downloaded: their tasks'
   outputs are missing, so on start `Runner.revalidate` reopens them and they run again (slower, not
   wrong); with the folder intact, fingerprints keep finished tasks as they are. After `register`
-  succeeds the filename metadata is extracted (`report["filename_metadata"]`). After `report`
+  succeeds the job's page count and sha256 are recorded and the filename metadata is extracted (`report["filename_metadata"]`). After `report`
   succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
   `ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
   (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
@@ -282,7 +290,7 @@ proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
 - **Lifecycle logging and tracebacks.** Every log line is JSON with the job id (see
   [ARCHITECTURE.md](../ARCHITECTURE.md)). Each lifecycle event is exactly one INFO record carrying
   the `job_id`, with the event in `func`/`step` and its details as fields: `ingest_job/created`
-  (filename, size, sha256, page_count, user_id), `ingest_task/claimed` and `ingest_task/finished`
+  (filename, size, user_id; the sha256 and page count are not known yet) followed by `ingest_job/registered` (sha256, page_count, logged by the worker), `ingest_task/claimed` and `ingest_task/finished`
   (status, duration_s; logged by the runner; the same transitions are also appended to the
   `ingest_event` audit table, see [DATA_MODEL.md](../DATA_MODEL.md), by `app/services/ingest_events.py`
   in the transaction of the change they describe, the task ones inside `SqlStore`), `ingest_job/proposal_stored` (the worker saved the
