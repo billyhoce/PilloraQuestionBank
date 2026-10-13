@@ -392,15 +392,18 @@ exam_type_id, year, paper_number, is_premium}` (admin, own job; `201`):
    `question_rects` become `question` pages and its `answer_rects` `answer` pages, in list order,
    `page_order` from 1 per type, with the cropped image's `width_px`/`height_px`. **Orphan answers
    are not imported** (the UI says so).
-4. `confirm_import` runs unchanged (it commits). Then `paper.source_job_id` is set, the paper id is
-   appended to `confirmed_paper_ids`, and `report.review_outcome[key] = "confirmed"` is stored — no
-   schema change. The response is `/confirm`'s (`paper_id`, `questions`) plus `job_status`.
+4. `confirm_import` runs with a `before_commit` callback: after the S3 copies and just before its one
+   commit, the callback sets `paper.source_job_id`, appends the paper id to `confirmed_paper_ids` and
+   stores `report.review_outcome[key] = "confirmed"`. The paper, its `source_job_id` and the job
+   outcome therefore commit in **one** transaction (if the callback raises, nothing is committed and
+   the canonical copies are removed); the temp-image deletes run after the commit, and a failed
+   delete is logged with its key and skipped (the `tmp/` lifecycle rule picks up leftovers). The response is `/confirm`'s (`paper_id`, `questions`) plus `job_status`.
 
 `POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (`200`, `{job_status}`; the
 same `404`/`409` rules). When every proposal paper has an outcome the job becomes `confirmed` (an
 all-skipped job too, with `confirmed_paper_ids` null) and its whole `tmp/ingest/{id}/` prefix
 (source, review pages) is deleted after the commit; a failed delete is logged, and the bucket
 lifecycle rule backs it up. A job whose proposal has no paper at all can only be cancelled. The row is
-locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. `confirm_import` commits
-before the job row is updated, so a crash between the two would leave a paper whose job still offers
-it; the rare duplicate is removed from Manage Papers.
+locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. Because the paper and the
+job outcome commit together, a paper can never exist while its job still offers it, so a retry cannot
+duplicate it.

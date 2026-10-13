@@ -199,3 +199,46 @@ def test_non_admin_forbidden(public_client, fake_object_store):
     jid = uuid.uuid4()
     assert public_client.post(f"/api/import/jobs/{jid}/confirm", json={"paper_label": "q1"}).status_code == 403
     assert public_client.post(f"/api/import/jobs/{jid}/skip", json={"paper_label": "q1"}).status_code == 403
+
+
+# --- B1 / B1b: confirming never 500s after the commit, never duplicates ------------------------
+
+def test_failed_temp_delete_does_not_break_confirm(admin_client, db_session, env, mock_s3, monkeypatch):
+    from app.storage.s3_client import delete_object as real_delete
+
+    setup, meta = env
+    job = setup()
+    attempted = []
+
+    def flaky_delete(key):
+        attempted.append(key)
+        if key.endswith("page_0.webp"):
+            raise RuntimeError("S3 down")
+        real_delete(key)
+
+    monkeypatch.setattr("app.services.ingest.delete_object", flaky_delete)
+    resp = admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "q1"})
+    assert resp.status_code == 201, resp.text
+    # Every temp key was tried, and the job shows the paper as confirmed (no duplicate possible).
+    assert len([k for k in attempted if k.startswith("tmp/") and "page_" in k]) == 4
+    db_session.refresh(job)
+    assert job.report["review_outcome"] == {"q1": "confirmed"}
+    again = admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "q1"})
+    assert again.status_code == 409
+    assert db_session.query(Paper).count() == 1
+
+
+def test_failed_outcome_record_leaves_no_paper(admin_client, db_session, env, mock_s3, monkeypatch):
+    setup, meta = env
+    job = setup()
+
+    def boom(*a, **k):
+        raise RuntimeError("cannot record")
+
+    monkeypatch.setattr("app.services.ingest_confirm._record", boom)
+    with pytest.raises(RuntimeError):
+        admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "q1"})
+    assert db_session.query(Paper).count() == 0
+    # No canonical copies leaked either.
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert not [k for k in keys if k.startswith("papers/")]
