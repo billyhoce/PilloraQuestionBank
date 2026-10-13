@@ -279,12 +279,12 @@ IngestEvent: {                -- append-only audit trail, kept indefinitely (nev
 }
 -- kind: created, task_claimed, task_finished (data.status done/skipped/failed, error, warnings,
 -- duration_ms, traceback), retry, cancelled, proposal_edited, paper_confirmed, paper_skipped,
--- expired. Task rows are overwritten on claim/reopen; each attempt stays visible here.
+-- expired (historical; no longer written). Task rows are overwritten on claim/reopen; each attempt stays visible here.
 
 WorkerHeartbeat: {             -- singleton
   id (int, CHECK id = 1),
   seen_at, version, current_job_id (nullable FK -> IngestJob, ON DELETE SET NULL),
-  last_sweep_at (timestamptz, nullable)   -- when the daily expiry sweep last ran
+  last_sweep_at (timestamptz, nullable)   -- when the daily sweep last ran
 }
 ```
 

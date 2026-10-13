@@ -10,7 +10,6 @@ from sqlalchemy import select
 from app.log_context import ContextFilter
 from app.models.orm import IngestJob, IngestTask
 from app.worker.main import Worker, WorkerSettings
-from app.worker.sweep import EXPIRE_AFTER, run_sweep
 from tests.conftest import FakeObjectStore
 from tests.test_ingest_confirm import env, paper, proposal  # noqa: F401  (the confirm fixtures)
 from tests.test_ingest_jobs import _seed_failed_job, upload
@@ -83,22 +82,6 @@ def test_proposal_saved_event(admin_client, db_session, admin_user, fake_object_
     q = {"number": 7, "question_rects": [rect(2, 50, 90)], "answer_rects": [], "flags": []}
     assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q]})).status_code == 200
     assert len(events(records, job.id)["proposal_saved"]) == 1
-
-
-def test_expired_event(tmp_path, records):
-    engine, factory = make_session_factory(tmp_path / "w.db")
-    user = make_user(factory)
-    from app.worker.store import SqlStore
-
-    SqlStore(factory, tmp_path).touch_worker()
-    now = datetime(2026, 6, 1, 12, tzinfo=UTC)
-    job_id = make_worker_job(factory, user, status="failed")
-    with factory() as db:
-        db.get(IngestJob, job_id).updated_at = now - EXPIRE_AFTER - timedelta(hours=1)
-        db.commit()
-    run_sweep(factory, FakeObjectStore(), tmp_path, lambda: now)
-    assert len(events(records, job_id)["expired"]) == 1
-    engine.dispose()
 
 
 # --- the worker: runner events, proposal stored, traceback ---------------------------------

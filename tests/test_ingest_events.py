@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from app.models.orm import IngestEvent, IngestJob, IngestTask
 from app.worker.main import Worker, WorkerSettings
-from app.worker.sweep import EXPIRE_AFTER, run_sweep
 from tests.conftest import FakeObjectStore
 from tests.test_ingest_confirm import env, paper, proposal  # noqa: F401  (the confirm fixtures)
 from tests.test_ingest_jobs import _seed_failed_job, upload
@@ -57,24 +56,6 @@ def test_paper_confirmed_and_skipped(admin_client, db_session, admin_user, env):
     assert rows[0].data["paper_id"] and rows[0].data["paper_label"] == "q1" and rows[0].data["job_settled"] is False
     assert rows[1].data["paper_label"] == "q2" and rows[1].data["job_settled"] is True
     assert all(r.actor_user_id == admin_user.id for r in rows)
-
-
-def test_expired(tmp_path):
-    engine, factory = make_session_factory(tmp_path / "w.db")
-    user = make_user(factory)
-    from app.worker.store import SqlStore
-
-    SqlStore(factory, tmp_path).touch_worker()
-    now = datetime(2026, 6, 1, 12, tzinfo=UTC)
-    job_id = make_worker_job(factory, user, status="failed")
-    with factory() as db:
-        db.get(IngestJob, job_id).updated_at = now - EXPIRE_AFTER - timedelta(hours=1)
-        db.commit()
-    run_sweep(factory, FakeObjectStore(), tmp_path, lambda: now)
-    with factory() as db:
-        names, [row] = kinds(db, job_id)
-    assert names == ["expired"] and row.data["reason"] == "stale"
-    engine.dispose()
 
 
 @pytest.fixture

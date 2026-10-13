@@ -1,4 +1,4 @@
-"""The daily sweep: stale review_ready/failed jobs expire; S3 prefix and scratch go; once a day."""
+"""The daily sweep: settled jobs' scratch goes, pending jobs never expire; once a day."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -9,7 +9,7 @@ from app.models.orm import IngestJob, WorkerHeartbeat
 from app.services.ingest_jobs import job_prefix
 from app.worker.main import Worker, WorkerSettings
 from app.worker.store import SqlStore
-from app.worker.sweep import EXPIRE_AFTER, SWEEP_EVERY, run_sweep
+from app.worker.sweep import SWEEP_EVERY, run_sweep
 from tests.conftest import FakeObjectStore
 from tests.worker_support import make_job, make_session_factory, make_user
 
@@ -55,66 +55,31 @@ def status_of(factory, job_id):
         return db.get(IngestJob, job_id).status
 
 
-def test_only_stale_review_ready_and_failed_jobs_expire(env):
+def test_pending_jobs_never_expire(env):
     factory, _user, scratch, objects, clock = env
-    old = EXPIRE_AFTER + timedelta(hours=1)
-    stale_review = aged_job(env, "review_ready", old)
-    stale_failed = aged_job(env, "failed", old)
-    fresh_review = aged_job(env, "review_ready", EXPIRE_AFTER - timedelta(hours=1))
-    stale_running = aged_job(env, "running", old)
-    stale_queued = aged_job(env, "queued", old)
-    stale_confirmed = aged_job(env, "confirmed", old)
-    stale_cancelled = aged_job(env, "cancelled", old, with_files=False)
+    ancient = timedelta(days=400)
+    review = aged_job(env, "review_ready", ancient)
+    failed = aged_job(env, "failed", ancient)
+    running = aged_job(env, "running", ancient)
+    queued = aged_job(env, "queued", ancient)
 
-    expired = run_sweep(factory, objects, scratch, clock)
-
-    assert set(expired) == {stale_review, stale_failed}
-    assert status_of(factory, stale_review) == "expired"
-    assert status_of(factory, stale_failed) == "expired"
-    for untouched, status in [
-        (fresh_review, "review_ready"), (stale_running, "running"), (stale_queued, "queued"),
-        (stale_confirmed, "confirmed"), (stale_cancelled, "cancelled"),
-    ]:
-        assert status_of(factory, untouched) == status
-    assert sorted(objects.deleted_prefixes) == sorted(job_prefix(f"tmp/ingest/{i}/source.pdf") for i in (stale_review, stale_failed))
-    assert not any(k.startswith(job_prefix(f"tmp/ingest/{stale_review}/source.pdf")) for k in objects.objects)
-    assert any(k.startswith(job_prefix(f"tmp/ingest/{fresh_review}/source.pdf")) for k in objects.objects)
-    assert not (scratch / str(stale_review)).exists()
-    assert (scratch / str(fresh_review)).exists()
-
-
-def test_expired_job_is_not_claimable(env):
-    factory, user, scratch, objects, clock = env
-    job_id = make_job(factory, user, status="review_ready", stages=("register",))
-    with factory() as db:
-        db.get(IngestJob, job_id).updated_at = NOW - EXPIRE_AFTER - timedelta(days=1)
-        db.commit()
     run_sweep(factory, objects, scratch, clock)
-    assert SqlStore(factory, scratch).claim_ready(60) is None
 
-
-def test_failed_s3_delete_does_not_stop_the_sweep(env):
-    factory, _user, scratch, objects, clock = env
-    a = aged_job(env, "failed", EXPIRE_AFTER + timedelta(days=1))
-    b = aged_job(env, "failed", EXPIRE_AFTER + timedelta(days=2))
-
-    def boom(prefix):
-        raise RuntimeError("s3 down")
-
-    objects.delete_prefix = boom
-    assert set(run_sweep(factory, objects, scratch, clock)) == {a, b}
-    assert status_of(factory, a) == status_of(factory, b) == "expired"
-    assert not (scratch / str(a)).exists()
+    for job_id, status in [(review, "review_ready"), (failed, "failed"), (running, "running"), (queued, "queued")]:
+        assert status_of(factory, job_id) == status
+        assert (scratch / str(job_id)).exists()
+    assert objects.deleted_prefixes == []
+    assert any(k.startswith(f"tmp/ingest/{review}/") for k in objects.objects)
 
 
 def test_sweep_runs_at_most_once_a_day_across_restarts(env):
     factory, _user, scratch, objects, clock = env
     assert run_sweep(factory, objects, scratch, clock) == []
-    late = aged_job(env, "failed", EXPIRE_AFTER + timedelta(days=1))
+    late = aged_job(env, "cancelled", timedelta(days=9))
 
     clock.now = NOW + SWEEP_EVERY - timedelta(minutes=1)
     assert run_sweep(factory, objects, scratch, clock) is None  # same "day": not due, any process
-    assert status_of(factory, late) == "failed"
+    assert (scratch / str(late)).exists()
 
     clock.now = NOW + SWEEP_EVERY + timedelta(minutes=1)
     assert run_sweep(factory, objects, scratch, clock) == [late]
@@ -142,13 +107,13 @@ def test_confirmed_scratch_removed_after_grace(env):
 
 def test_worker_sweeps_from_its_loop_once(env):
     factory, _user, scratch, objects, clock = env
-    stale = aged_job(env, "review_ready", EXPIRE_AFTER + timedelta(days=1))
+    stale = aged_job(env, "cancelled", timedelta(days=9))
     worker = Worker(
         factory, objects, lambda *a: {}, lambda *a: type("R", (), {"run_one": lambda s: None})(),
         WorkerSettings(scratch_dir=scratch), clock=clock,
     )
     worker.run_once()
-    assert status_of(factory, stale) == "expired"
-    assert len(objects.deleted_prefixes) == 1
+    assert not (scratch / str(stale)).exists()
+    fresh = aged_job(env, "cancelled", timedelta(days=9))
     worker.run_once()
-    assert len(objects.deleted_prefixes) == 1
+    assert (scratch / str(fresh)).exists()  # not due again the same day

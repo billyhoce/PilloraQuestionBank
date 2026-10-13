@@ -415,13 +415,14 @@ def list_ingest_jobs(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Every admin's jobs, optionally narrowed by status, job id, or a paper id (the job that
+    """Every admin's jobs, optionally narrowed by status (one, or several comma-separated), job id, or a paper id (the job that
     confirmed that paper, by ``paper.source_job_id`` or the job's recorded ``confirmed_paper_ids``)."""
-    if status is not None and status not in INGEST_JOB_STATUSES:
+    statuses = [s.strip() for s in status.split(",")] if status is not None else None
+    if statuses is not None and any(s not in INGEST_JOB_STATUSES for s in statuses):
         raise HTTPException(status_code=422, detail="Unknown job status")
     q = db.query(IngestJob).options(selectinload(IngestJob.tasks))
-    if status is not None:
-        q = q.filter(IngestJob.status == status)
+    if statuses is not None:
+        q = q.filter(IngestJob.status.in_(statuses))
     if job_id is not None:
         q = q.filter(IngestJob.id == job_id)
     if paper_id is not None:

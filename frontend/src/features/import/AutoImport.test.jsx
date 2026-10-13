@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AutoImport, { POLL_MS } from './AutoImport'
+import { waitingDays } from './jobAge'
 import { api } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
@@ -32,7 +33,38 @@ beforeEach(() => {
   api.import.cancelJob.mockResolvedValue(null)
 })
 
+const daysAgo = n => new Date(Date.now() - n * 24 * 60 * 60 * 1000 - 60 * 1000).toISOString()
+
 describe('AutoImport', () => {
+  it('shows an age badge on unsettled jobs, highlighted past 14 days', async () => {
+    api.import.listJobs.mockResolvedValue(listing([
+      { id: 'a', filename: 'young.pdf', status: 'review_ready', created_at: daysAgo(12) },
+      { id: 'b', filename: 'edge.pdf', status: 'failed', created_at: daysAgo(14) },
+      { id: 'c', filename: 'old.pdf', status: 'review_ready', created_at: daysAgo(15) },
+      { id: 'd', filename: 'done.pdf', status: 'confirmed', created_at: daysAgo(40) },
+      { id: 'e', filename: 'gone.pdf', status: 'cancelled', created_at: daysAgo(40) },
+    ]))
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    await screen.findByText('young.pdf')
+    const badges = screen.getAllByTestId('age-badge')
+    expect(badges.map(b => b.textContent)).toEqual(['waiting 12 days', 'waiting 14 days', 'waiting 15 days'])
+    expect(badges.map(b => b.dataset.stale)).toEqual(['false', 'false', 'true'])
+  })
+
+  it('computes waiting days from created_at', () => {
+    expect(waitingDays('2026-10-01T00:00:00Z', Date.parse('2026-10-13T12:00:00Z'))).toBe(12)
+    expect(waitingDays('garbage')).toBeNull()
+  })
+
+  it('the Awaiting review filter asks the server for review_ready and failed jobs only', async () => {
+    render(<MemoryRouter><AutoImport /></MemoryRouter>)
+    await screen.findByText('second.pdf')
+    await userEvent.click(screen.getByLabelText('Awaiting review'))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith('review_ready,failed', {}))
+    await userEvent.click(screen.getByLabelText('Awaiting review'))
+    await waitFor(() => expect(api.import.listJobs).toHaveBeenLastCalledWith(undefined, {}))
+  })
+
   it('lists jobs with filename and status; only live jobs can be cancelled', async () => {
     render(<MemoryRouter><AutoImport /></MemoryRouter>)
     expect(await screen.findByText('second.pdf')).toBeInTheDocument()

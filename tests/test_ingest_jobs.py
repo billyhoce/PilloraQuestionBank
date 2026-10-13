@@ -105,6 +105,10 @@ def test_list_is_all_admins_jobs_newest_first_and_filters(
     failed = admin_client.get("/api/import/jobs?status=failed").json()["data"]
     assert [r["id"] for r in failed] == [first]
     assert admin_client.get("/api/import/jobs?status=bogus").status_code == 422
+    assert admin_client.get("/api/import/jobs?status=failed,bogus").status_code == 422
+    several = admin_client.get("/api/import/jobs?status=failed,review_ready").json()["data"]
+    assert [r["id"] for r in several] == [first]
+    assert admin_client.get("/api/import/jobs?status=queued,failed").json()["data"][0]["id"] == second
 
     by_id = admin_client.get(f"/api/import/jobs?job_id={theirs.id}").json()["data"]
     assert [r["id"] for r in by_id] == [str(theirs.id)]
