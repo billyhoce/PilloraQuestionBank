@@ -1,9 +1,11 @@
 # AI Labelling
 
-**Scope:** All Anthropic Claude API usage — the per-part split + topic/marks labeller and the
-filename metadata extractor — plus the parts write path and the review UI that consume them. The
-`QuestionPart` schema is in [DATA_MODEL.md](../DATA_MODEL.md#questions-have-parts); the import steps
-around this one are in [ingestion.md](./ingestion.md).
+**Scope:** All Anthropic Claude API usage in `app/` — the per-part split + topic/marks labeller and
+the paper metadata extractor — plus the parts write path and the review UI that consume them. The
+booklet segmentation call lives in the `ingestion/` package
+([ingester/README.md](../../ingestion/ingester/README.md)). The `QuestionPart` schema is in
+[DATA_MODEL.md](../DATA_MODEL.md#questions-have-parts); the import steps around this one are in
+[ingestion.md](./ingestion.md) and [auto-import.md](./auto-import.md).
 
 ## Part splitting & topic auto-labeling
 
@@ -164,7 +166,7 @@ progress with a Re-run/Retry button.
 
 An `answer_only` proposal paper (answers uploaded apart from the questions) is never confirmed as a paper, so
 it never reaches this step; its answers are attached to the question paper instead (see
-[ingestion.md](./ingestion.md) and `docs/adr/0002-qa-booklet-pairing.md`).
+[qa-pairing.md](./qa-pairing.md)).
 
 For each question it renders the question image(s) beside a `<PartsEditor />` pre-filled with the
 AI's suggested split. The admin can edit any part's label, marks and topics, **add or delete parts**,
@@ -199,10 +201,10 @@ input and cache reads at 0.1×.
 | Paper metadata extraction | Haiku 4.5 (text + cover PDF) | cover page(s) + filename | ~640 papers | small (<$1 per 100 papers) |
 
 Per-question labeling is roughly $0.001 with image input — order of magnitude, verify against the
-logs. `log_tokens` (`app/logger.py`) prints per-call token counts and a dollar cost to
-`logs/app.log`, together with the Anthropic request id of the call. For ingest jobs the segmentation
-and filename-metadata calls are also summed into the job's `report["cost"]`
-(see [ingestion.md](./ingestion.md)); the question labeller's calls are logged only.
+logs. Every call logs one structured `<func>/tokens` line (model, token counts, `cost_usd`,
+`anthropic_request_id`) to stdout. For ingest jobs the segmentation and per-paper metadata calls are
+also summed into the job's `report.cost` (see [auto-import.md](./auto-import.md#observability)); the
+question labeller's calls are logged only. Prices live in `app/logger.py`.
 
 ## SDK setup
 

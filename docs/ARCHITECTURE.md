@@ -25,7 +25,7 @@ Ingest worker  (python -m app.worker, same VM)       │
 
 The **worker** is a second process, not part of the API: it takes queued auto-import jobs through
 the `ingestion/pipeline` stages, one job at a time, and leaves a proposal on the job row. See
-[features/ingestion.md](./features/ingestion.md#the-worker). In production it is a `worker`
+[features/auto-import.md](./features/auto-import.md#the-worker). In production it is a `worker`
 service in `deploy/docker-compose.prod.yml`, built from the **same image** as the API (the `Dockerfile`
 installs the `ingestion/` package non-editable and `tesseract-ocr` from apt) and capped at 1 CPU /
 6 GB; see [DEPLOYMENT.md](./DEPLOYMENT.md#ingest-worker).
@@ -52,15 +52,21 @@ app/
 │                   #   (question selection), question_query.py (filter/eager-load),
 │                   #   question_serialization.py, question_parts.py, generation_config.py,
 │                   #   site_config.py (site-wide settings + About HTML sanitizer),
-│                   #   premium.py (who may open which premium paper)
+│                   #   premium.py (who may open which premium paper), paper_admin.py (page edits),
+│                   #   ingest_jobs.py (upload, jobs, retry/cancel), ingest_review.py (review payload,
+│                   #   proposal edits), ingest_confirm.py (confirm/skip/attach), ingest_papers.py
+│                   #   (ingest_paper rows, links), ingest_matching.py, ingest_events.py (audit rows)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), rich_text.py, sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers;
-│                   # object_store.py — the ObjectStore (put/get/presign/delete_prefix) the import jobs use
-├── ai/             # Claude API clients — filename_extractor.py, topic_labeler.py
+│                   # object_store.py — the ObjectStore the import jobs use (put/get/head/delete/
+│                   #   delete_prefix/list_objects/presign/presign_post)
+├── ai/             # Claude API clients — filename_extractor.py (paper metadata), topic_labeler.py,
+│                   #   job_cost.py (per-job cost into report.cost)
 ├── worker/         # the ingest worker (`python -m app.worker`) — main.py (loop, settings, signals),
 │                   #   store.py (the pipeline Store over ingest_task, job-status derivation),
-│                   #   edges.py (S3 + DB hooks composed around the pipeline's stages)
+│                   #   edges.py (S3 + DB hooks composed around the pipeline's stages),
+│                   #   sweep.py (daily cleanup), reconcile.py (daily DB/S3/scratch reconciler)
 ├── db.py           # SQLAlchemy engine/session, declarative Base, get_db dependency
 ├── deps.py         # FastAPI providers for outbound I/O (presigner, image fetcher, AI labeller)
 ├── logger.py       # `log`, `log_event` (structured fields), Timer, token/cost logging helper
@@ -104,8 +110,9 @@ which is why `scripts/generate_sample_pdf.py` can drive the real engine from an 
 - `delete_object(key)` — callers commit the DB deletion **before** removing objects, since S3
   deletes are irreversible.
 - `get_image_bytes(key)` — raw bytes for server-side use (AI labelling, PDF rendering).
-- `put_object(key, bytes, content_type)` / `delete_prefix(prefix)` — generic put and bulk delete,
-  used through `ObjectStore` (`app/storage/object_store.py`) by the auto-import jobs.
+- `put_object`, `head_object`, `delete_prefix`, list with last-modified, `presign_post` — used through
+  `ObjectStore` (`app/storage/object_store.py`) by the auto-import jobs (browser upload, review
+  images, settle cleanup, reconciler).
 
 **Local dev:** `boto3` points at an S3-compatible endpoint via `S3_ENDPOINT_URL` (unset in
 production) — same code path, no special-casing.
@@ -163,7 +170,8 @@ exports `filtersToListArgs`, which Generate's "Select All" reuses for its one-of
 | `/about` | About page (admins edit it in place) | Public | [site-config](./features/site-config.md) |
 | `/generate` | Paper generation | Authenticated | [paper-generation](./features/paper-generation.md) |
 | `/subscribe` | Subscribe — one plan per school level (payment stub) | Authenticated | [users-and-premium](./features/users-and-premium.md) |
-| `/admin/import` | Import flow | Admin | [ingestion](./features/ingestion.md) |
+| `/admin/import` | Import: Auto-detect job list + Manual wizard | Admin | [auto-import](./features/auto-import.md), [ingestion](./features/ingestion.md) |
+| `/admin/import/jobs/:jobId/review` | Review an ingest job's proposal | Admin | [auto-import](./features/auto-import.md#review-page), [qa-pairing](./features/qa-pairing.md) |
 | `/admin/reference` | Reference data CRUD | Admin | [reference-data](./features/reference-data.md) |
 | `/admin/papers` | Papers list + editor | Admin | [ingestion](./features/ingestion.md) |
 | `/admin/users` | User management (users, invites, premium, site settings) | Admin | [users-and-premium](./features/users-and-premium.md) |

@@ -1,680 +1,127 @@
 # Ingestion
 
-**Scope:** Getting exam papers into the bank and maintaining them — the admin import wizard, the
-server-side PDF→image pipeline, and the Manage Papers editor. The AI part-split/topic step that
-follows import is in [ai-labelling.md](./ai-labelling.md); filename metadata extraction is there
-too.
+**Scope:** getting papers into the bank and maintaining them. This file covers the **Manual** import,
+the Manage Papers editor and provenance.
 
-## Import API — admin only
+Related docs:
+- **Auto-detect** import (jobs, worker, review): [auto-import.md](./auto-import.md).
+- Answer booklets and matching: [qa-pairing.md](./qa-pairing.md).
+- AI part split, topics and metadata extraction: [ai-labelling.md](./ai-labelling.md).
 
-```
-POST   /api/import/upload-pdf       -- (Manual) upload a single PDF; returns page images + AI-suggested metadata
-POST   /api/import/confirm          -- submit labeled paper + questions
-POST   /api/import/ai-topics        -- AI part split + topic/marks suggestions for one question
-POST   /api/import/save-topics      -- persist user-reviewed parts for a paper's questions
-DELETE /api/import/papers/{paper_id} -- delete a paper, its questions/pages, and their S3 objects
+## Two ways in
 
-POST   /api/import/uploads          -- (Auto-detect) create an `awaiting_upload` job + presigned S3 POST for one PDF
-POST   /api/import/jobs/{id}/uploaded -- the browser finished its S3 POST: verify the object, queue the job
-GET    /api/import/jobs?status=&unmatched_answers= -- every admin's jobs, newest first, with progress + worker_alive; `unmatched_answers=true` keeps jobs with a pending answer-only paper linked to no question paper
-GET    /api/import/jobs/{id}        -- one job, its report and its tasks (+ progress, worker_alive)
-POST   /api/import/jobs/{id}/retry  -- return failed/blocked tasks and everything downstream to ready
-GET    /api/import/jobs/{id}/review -- the proposal under review, with page-image URLs and pixel sizes
-PUT    /api/import/jobs/{id}/proposal -- save the admin's corrections as `proposal_edited`
-PUT    /api/import/jobs/{id}/papers/{key}/metadata -- record the admin's sidebar edits on the paper's `ingest_paper` row
-POST   /api/import/jobs/{id}/manual-pages -- a page range of the job's PDF as Manual-flow pages
-POST   /api/import/jobs/{id}/confirm -- crop one reviewed paper into the bank (same response as /confirm)
-POST   /api/import/jobs/{id}/skip   -- skip one proposed paper
-POST   /api/import/jobs/{id}/attach -- attach an answer-only paper's answers to an existing paper
-GET    /api/import/papers/pending   -- pending question papers of other review-ready jobs (match-panel candidates), metadata-filtered
-POST   /api/import/jobs/{id}/papers/{key}/match -- link an answer-only paper to a pending question paper of another job
-DELETE /api/import/jobs/{id}/papers/{key}/match -- remove that link
-DELETE /api/import/jobs/{id}        -- cancel a job
-```
+`/admin/import` has two tabs. It opens on Manual when a manual import is in progress in
+`sessionStorage`.
 
-The two AI-topics routes are documented in [ai-labelling.md](./ai-labelling.md).
+| Tab | Input | Who splits the booklet | Result |
+|---|---|---|---|
+| **Auto-detect** | Whole booklets, one job each | Worker pipeline, then admin review | One or more papers per booklet |
+| **Manual** | One paper's PDF | The admin, in the wizard | One paper |
 
-## Auto-detect import
+## Import API (admin only)
 
-On `/admin/import` the admin picks **Auto-detect** or **Manual** (the wizard below, unchanged).
-Auto-detect is the start of automatic import: the admin drops PDF(s), each becomes an **ingest job**
-and shows up in the job list. The [worker](#the-worker) takes it from `queued` to `review_ready` with
-a proposal on the job row. Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
+| Route | Behaviour |
+|---|---|
+| `POST /api/import/upload-pdf` | Manual. Multipart PDF (non-PDF → `422`). Renders pages, returns `{pages, suggested_metadata}`. |
+| `POST /api/import/confirm` | Creates the paper, its questions and pages from temp images. |
+| `POST /api/import/ai-topics`, `POST /api/import/save-topics` | Part split / topic labelling; see [ai-labelling.md](./ai-labelling.md). |
+| `DELETE /api/import/papers/{paper_id}` | Deletes a paper (same as `DELETE /api/papers/{id}`). |
+| `/api/import/uploads`, `/api/import/jobs/…`, `/api/import/papers/pending` | Auto-detect; see [auto-import.md](./auto-import.md#routes). |
 
-### Job routes (admin only; non-admins get `403`)
+Upload routes are plain `def` (run in the thread pool, reading `file.file.read()`), so a large PDF
+never blocks other requests. This also applies to `POST /api/papers/upload-image`.
 
-- `POST /api/import/uploads` `{filename, size}` — step 1 of the **direct-to-S3 upload**; the API
-  never holds the PDF. A `size` outside 1 B to 100 MB is a `422`. It inserts the `ingest_job` in the
-  `awaiting_upload` status with `source_key = ingest/{job_id}/source.pdf` (no task yet) and returns
-  `201` `{job_id, url, fields}`: a presigned S3 POST (`ObjectStore.presign_post`) whose signed policy
-  pins the key, `Content-Type = application/pdf`, `content-length-range` 1 B..100 MB and a 15-minute
-  expiry. The browser POSTs `fields` + the file (the file last) to `url`, using the same
-  `S3_ENDPOINT_URL` as the review-image GET presign, so a local MinIO is reachable the same way.
-  The bucket needs a CORS rule for the app origin ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
-- `POST /api/import/jobs/{id}/uploaded` — step 3. `HEAD`s the object (`ObjectStore.head`): missing is
-  a `409`, a size outside 1 B..100 MB or a content type other than `application/pdf` is a `422`
-  (the job stays `awaiting_upload`; cancel it). Otherwise the job becomes `queued` and the first
-  task (`section` NULL, stage `register`, status `ready`) is inserted: inserting it is what enqueues
-  the job. It logs `ingest_job/created` and writes the `created` event (`filename`, `size`). The
-  status flip is a conditional `UPDATE ... WHERE status = 'awaiting_upload'`, so calling it twice
-  never inserts two tasks: any job not `awaiting_upload` is a `409`. The bytes are **not**
-  inspected: a corrupt, password-protected or empty PDF still gets a job, and fails in the worker
-  (below). No Claude call, so it returns in well under a second.
-- The old multipart `POST /api/import/jobs` no longer exists. Nginx's `client_max_body_size` stays
-  for the Manual tab's `upload-pdf`.
-- An `awaiting_upload` job can be cancelled (`DELETE`, which removes any partial object) but not
-  retried. If the browser cannot finish the S3 POST, the frontend cancels the job itself; an
-  abandoned one is cancelled by the [reconciler](#daily-reconciler) after 1 hour.
-- **PDF validation** is the worker's, not the request's. Before the `register` stage runs,
-  `Edges.before_register` (`app/worker/edges.py`) opens the downloaded source with PyMuPDF; a file
-  that cannot be opened, is password protected, or has no pages fails the `register` task with
-  "The file is not a readable PDF" / "The PDF is password protected" / "The PDF has no pages". A
-  failed task is not retried on its own, so the job ends `failed` with `error` =
-  `register failed: <reason>`, which the job list shows under the status. After `register`
-  succeeds, `after_register` copies `page_count` and `sha256` from its `job.json` onto the job row
-  (both are `NULL` until then, and stay `NULL` for a rejected PDF) and logs `ingest_job/registered`.
-- **Paper metadata** is not extracted in the request. The worker's `segment` task reads each paper's
-  metadata from its own cover ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)): the
-  `after_segment` hook (`app/worker/edges.py`) calls the extractor once per segment pair, with the
-  cover pages cut from the booklet (`extract_pages` in `app/services/ingest_review.py`), and merges
-  the results into `report.paper_metadata[paper_key]` (`record_paper_metadata` in
-  `app/services/ingest_jobs.py`; the key is the proposal paper's `key`). A failure falls back to a
-  filename-only call, then to `{}` for that paper; it never fails the task. `register` extracts
-  nothing. Old jobs keep their `report.filename_metadata`. The extractor stays in `app/` because it
-  needs the DB reference data (`ingestion/` never imports `app`).
-- `GET /api/import/jobs?status=&job_id=&paper_id=` — **every admin's jobs**, newest first, optionally
-  narrowed by `status` (one value, or several comma-separated, e.g. `review_ready,failed`), by `job_id` (a UUID), or by `paper_id` (the job that confirmed that paper:
-  `paper.source_job_id` or the job's `confirmed_paper_ids`). Any admin may also open, retry, cancel,
-  review and confirm any other admin's job (`_get_own_job` only scopes non-admins to their own). Returns
-  `{"data": [...], "worker_alive": bool, "heartbeat_age_s": int|null}`; an unknown `status` is `422`.
-  Each job carries its progress (below).
-- `GET /api/import/jobs/{id}` — the job plus `report`, its `tasks` (status, attempts, duration,
-  warnings, reason/error, ...), its progress and `worker_alive` / `heartbeat_age_s`. Another admin's
-  job, or an unknown id, is `404`.
-- `POST /api/import/jobs/{id}/retry` — runs the pipeline's own `Runner.retry` over the `ingest_task`
-  rows (`_RequestStore` in `app/services/ingest_jobs.py`: `SqlStore` on the request's session), so
-  the dependency rules (needs, soft needs, `report` after the sections, per-route chains) are not
-  re-implemented. Failed and blocked tasks, and every finished task downstream of them, go back to
-  `ready` (or `pending` while their needs are unfinished) with `attempts` reset; the job status is
-  re-derived (`queued`/`running`) so the worker picks it up. Returns the job plus `reopened` (a
-  count; `0` when nothing was broken). A `cancelled`, `confirmed` or `expired` job is a `409`, as is a
-  job with any paper already confirmed or skipped (`report.review_outcome`), since a retry can
-  regenerate the proposal under those decisions.
-- **Progress** on every job (`job_progress`): `stage` — the stage of the running task, else of the
-  most recently finished task, `null` before anything has started; `tasks_done` / `tasks_total` —
-  tasks `done` or `skipped` over all tasks (the total grows as sections fan out);
-  `warnings_count` — warnings summed over the tasks; `needs_review` — any task flagged.
-- **Worker liveness**: `worker_alive` is true when the `worker_heartbeat` row (touched every 30 s)
-  is at most `WORKER_STALE_SECONDS` (90, `app/services/ingest_jobs.py`) old; `heartbeat_age_s` is
-  its age in whole seconds. No row (worker never started) gives `false` / `null`. The server computes
-  both so the UI never compares clocks. With the worker stopped a new job stays `queued`; starting
-  the worker drains it.
-- `GET /api/import/jobs/{id}/review` — `proposal_edited` if present, else `proposal`
-  (`app/services/ingest_review.py::build_review`), with each page given a presigned `url` (via
-  `ObjectStore.presign` of `{job prefix}{page.image}`; `null` when the page has no image) and its
-  `width_px`/`height_px`. The pixel size is `round(pt * REVIEW_ZOOM)`, where `REVIEW_ZOOM` is
-  `ExtractConfig().review_zoom` from the ingestion package — the one place the webapp derives it (the
-  SPA only reads the sizes, never a zoom). Also returns `filename`, `edited`, `page_count`, `paper_metadata` (by paper `key`), `filename_metadata` (old jobs only), and per paper its `key` and `outcome` (`null`, `confirmed`, `skipped` or `attached`). A job with
-  no proposal yet is a `409`.
-- `PUT /api/import/jobs/{id}/proposal` `{papers: [{questions, orphan_answers}, ...]}` — saves the
-  admin's edits as `ingest_job.proposal_edited`; the generated `proposal` is never touched. Admin-only;
-  `409` unless the job is `review_ready`. **Only the editable part is accepted**: one entry per
-  proposal paper holding exactly `questions` and `orphan_answers`, merged server-side onto the
-  *original* proposal (`save_edited_proposal`), so the client cannot rewrite `pages[]` (images, sizes),
-  labels, `unrouted` or warnings. Validation (`422` with a readable message, nothing stored): every
-  rectangle has exactly `page,x0,y0,x1,y1`, its page is one of that paper's `pages[]`, `x0<x1`,
-  `y0<y1` and it lies inside `[0,width_pt]×[0,height_pt]`; question numbers are positive integers
-  unique within a paper; a question has at least one question rectangle, except in an `answer_only`
-  paper (empty `question_rects`, since the answers are its questions; rectangle checks are unchanged). Question numbers stay
-  integers (the proposal's type). The next `GET .../review` returns the edit (`edited: true`).
-- `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` (booklet pages, 1-based,
-  inclusive) — cuts that range out of the job's `source.pdf` and runs it through `upload_pages` (the
-  Manual flow's own renderer), using the job's stored metadata (`filename_metadata`, else the first paper's
-  `paper_metadata`) instead of a second Claude call. Returns the same `{pages, suggested_metadata}` as `upload-pdf`; a bad range is `422`.
-- `POST /api/import/jobs/{id}/confirm` and `/skip` — see [Confirming a paper](#confirming-a-paper).
-- `DELETE /api/import/jobs/{id}` — cancel: sets `cancelled`, commits, **then** deletes the
-  job prefix (`ingest/{id}/`) (a failed S3 delete only orphans temp objects). `204`. A `confirmed`,
-  `cancelled` or `expired` job is a `409`.
+### `POST /api/import/upload-pdf`
 
-The job prefix is always derived from the stored `source_key` (`job_prefix(source_key)`), so jobs
-created before the move, under legacy `tmp/ingest/{id}/`, are still reviewed, confirmed, cancelled
-and swept correctly.
+- Renders each page at 300 dpi (PyMuPDF), **one page at a time**: render, standardise, encode,
+  upload, free. Memory peaks at about one page.
+- Standardise: content only (no margin). Width is capped at 1760 px (downscale only, aspect kept).
+  See [DATA_MODEL.md](../DATA_MODEL.md#image-dimension-standards).
+- Saves WebP q85 to `tmp/{upload_id}/page_{i}.webp`. Returns presigned URLs (2 h) and each page's
+  size.
+- **Always** returns `suggested_metadata` from the filename
+  ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)).
 
-S3 goes through the `get_object_store` dependency (`put` / `get` / `presign` / `delete_prefix`), so
-tests use the `fake_object_store` fixture.
+### `POST /api/import/confirm`
 
-### Job statuses
+- **Input:** paper metadata, `is_premium` (default **true**), and ordered questions, each with its
+  pages (`temp_key`, `page_type`, `page_order`, `width_px`, `height_px`).
+- **Rejected with `422` (`school_level_conflict`)** if the stream and level belong to different
+  school levels ([users-and-premium.md](./users-and-premium.md)).
+- **Creates** the `Paper`, `Question` and `QuestionPage` rows, plus one blank `QuestionPart` per
+  question. Topics and marks come at the review step.
+- **Images:**
+  - Copied to `papers/{paper_id}/q{n}/{page_type}_{page_order}.webp` before the commit.
+  - Temp keys are deleted after it. A failed temp delete is logged and skipped; the `tmp/` lifecycle
+    rule and the reconciler clean up.
+  - If anything fails, nothing is committed and the canonical copies are removed.
+- **After creating the paper:** re-runs answer matching for pending answer-only papers
+  ([qa-pairing.md](./qa-pairing.md#automatic-matching)).
+- **Returns** `paper_id` and the questions/pages with fresh presigned URLs.
 
-| Status | Meaning |
-| --- | --- |
-| `queued` | Created; no task has started |
-| `running` | A task is running, or some have finished and others are still to run |
-| `review_ready` | `report` is done and `ingest_job.proposal` is stored: a proposal is ready for the admin to review |
-| `failed` | Nothing is left to run and there is nothing to review (`error` names the failing stage) |
-| `confirmed` | Every proposed paper was confirmed, skipped or attached; the confirmed ones exist (`confirmed_paper_ids`, `paper.source_job_id`) |
-| `cancelled` | The admin cancelled it; its S3 prefix is removed |
-| `expired` | Historical only: an earlier version of the daily sweep expired jobs left in `review_ready`/`failed` for 7 days. Nothing sets it any more; such rows (and their read-only handling) remain |
+### Deleting a paper
 
-Task statuses: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
+- Deletes the row and cascades to its questions, pages, parts, topics and subtopics.
+- S3 objects are deleted **after** the commit.
+- If the paper came from an ingest job, a `paper_deleted` event is recorded on that job.
 
-The worker derives `queued` / `running` / `review_ready` / `failed` from the job's tasks after every
-task completion (`app.worker.store.derive_job_status`); the API never recomputes it. A job that has
-`report` done and a proposal is `review_ready` **even when some sections failed** (the proposal lists
-them as failed, flagged for the admin). It is `failed` when a job-level stage (`register`, `segment`,
-`split`) failed or was blocked — `report` still runs then, but describes a booklet nothing was
-extracted from — or when the pipeline ends with no proposal. A job in an API-owned state
-(`cancelled`, `confirmed`, `expired`) is never touched.
+## Manual wizard UI
 
-**Retention.** Unconfirmed jobs never expire: a `review_ready` or `failed` job stays, with its S3 prefix
-until the admin confirms, skips or cancels it (the job list's age badge, below, keeps old ones visible).
-Its scratch folder is only a **cache**: it is deleted as soon as the `report` task is recorded `done`
-(see "Scratch and S3 edges"), so a `review_ready` job lives on S3 and the database alone, and a `failed`
-job keeps it so Retry re-runs only the failed tasks. **Settling** a job — every paper confirmed or
-skipped, or the job cancelled — deletes everything under its S3 prefix (`ingest/{job_id}/`, or the
-legacy `tmp/ingest/{job_id}/`): the invariant is *settled job ⇒ prefix empty*. What survives is the
-small debug bundle on the job row (`ingest_job.debug`, below). Once a day the worker (`app/worker/sweep.py`) removes the scratch folders of jobs
-cancelled or confirmed over a day ago (confirming deletes the S3 prefix itself; only the worker knows
-its scratch folder). The sweep is claimed by an atomic update of `worker_heartbeat.last_sweep_at`, so it
-runs at most once a day across restarts and workers. `ingest/` has no bucket lifecycle rule; a bucket
-rule on `tmp/` covers manual-import pages ([DEPLOYMENT.md](../DEPLOYMENT.md), step 6).
+Each step is a state of one page.
 
-### Daily reconciler
+1. **Upload:** a drop zone for multiple PDFs, kept in upload order.
+2. **Processing:** a loading state while pages render.
+3. **Grid:** thumbnails at A4 aspect, at most 5 per row. Click one to open a lightbox.
+4. **Auto-label:** pages are numbered `Q1, Q2, …`.
+5. **Merge:** "Merge with prev" on each thumbnail and in the lightbox. Later pages renumber
+   automatically, and a bracket groups a question's pages.
+6. **Q/A divider:** click or drag between pages. Pages after it become `A1, A2, …` and can be merged
+   the same way.
+7. **Metadata sidebar:** subject, stream, level, school, exam type (from the reference tables), year,
+   paper number (string: "1", "2", "a", …) and **Premium** (ticked by default). Pre-filled from the
+   filename; the admin edits.
+8. **Confirm:** a summary (# questions, # answers, metadata), then `POST /api/import/confirm`.
+9. **Part split, topics and marks:** see
+   [ai-labelling.md](./ai-labelling.md#the-review-step-topicreviewjsx). There is no separate marks
+   step.
 
-Right after the scratch cleanup, the sweep runs the reconciler (`app/worker/reconcile.py`), which
-compares the database with S3 and the scratch disk and reports whatever the happy path missed:
-
-| Check (`kind`) | Rule | Grace |
-|---|---|---|
-| `orphan_job_prefix` | `ingest/{id}/` (and legacy `tmp/ingest/{id}/`) whose job row is missing or settled (`confirmed` / `cancelled` / `expired`) | 1 day after settle (`updated_at`; newest object when the row is gone) |
-| `stale_temp` | any object under `tmp/` except the legacy `tmp/ingest/` (a pending job's source lives there) | 24 h |
-| `orphan_scratch` | scratch folder whose job is not `queued` / `running` / `failed` (or is missing) | 1 day (`updated_at`; folder mtime when the row is gone) |
-| `orphan_paper_image` | key under `papers/` that no `question_page.image_key` references | 7 days |
-| `stuck_job` | `queued` / `running` job with no task holding a live lease and no job/task activity | 6 h; marked `failed` (reason `stuck`; its `ready`/`running` tasks fail too, so Retry works) |
-| `abandoned_upload` | `awaiting_upload` job whose `created_at` is older than the grace (the browser never called `uploaded`) | 1 h; cancelled and its partial object removed |
-| `missing_source` | pending job whose `source_key` object no longer exists | report only, the row is never touched |
-
-Each finding is `{kind, key_or_path, job_id?, age, action}`. It is logged (`WARNING`, with the job
-context when it has a job) and written as an `ingest_event` of kind `reconcile` (the check in
-`data.check`; `job_id` is NULL for findings with no job row: a missing job's prefix, `papers/` and
-`tmp/` keys, an orphan scratch folder of a missing job). Nothing is mutated unless
-**`INGEST_RECONCILE_DELETE=true`** (default off, report-only): that flag gates every deleting action
-*and* marking stuck jobs failed and cancelling abandoned uploads. In dry-run the `action` reads `would_delete` / `would_mark_failed` / `would_cancel`;
-in delete mode `deleted` / `marked_failed` / `cancelled` (`delete_failed` if the delete raised); `report_only` for
-missing sources. A failing check is logged and never stops the others or the worker. The older
-cancelled/confirmed scratch cleanup above is unchanged and still runs regardless of the flag; the
-reconciler's scratch check covers the rest. Deleting a paper (either route) logs a `paper_deleted`
-event against its source job (`paper.source_job_id` or the job's `confirmed_paper_ids`).
-
-### UI
-
-`ImportPage` shows an Auto-detect / Manual tab pair (it opens on Manual if a manual import is in
-progress in `sessionStorage`). `ManualImport` is the old wizard, unchanged. `AutoImport` is a
-compact drop zone (one job per dropped PDF) above the job list. Each file goes through `api.import.uploadJob`: `POST /uploads`, then an `XMLHttpRequest` POST to S3 with a per-file progress bar (the drop zone's "Uploading" list), then `POST /jobs/{id}/uploaded`; if the S3 POST or `uploaded` fails the job is cancelled (`DELETE`) and the error shown. An `awaiting_upload` row reads "Uploading", can be cancelled, and is not part of **Awaiting review**. Each row shows the filename (click
-to open the job detail), status, the current stage with a `done/total` progress bar, the warnings
-count, a "Needs review" marker, the failure reason of a `failed` job (e.g. "register failed: The PDF is password protected"), created time, and Retry and Cancel buttons. Unsettled jobs (anything but `confirmed`/`cancelled`/`expired`) carry an **age badge** beside the created time ("waiting 12 days", from `created_at`), highlighted amber once past 14 days. An **Awaiting review** checkbox narrows the list to `review_ready` and `failed` jobs (both wait on the admin: review/confirm, or retry/cancel) via `status=review_ready,failed`; it combines with the job-id/paper-id search. The list polls
-`GET /api/import/jobs` every 3 s (`POLL_MS`) while any job is `queued` or `running` and stops when
-none is and on unmount; Refresh is still there. While a job is active and `worker_alive` is false
-the list shows a "Worker offline" banner and marks the waiting rows. The job detail (`JobDetail`)
-lists every task with its section, status, duration, warnings and reason or error, and refreshes
-with each poll. A failed task also has a collapsed "Traceback" (the task's stored `traceback`).
-
-### Review page
-
-`/admin/import/jobs/:jobId/review` (`ReviewPage`), linked as "Review" from each `review_ready` row of
-the job list. It shows one proposed paper at a time (tabs when there are several; a paper with
-`role: "answer_only"` (`label: null`) holds answers only: its list reads "Answer N" with the number of
-rectangles, and the metadata sidebar is replaced by the "Match to paper…" panel (see
-[Matching by hand](#matching-an-answer-only-paper-by-hand); "Skip this paper" still works). Left: a strip of the paper's pages — a flagged page
-(`needs_review`) has an amber border and its reason as a tooltip. Centre: the clean page image with
-the question rectangles (blue), answer rectangles (green) and unmatched `orphan_answers` (grey,
-dashed) as an SVG overlay whose `viewBox` is the image's pixels; each rectangle is mapped from PDF
-points by `rectToPx` in `reviewGeometry.js` (`width_px / width_pt` per axis, from the API's sizes).
-Right: the question list with each question's flags (`pixel_ink`, `grid_page`, `page N: reason`);
-clicking a question selects it and jumps to its first page.
-
-**Editing.** Click a rectangle to select it (its question is highlighted); the selected rectangle
-gets four edge handles to drag (pointer position → points via `clientToPt`), and Delete/Backspace
-removes it unless focus is in an input. In the question list each question has a number field
-(committed on blur/Enter; a duplicate or non-positive number is refused with the reason), and the
-selected question offers "Merge with previous", "Split before selected rectangle" and "Split
-selected rectangle in half". All edits are pure functions on the paper in `proposalReducer.js`
-(points; a refused edit returns the paper unchanged), covered by `proposalReducer.test.js`. Rules:
-- *Resize* clamps to the page and a 4 pt minimum size; works for question, answer and orphan rectangles.
-- *Delete* removes one rectangle. Deleting a question's last question rectangle deletes the question
-  and its answer rectangles become orphan answers (nothing disappears silently).
-- *Merge* folds a question into the previous one: it keeps the previous number and concatenates
-  question rects, answer rects and flags.
-- *Split* — between rectangles or by a horizontal cut through one (here the rectangle's midpoint;
-  adjust the edges afterwards). The first part keeps the number and **all answer rects**; the new
-  second part gets `max(number)+1` (renumber it) and no answers.
-
-Edits save through `PUT .../proposal` debounced by 800 ms (and immediately when leaving the page); the
-header shows Saving… / Saved / Not saved, with the server's message on a rejected save. Reloading
-shows the saved edits because `GET .../review` prefers `proposal_edited`. There is no "reset to
-original" yet.
-
-Every `unrouted` section is listed above the paper with its reason and page range. "Handle manually"
-calls `manual-pages` for that range, writes the Manual wizard's `sessionStorage` session
-(`manualHandoff.js`: step `review`, the pages, the suggested metadata) and navigates to
-`/admin/import`, which opens on Manual. This is how a scanned question paper — whose answer key
-extracted but whose questions could not be located — is finished by hand. The range comes from the
-proposal's `unrouted[].first_page`/`last_page` (see `ingestion/README.md`).
-
-### The worker
-
-`python -m app.worker` (`app/worker/`) is a separate process that runs queued jobs through the
-`ingestion/pipeline` stages (see [pipeline/README.md](../../ingestion/pipeline/README.md) and
-[ADR 0001](../adr/0001-stage-pipeline.md)). One process, one task at a time.
-
-- **Loop.** Each pass writes the `worker_heartbeat` row, then the pipeline `Runner` claims one ready
-  task through `SqlStore` (`app/worker/store.py`), runs it in the job's scratch folder, and records
-  status, duration, warnings, `needs_review` and reason/error. The claim is
-  `SELECT ... FOR UPDATE SKIP LOCKED` ordered by job (oldest first) then task (stage) order, followed by
-  an update guarded by `WHERE status = 'ready'` whose row count says whether this claimer won (that
-  guard is what the SQLite unit tests exercise; SKIP LOCKED itself is Postgres-only). Tasks of a job
-  that is not `queued`/`running` — a cancelled job — are never claimed. `SqlStore.complete` records
-  the outcome and the fan-out tasks (`split` creates each section's tasks) in one transaction and is
-  refused for a task whose lease was lost; `add_tasks` is idempotent on `(job, section, stage)`.
-  The API creates only the `register` task; `register`'s hook creates the rest of the job-level chain
-  (`segment`, `split`, `report`).
-- **Job status** is derived from the tasks on every completion (above), with `report` supplying the
-  proposal.
-- **Leases.** A claim sets `lease_until = now() + 10 min`. A liveness thread refreshes the running
-  task's lease and the heartbeat every 30 s (and the runner's own heartbeat thread does too), so a
-  long stage keeps its task. On start, tasks past their lease go back to `ready` (`failed` after 3
-  attempts; the runner also does this on every pass).
-- **Shutdown.** SIGTERM/SIGINT finish the current task and exit cleanly.
-- **Scratch and S3 edges** (`app/worker/edges.py`, composed around the stages — `ingestion/` knows
-  nothing of S3). The job's scratch folder is `$INGEST_SCRATCH_DIR/{job_id}/`
-  (default `/tmp/ingest/`). Resolving it fetches `ingest/{job_id}/source.pdf` from S3 into it when
-  missing, so `register` finds its input and a restart that lost the folder gets the booklet back
-  before any stage reads it. Artefacts lost with the folder are **not** re-downloaded: their tasks'
-  outputs are missing, so on start `Runner.revalidate` reopens them and they run again (slower, not
-  wrong); with the folder intact, fingerprints keep finished tasks as they are. After `register`
-  succeeds the job's page count and sha256 are recorded; after `segment` each paper's metadata is extracted (`report["paper_metadata"]`). After `report`
-  succeeds the review images `pages/pNN.webp` (booklet page numbering) are uploaded to
-  `ingest/{job_id}/pages/` and the proposal is stored in `ingest_job.proposal`; the run summary
-  (per-stage timing, deduplicated warnings, `needs_review`, one entry per task) is merged into
-  `report` next to `paper_metadata`, and `segments.json` and `ingest.json` are copied into the
-  `ingest_job.debug` JSONB column (`{"segments": …, "ingest": …}`, a few KB). Once the runner has
-  recorded `report` done, `Worker.run_once` calls `Edges.release_scratch`, which deletes the job's
-  scratch folder (only if the proposal is on the row and the job is not `failed`). It is done *after*
-  completion, not inside the `after_report` hook, because the hook runs before the task is marked
-  done: a crash in between would leave `report` unfinished with its inputs gone and rerun the whole
-  job. After completion a crash only leaves the folder behind, which the daily sweep removes once the
-  job settles. `review_ready` jobs are never revalidated (the worker revalidates only `queued` /
-  `running` jobs), and review, confirm and manual pages read only S3 and the database, so the missing
-  artefacts are never looked for; if a failed job's scratch is gone (a redeploy) `Runner.revalidate`
-  re-runs from the S3 source as before. The images go up from `report`, not `render`, because the
-  job-level `pages/` folder the proposal's image paths name is assembled by `report` (`render` writes
-  only each section's own `review/` folder). A job cancelled while `report` runs gets no upload.
-- **Memory.** PyMuPDF pages are rasterised one at a time and freed in the extractor (no list of
-  pixmaps), and the worker reads each review image from disk only as it uploads it.
-- **Config (env).** `INGEST_SCRATCH_DIR`, `INGEST_OCR_COMMAND` (the Tesseract command, split like a
-  shell line; `tesseract` in the container), `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` — each
-  defaulting to the ingestion config. `INGEST_FIXTURES_DIR` is for development only: a folder of
-  `<paper>.segments.json` plans (named after the uploaded filename) copied beside the scratch
-  `source.pdf` so the `segment` stage uses them instead of the Messages API.
-- **Lifecycle logging and tracebacks.** Every log line is JSON with the job id (see
-  [ARCHITECTURE.md](../ARCHITECTURE.md)). Each lifecycle event is exactly one INFO record carrying
-  the `job_id`, with the event in `func`/`step` and its details as fields: `ingest_job/created`
-  (filename, size, user_id; the sha256 and page count are not known yet) followed by `ingest_job/registered` (sha256, page_count, logged by the worker), `ingest_task/claimed` and `ingest_task/finished`
-  (status, duration_s; logged by the runner; the same transitions are also appended to the
-  `ingest_event` audit table, see [DATA_MODEL.md](../DATA_MODEL.md), by `app/services/ingest_events.py`
-  in the transaction of the change they describe, the task ones inside `SqlStore`), `ingest_job/proposal_stored` (the worker saved the
-  proposal) and `proposal_saved` (the admin saved an edit), `paper_confirmed` (paper_id),
-  `paper_skipped`, `paper_attached` (paper_id, attached and unmatched numbers), `retry` (reopened tasks), `cancelled`, and (historical rows only) `expired`. The API-side events
-  go through `app.logger.log_job_event`. A stage that raises is logged at ERROR with the exception
-  attached (`exc`), and the runner stores the last `PipelineConfig.traceback_chars` (4096)
-  characters of the traceback on the task (`Outcome.traceback` -> `Store.fail` ->
-  `ingest_task.traceback`; the pipeline's SQLite store has the same column). It is returned as
-  `traceback` in each task of `GET /api/import/jobs/{id}` and cleared when the task is claimed
-  again or reopened by a retry. A failure a stage *reports* (`failed(...)`) has no traceback.
-- **Token logging and job cost.** Every Claude call made for a job logs `<func>/tokens` with its
-  Anthropic request id (`anthropic_request_id`, distinct from the API `request_id` context field),
-  model, token counts and `cost_usd`, stamped with the job id by the log context. The segment
-  stage's usage reaches `app.ai.job_cost.record_usage` through `ingester.request.usage_listener`
-  (`listener(model, usage, request_id)`, set by the worker); the per-paper metadata calls
-  (`app/ai/filename_extractor.py`) calls the same function. `record_usage` also adds the call to
-  `ingest_job.report["cost"]` (`calls`, `input_tokens`, `output_tokens`, `cache_write`, `cache_hit`,
-  `cost_usd`), returned as `report.cost` by `GET /api/import/jobs/{id}`. The update runs in its own
-  short transaction under `SELECT ... FOR UPDATE` on the job row, so concurrent tasks of one job
-  cannot lose each other's update; writers of other `report` keys re-read the row first
-  (`record_paper_metadata` and `after_report` lock). Prices live only in
-  `app.logger._PRICES` (`usage_fields`); `claude-haiku-4-5` and `claude-opus-5` (the retry model)
-  are priced.
-- **Testing seam.** `app.deps.get_pipeline_runner()` returns the factory the worker builds its runner
-  with; tests pass a factory whose stages write a canned proposal (`tests/test_worker.py`). Setting
-  `WORKER_TEST_DATABASE_URL` to a scratch Postgres database runs the worker tests there too.
-
-## Server-side pipeline
-
-*(The Manual flow.)*
-
-### 1. `POST /api/import/upload-pdf`
-
-- Accepts a single PDF (multipart). Non-PDF content types → `422`.
-- The handler is a plain `def`, so FastAPI runs it in its thread pool and the blocking work (PDF render, S3 puts, DB commits) never stalls the event loop. `POST /api/papers/upload-image` follows the same rule: upload routes are `def` and read with `file.file.read()`, never `async def` + `await file.read()`.
-- **PyMuPDF** renders each page to an RGB image at 300 dpi. Pages are processed **one at a time**
-  (`app/services/ingest.py::iter_pdf_pages` is a generator): a page is rendered, standardised,
-  encoded and uploaded, then released before the next is rendered. A 300 dpi page is ~26 MB, so
-  holding a whole booklet (~2 GB for 80 pages) would not fit the 6 GB VM; the peak is now one page's
-  pixmap/image plus the stored WebP bytes.
-- `app/pdf/image_processing.py::standardize` stores each page **content-only** (no margin),
-  downscaling to a **1760 px** width (aspect preserved) only when wider, otherwise unchanged. Page
-  margins and question numbers are added later by the generation engine. See
-  [DATA_MODEL.md](../DATA_MODEL.md#image-dimension-standards).
-- Encodes WebP at quality 85 (`to_webp_bytes`).
-- Stores images under `tmp/{upload_id}/page_{i}.webp` and returns presigned URLs (2-hour expiry) for
-  the grid preview, plus each page's width/height.
-- **Always** calls AI filename-metadata extraction and returns `suggested_metadata` alongside the
-  pages — unconditional, not optional.
-
-### 2. `POST /api/import/confirm`
-
-- Accepts paper metadata + an ordered list of questions, each with its pages (`temp_key`,
-  `page_type`, `page_order`, `width_px`, `height_px`).
-- Accepts an optional `is_premium` flag, **defaulting to `true`** — imported papers are premium
-  unless the admin unticks the box.
-- **Rejects a stream and level from different school levels with a `422`**
-  (`school_level_conflict`, shared with the paper `PUT`). Premium is sold per school level and the
-  paywall reads the *level*'s, so a mismatched paper would read as Secondary in the UI while being
-  sold to Primary customers. See [users-and-premium.md](./users-and-premium.md).
-- Creates `Paper`, `Question` and `QuestionPage` rows transactionally. Each question also gets a
-  single blank `QuestionPart`: topics and marks arrive later, at the review step, but the
-  every-question-has-a-part invariant holds from creation.
-- Moves images from the temp key to the canonical pattern
-  `papers/{paper_id}/q{question_number}/{page_type}_{page_order}.webp` (S3 server-side copy, then
-  delete of the temp object).
-- Persists `width_px` / `height_px` per page.
-- Returns the created paper id plus serialized questions/pages, each page carrying a fresh presigned
-  URL.
-
-### 3. `DELETE /api/import/papers/{paper_id}`
-
-Deletes the `Paper` row — cascading to `Question` / `QuestionPage` / `QuestionPart` and, through the
-part, `QuestionTopic` / `QuestionSubtopic` — then deletes the S3 objects **after** the DB
-transaction succeeds.
-
-## Import wizard UI (admin)
-
-`/admin/import`. Each step is a UI state in the same page.
-
-### Step 1 — Upload PDF(s)
-Drag-drop zone accepting multiple PDFs; files are appended in upload order, preserved through the
-flow.
-
-### Step 2 — Server processes PDF → page images
-Loading state while the server renders pages, which come back as image URLs.
-
-### Step 3 — Grid preview
-All returned pages as a thumbnail grid — **max 5 per row** (fewer on narrow screens), thumbnails at
-an A4 aspect ratio so they scale with the cell width. Click a thumbnail for a **lightbox / zoom
-modal**.
-
-### Step 4 — Auto-label questions
-Every page is auto-assigned `Q1, Q2, Q3, …` sequentially, rendered on each thumbnail.
-
-### Step 5 — Manual adjust (merge pages into one question)
-Each page has a "Merge with prev" toggle — available both on the thumbnail and inside the lightbox,
-so pages can be merged while paging through zoomed images without leaving fullscreen. Marking a page
-a continuation **auto-renumbers all subsequent pages** (Q4 → Q3, Q5 → Q4, …). A visual cue (e.g. a
-left bracket) groups pages belonging to one question.
-
-### Step 6 — Set Q/A divider
-Click between two adjacent pages, or drag a divider line, to mark where Questions end and Answers
-begin. Pages after the divider relabel as `A1, A2, A3, …`. Answer pages support the same multi-page
-merging as step 5.
-
-### Step 7 — Set paper metadata (sidebar)
-Dropdowns populated from the reference tables — Subject, Stream, Level, School, Exam Type — plus
-Year (number), Paper Number (string: "1", "2", "a", "b") and a **Premium paper** checkbox, ticked by
-default. **AI pre-fill:** when the upload completes, filename extraction pre-populates the form (see
-[ai-labelling.md](./ai-labelling.md#filename-metadata-extraction)); the admin confirms or edits.
-
-### Step 8 — Confirm upload
-Shows a summary — # questions, # answers, metadata — then calls `POST /api/import/confirm`.
-
-### Step 9 — AI part split, topics & marks
-See [ai-labelling.md](./ai-labelling.md#the-review-step-topicreviewjsx). There is no separate "set
-marks" step: marks come from the parts.
-
-### Components
-
-`<UploadDropZone />`, `<PageGrid />` + `<PageThumbnail />` + `<Lightbox />`,
-`<QuestionGroupingControls />` (merge / un-merge with auto-renumbering), `<QADivider />`,
-`<MetadataSidebar />`, and `<PartsEditor />` (step 9, shared with the admin question editor).
+Components: `UploadDropZone`, `PageGrid` + `PageThumbnail` + `Lightbox`, `QuestionGroupingControls`,
+`QADivider`, `MetadataSidebar` (also used on the auto-import review page), `PartsEditor`.
 
 ## Editing an imported paper
 
-`/admin/papers` lists imported papers; `PaperEditor.jsx` opens one. Each question is a
-`QuestionEditor.jsx` card: question number, page-image editors, tags, and a `<PartsEditor />` for its
-parts. There is **no question-level marks field** — marks are per part and the total is derived.
+`/admin/papers` lists papers; `PaperEditor.jsx` opens one. Each question is a `QuestionEditor.jsx`
+card with its number, page-image editors, tags and a `PartsEditor`.
 
-The admin question-CRUD endpoints share the parts write path with import:
-
-```
-POST   /api/papers/{id}/questions   -- { question_number, parts, tag_ids, pages }
-PUT    /api/questions/{id}          -- same shape
-PUT    /api/papers/{paper_id}       -- full metadata update (requires every FK id)
-```
-
-Both question endpoints take `parts: [{label, marks, topic_assignments}]` — no question-level
-`marks`, since it is derived — and return the question with `marks` (the sum) plus
-`parts: [{part_order, label, marks, selections: [{topic_id, subtopic_id}]}]`, where `selections` is
-the flat cross-product shape the editor UI consumes. See
-[ai-labelling.md](./ai-labelling.md#the-shared-parts-write-path).
-
-**Re-run AI** re-labels one question through `POST /api/import/ai-topics` and replaces its parts with
-the suggestion. The paper-level re-label does the same for every question, and is triggered when an
-admin changes the paper's subject or stream — which invalidates the existing topic labels, since
-topics are scoped to (subject, stream). Clearing those labels reaches them through `question_part`;
-the **parts themselves and their marks survive**, only the now-out-of-scope topic assignments go.
-
-For the Premium checkbox on the papers list, see
-[users-and-premium.md](./users-and-premium.md#flagging-a-paper-premium).
-
-### Provenance of confirmed content
-
-Confirming an auto-import paper records where each stored image came from in the source PDF, all
-nullable (manual imports leave them null): `question.section` (the paper's question label, e.g.
-`q1`; the answer label for an answer-only paper) and `question.proposal_question_index` (0-based
-position in the paper's `questions`), and on each `question_page` `source_page` (the booklet page
-number used in the proposal) and `source_rect` (JSON `{x0, y0, x1, y1}` in PDF points, the
-proposal's rectangle shape). Set by `build_confirm_payload` and stored by `confirm_import`.
-
-The import jobs list has a search box (job id as a UUID, or a numeric paper id), and the job detail
-shows the job id with a copy button.
-
-## Confirming a paper
-
-The review page's right-hand column is the Manual wizard's own `MetadataSidebar` (shared component),
-pre-filled from the selected paper's own `report.paper_metadata[key]` (returned by `GET .../review` as
-`paper_metadata`; an old job falls back to `filename_metadata`; absent means empty). Edits are kept per paper with **Confirm paper** and **Skip this paper**. Each proposed paper is confirmed
-or skipped on its own (tabs show the outcome). Confirming opens the Manual flow's `TopicReview` on
-the created paper, unchanged; "Skip topics" leaves it with its blank part for Manage Papers. After the
-last decision the page returns to `/admin/import`.
-
-**Identifying a paper.** `paper_label` is the proposal paper's `key` (in `GET .../review`): its
-question `label` (`q1`), else its `answer_label` (`a1`) for an answer-only paper (`label: null`), else
-`paper{position}`. Question and answer labels come from different sections, so keys do not clash.
-
-`POST /api/import/jobs/{id}/confirm` `{paper_label, subject_id, stream_id, level_id, school_id,
-exam_type_id, year, paper_number, is_premium}` (admin, any admin's job; `201`):
-
-1. The job must be `review_ready` and the paper undecided, else `409`; an unknown label is `404`; a
-   stream/level from different school levels is `422`, as in `/confirm`. A paper with **no questions**
-   (an unrouted question section whose answers are all orphans) is `422` — it can only be skipped. So is
-   an **`answer_only`** paper (`role` on the proposal paper; a proposal without `role` is a `question` paper): `422`
-   pointing to attaching it to its question paper, or skipping it.
-2. `app/services/ingest_confirm.py::build_confirm_payload` opens `source.pdf`, and for each rectangle
-   of the *edited* proposal (else the original) renders `page.get_pixmap(dpi=300, clip=rect)`,
-   `standardize`s it (wider than 1760 px is scaled down), encodes WebP and uploads it with `put_image`
-   to `tmp/{upload_id}/page_{n}.webp`. One rectangle at a time; each pixmap is freed before the next.
-   A failure deletes the images already uploaded.
-3. Each proposal question becomes one payload question (`question_number` = its number); its
-   `question_rects` become `question` pages and its `answer_rects` `answer` pages, in list order,
-   `page_order` from 1 per type, with the cropped image's `width_px`/`height_px`. **Orphan answers
-   are not imported** (the UI says so).
-4. `confirm_import` runs with a `before_commit` callback: after the S3 copies and just before its one
-   commit, the callback sets `paper.source_job_id`, appends the paper id to `confirmed_paper_ids` and
-   stores `report.review_outcome[key] = "confirmed"`. The paper, its `source_job_id` and the job
-   outcome therefore commit in **one** transaction, and so does the paper's `ingest_paper` row (`status = confirmed`, `paper_id`, and the
-   confirmed metadata, `metadata_source = admin` if it differs from what the row held) (if the callback raises, nothing is committed and
-   the canonical copies are removed); the temp-image deletes run after the commit, and a failed
-   delete is logged with its key and skipped (the `tmp/` lifecycle rule picks up leftovers). The response is `/confirm`'s (`paper_id`, `questions`) plus `job_status`.
-
-`PUT .../papers/{key}/metadata` `{school_id, year, level_id, subject_id, exam_type_id, stream_id,
-paper_number}` (all optional; `review_ready` job and still-pending paper, else `409`; unknown key `404`) stores the
-sidebar's values on the paper's `ingest_paper` row (source `admin` when something changed). `ReviewPage` calls it
-debounced (800 ms) as the admin edits; it is best effort, since confirm sends the final metadata anyway. The table is
-described in [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
-
-`POST .../skip` `{paper_label}` records `review_outcome[key] = "skipped"` (and `ingest_paper.status = skipped`, same transaction) (`200`, `{job_status}`; the
-same `404`/`409` rules). When every proposal paper has an outcome the job becomes `confirmed` (an
-all-skipped job too, with `confirmed_paper_ids` null) and its whole job prefix (`ingest/{id}/`)
-(source, review pages) is deleted after the commit; a failed delete is logged, and the bucket
-lifecycle rule backs it up. A job whose proposal has no paper at all can only be cancelled. The row is
-locked (`FOR UPDATE`) while deciding, so a double click yields a `409`. Because the paper and the
-job outcome commit together, a paper can never exist while its job still offers it, so a retry cannot
-duplicate it.
-
-### Attaching answers to an existing paper
-
-`POST /api/import/jobs/{id}/attach` `{key, paper_id, mode?}` (`attach_answers` in
-`app/services/ingest_confirm.py`) attaches an `answer_only` proposal paper's answers to an existing
-paper. Only an answer-only paper can be attached (`422` otherwise), the target must exist (`404`), and
-the usual `404`/`409` review rules apply.
-
-- **Matching** is by question number: a proposal number is read as an integer (`1`, `"1"`, `" 01 "`
-  all mean 1) and compared with `question.question_number`. Two proposal entries with the same number
-  have their rectangles merged. Answers whose number is not a plain integer (`"1a"`) or has no
-  question in the target paper are **not attached but returned** in `unmatched`; if nothing matches
-  at all the request is a `422` naming them, and nothing changes.
-- **Crops** reuse `build_confirm_payload` (same `render_crop`, same provenance: the new
-  `question_page` rows carry `source_page` / `source_rect`), and the page rows are written with
-  `paper_admin.apply_page_changes`, so `page_order` never collides.
-- **Mode** is `append` (new answer pages after the existing ones) or `replace` (a question's existing
-  answer pages are removed and the new ones take their place). Omitted, the server applies the default
-  per question: `replace` when the question has no answer pages yet, else `append`. The review page
-  needs no preview endpoint: it fetches the target with the existing `GET /api/papers/{id}`, and only
-  when a question that would receive answers already has answer pages does it ask, defaulting to
-  `append`; otherwise it sends no `mode`.
-- **Atomicity** follows confirm: crops go to `tmp/`, are copied to canonical keys before the commit
-  (`commit_with_page_moves`), the temp keys and the replaced answers' images are deleted only after it,
-  and a failure rolls back and removes any canonical copy (and the temp crops). The page rows,
-  `review_outcome[key] = "attached"` (`_record`, which also appends `paper_id` to
-  `confirmed_paper_ids`), the `ingest_paper` row (`status = attached`, `paper_id`) and a
-  `paper_attached` event commit in one transaction; a failure recording the outcome leaves the paper
-  unchanged. `attached` counts as decided, so a job whose papers are all confirmed, skipped or
-  attached settles (`confirmed`) and its prefix is dropped.
-- **Response**: `{attached: [numbers], unmatched: [numbers], modes: {number: mode}, job_settled,
-  job_status}`. The review page shows the attached and unmatched numbers.
-
-### Matching an answer-only paper by hand
-
-The review page's **Match to paper…** panel (`MatchPanel.jsx`, which replaced the bare attach panel)
-finds the paper an answer-only paper belongs to.
-
-- **Filters** (subject, stream, level, school, exam type, year, paper number) start from the paper's
-  own metadata (`paper_metadata[key]`) and re-run the search on every change.
-- **Candidates**: confirmed papers from `GET /api/papers` (which has no paper-number filter, so the
-  panel narrows by it client-side) and pending question papers from `GET /api/import/papers/pending`.
-  The latter returns the `ingest_paper` rows with `role = question`, `status = pending` of other
-  `review_ready` jobs (`exclude_job_id` drops the current one) whose metadata equals every given
-  filter (`school_id`, `year`, `level_id`, `subject_id`, `exam_type_id`, `stream_id`, `paper_number`),
-  newest job first. Each has `ingest_paper_id`, `job_id`, `filename`, `paper_key`, `metadata` and a
-  `preview`: the first question's first rectangle with its review page image URL and sizes.
-- **Preview**: the selected candidate's first question beside this paper's first answer. A confirmed
-  candidate shows its first question page image (from `GET /api/papers/{id}`); a pending one shows
-  the rectangle cut out of its review page image (`RectPreview`, via `rectToPx`).
-- **Confirmed candidate -> Attach**: selecting one fills the paper id; the button is the
-  [attach flow](#attaching-answers-to-an-existing-paper) unchanged, including the append/replace
-  prompt. The paper id can also be typed.
-- **Pending candidate -> Link**: there is no paper to attach to yet, so the button links the two
-  ingest papers: `POST /api/import/jobs/{id}/papers/{key}/match {ingest_paper_id}` sets
-  `matched_ingest_paper_id` on both rows (a row's earlier link is released; `422` unless this paper is
-  an answer-only paper and the target a pending question paper of another review-ready job).
-  `DELETE` on the same path unlinks both sides. The review response carries `matches`
-  (`{paper key: {ingest_paper_id, job_id, filename, paper_key}}`); both review pages show
-  "Linked to <filename> <key>" with an Unlink button on the answer paper's page; the question paper's
-  page shows "Answers available from <filename> (<key>) — they will be attached when you confirm" (Unlink
-  too). Confirming the question paper pulls the answers in: see
-  [Confirming a linked pair](#confirming-a-linked-question-and-answer-pair).
-  A pending-paper link takes precedence over an automatic proposal (see below), which is hidden while it exists.
-- **Job list**: the "Unmatched answers" checkbox sends `unmatched_answers=true`, keeping jobs with
-  at least one `answer_only` paper that is `pending` and has no `matched_ingest_paper_id`. It combines
-  with the other filters.
-
-### Confirming a linked question and answer pair
-
-When question paper `key` is linked (`matched_ingest_paper_id`) to a pending answer-only paper of
-another job, `POST .../confirm` brings those answers in and settles both papers in one transaction
-(`confirm_job_paper`):
-
-- **Locking**: both job rows are locked `FOR UPDATE`, lowest job id first (no deadlock between two
-  confirms of one pair).
-- **Usable only if** the answer job is still `review_ready`, its paper still `pending`, undecided, and
-  still linked back; otherwise the confirm proceeds without it and logs a warning.
-- **Crops**: the answer rectangles of the answer paper (its job's `proposal_edited`, else `proposal`) are
-  cropped from **that** job's `source.pdf` and mapped to the new paper's questions by question number.
-  They are added as answer pages **after** the question paper's own answer pages (`page_order` continues
-  from the last one), with provenance (`source_page`, `source_rect`) from the answer job's PDF.
-- **Unmatched numbers** (no such question, or not a plain number) are not attached; they come back in
-  `unmatched`. If nothing matches, the answer paper is left pending (and linked) and `answers_from` is null.
-- **Same transaction (`before_commit`)**: the question paper is recorded `confirmed` and the answer paper
-  `attached` (with `paper_id`) in both jobs' `review_outcome`, `confirmed_paper_ids` and `ingest_paper`
-  rows, each job gets its event (`paper_confirmed` with `answers_from_job`; `paper_attached` with `via_job`,
-  `attached`, `unmatched`), and each job whose papers are all decided becomes `confirmed`. After the commit
-  each settled job's prefix is dropped. A failure rolls everything back and deletes the temp crops.
-- **Response** adds `answers_from` (`{job_id, filename, paper_key, attached}` or null) and `unmatched`;
-  `ReviewPage` shows both above the topic review.
-
-Skipping a linked question paper releases the link and the answer paper is matched afresh.
-
-### Automatic matching to a confirmed paper
-
-`app/services/ingest_matching.py` proposes, for each **pending answer-only** `ingest_paper`, the
-confirmed paper it belongs to. The result is stored on the row (`match_status`, `proposed_paper_id`,
-`match_note`; see [DATA_MODEL.md](../DATA_MODEL.md)). It is only ever a proposal: nothing is attached
-until the admin accepts.
-
-| Situation | `match_status` |
+| Route | Behaviour |
 |---|---|
-| All seven key fields known and exactly one `paper` has that key | `proposed` (+ `proposed_paper_id`) |
-| All seven known and several papers share the key (`paper` has no unique index) | `manual`, note "N papers have this key" |
-| No exact match, or a field is unknown, but papers share `school_id` + `year` + `subject_id` with the row (the *partial* rule; those three must be known) | `manual`, note "partial: ... differ" / "partial: unknown ..." |
-| Anything else | NULL (nothing to do) |
+| `POST /api/papers/{id}/questions` | `{question_number, parts, tag_ids, pages}` |
+| `PUT /api/questions/{id}` | Same shape |
+| `PUT /api/papers/{paper_id}` | Full metadata update (every FK id required) |
 
-`paper_number` is not normalised in the bank, so it is compared after trimming and case-folding only
-(`"2A"` matches `" 2a "`, not `"02A"`). A row linked to a pending question paper (`matched_ingest_paper_id`)
-is left alone: the admin's link wins, and unlinking re-runs matching. Settling a paper (attach or skip,
-via `set_status`) clears the proposal.
+- **No question-level marks.**
+  - Input: `parts: [{label, marks, topic_assignments}]`.
+  - Output: `marks` (the sum) plus `parts: [{part_order, label, marks, selections}]`.
+  - See [ai-labelling.md](./ai-labelling.md#the-shared-parts-write-path).
+- **Re-run AI** re-labels one question (`ai-topics`) and replaces its parts.
+- **Changing the paper's subject or stream** re-labels every question. Topic assignments out of the
+  new (subject, stream) scope are cleared; the parts and their marks survive.
+- **Page edits** go through the same copy-before-commit, delete-after-commit rule, with
+  collision-safe `page_order`.
+- **Premium checkbox:** [users-and-premium.md](./users-and-premium.md#flagging-a-paper-premium).
 
-**Pending-to-pending auto link (#84).** For a pending answer-only paper with all seven fields known and
-no exact confirmed paper (a single confirmed match wins and stays a proposal), the pending `question`
-papers of *other* `review_ready` jobs, still unlinked, with the exact key (same `paper_number` rule) are
-looked up: exactly one is linked on both rows (`match_status` `auto`, note "auto-linked"); several give
-`manual` ("N pending question papers have this key"). The same is tried from the question side
-(`match_job` of a question job links older pending answer jobs; if several answer papers share the key,
-none is linked). Rules: a link the admin set (via Match panel, `match_status` NULL) is never touched; an
-**auto link is recomputed from scratch** on every re-evaluation (metadata edit, `match_job`, new paper), so
-it drops when a metadata change breaks the key; **Unlink** leaves both rows `unlinked`, which stops
-auto-linking until a metadata edit of either paper resets it. The `matches` in the review response cover
-auto and manual links alike.
+## Provenance
 
-**When it runs**
-- End of the worker's `after_report` (`match_job`), in the same transaction as the proposal and `ingest_paper` upsert.
-- `PUT .../papers/{key}/metadata` re-matches that paper in the same transaction and returns `proposal`.
-- Any paper creation (`confirm_import`, which both `confirm_job_paper` and the manual import use) calls
-  `match_for_new_paper`: it re-matches pending answer-only papers of `review_ready` jobs sharing the new
-  paper's school, year and subject, so the new paper shows up as a ready-to-attach target on the answer job
-  (or turns a single proposal into "several"). It runs in the confirm's own transaction, inside a savepoint
-  and with every exception swallowed and logged, so it commits or rolls back with the paper and can never
-  make the confirm fail.
+Content confirmed from an auto-import job records its origin. All fields are nullable, and Manual
+imports leave them null.
 
-**Review page**: the review response has `proposals` (`{paper key: {status, note, paper}}`, `paper` being
-`{id, school, year, level, subject, exam_type, stream, paper_number}` for a proposal). In the Match panel
-a proposal reads "Answers match <paper> — Attach"; one click runs the normal attach flow (asking
-append/replace only if the target's questions already have answers). `manual` shows the note and "Several or
-partial matches — pick one below".
+| Column | Value |
+|---|---|
+| `paper.source_job_id` | The ingest job |
+| `question.section` | The paper's question label (`q1`), or its answer label for an answer-only paper |
+| `question.proposal_question_index` | 0-based position in the proposal paper's `questions` |
+| `question_page.source_page` | Booklet page number (as in the proposal) |
+| `question_page.source_rect` | `{x0, y0, x1, y1}` in PDF points |
+
+Attached answer pages carry the provenance of the job they came from. From a paper id, the job list
+search finds its job; see [auto-import.md](./auto-import.md#job-list-ui).

@@ -197,7 +197,19 @@ the same code `ingester segment|split` run, so their artefacts match.
 - `fingerprint.py`: the hashing of a task's inputs, settings and outputs, and the helpers stages declare them with.
 - `runner.py`: `Runner` (claim, run, record, fan out atomically with completion, `revalidate`, `retry`) and `settle` (promote/block/skip dependents; a soft need only has to have settled; an `after_sections` stage waits for every section task).
 - `stages/`: one module per stage. `cli.py`: the commands (`submit`, `run`, `retry`, `status`, `ingest`).
-- `config.py`: `PipelineConfig` (lease, poll interval, retry limit, each with its justification; `extract_settings()` for the fingerprints).
+- `config.py`: `PipelineConfig` (lease, poll interval, retry limit, `traceback_chars`, each with its justification; `extract_settings()` for the fingerprints).
+
+### Logging and failures
+
+- `Runner.run_one` opens `question_extractor.logcontext.log_context(job_id, section, stage, task_attempt)`
+  around each claimed task (the heartbeat thread copies it), so every log record of the task can carry
+  them. The webapp's logging filter reads this context; `ingestion/` never imports `app`.
+- The runner logs `ingest_task/claimed` and `ingest_task/finished` (status, duration) at INFO, and its
+  own lines name the job (`job <id>`).
+- A stage that **raises** is logged at ERROR with the exception, and the last
+  `PipelineConfig.traceback_chars` (4096) characters of the traceback go on the task
+  (`Outcome.traceback` → `Store.fail` → the store's `traceback` column; cleared on re-claim and
+  retry). A failure the stage **reports** (`failed(...)`) has no traceback.
 
 ## Adding a stage
 

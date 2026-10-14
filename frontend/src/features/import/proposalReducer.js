@@ -6,7 +6,7 @@
 // q-th question's question_rects / answer_rects) or 'orphan' (paper.orphan_answers, q unused),
 // i the index within that list.
 //
-// Rules (documented in docs/features/ingestion.md):
+// Rules (documented in docs/features/auto-import.md):
 // - delete: removing a question's last question rectangle deletes the question; its answer
 //   rectangles are kept as orphan answers.
 // - merge with previous: the previous question keeps its number; question rects, answer rects

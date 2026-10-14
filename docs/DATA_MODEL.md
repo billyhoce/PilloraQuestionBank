@@ -37,14 +37,14 @@ Paper: {
   is_premium (bool),           -- default false; premium papers are gated to premium/admin users
   created_by (FK -> User),
   created_at,
-  source_job_id (uuid, nullable FK -> IngestJob, ON DELETE SET NULL)  -- provenance: the auto-import job that produced it (set when the review page confirms it); NULL for manual imports
+  source_job_id (uuid, nullable FK -> IngestJob, ON DELETE SET NULL)  -- provenance: the auto-import job that produced it (set by confirm); NULL for manual imports. No unique index on the seven-field key yet (#81)
 }
 
 Question: {
   id,
   paper_id (FK),
   question_number (int),
-  section (string(64), nullable),            -- provenance: the proposal paper's question label (e.g. "q1"); NULL for manual imports
+  section (string(64), nullable),            -- provenance: the proposal paper's question label (e.g. "q1"; answer label for an answer-only paper); NULL for manual imports
   proposal_question_index (int, nullable),   -- provenance: 0-based index in that proposal paper's `questions`; NULL for manual imports
   created_at
   -- no marks column: the total is SUM(QuestionPart.marks), see below
@@ -67,7 +67,9 @@ QuestionPage: {
   image_key (string),          -- object store key/path
   page_type ENUM('question', 'answer'),
   width_px (int),              -- stored image width in pixels
-  height_px (int)              -- stored image height in pixels (varies per page)
+  height_px (int),             -- stored image height in pixels (varies per page)
+  source_page (int, nullable),     -- provenance: booklet page the image was cropped from; NULL for manual imports
+  source_rect (JSONB, nullable)    -- provenance: {x0, y0, x1, y1} in PDF points on that page
 }
 
 QuestionTopic: {
@@ -231,7 +233,7 @@ its role and entitlements either way. See [features/auth.md](./features/auth.md)
 
 ## Auto-import jobs
 
-Tables behind the Auto-detect import ([features/ingestion.md](./features/ingestion.md#auto-detect-import)).
+Tables behind the Auto-detect import ([features/auto-import.md](./features/auto-import.md), [features/qa-pairing.md](./features/qa-pairing.md)).
 Postgres types (`ENUM`, `JSONB`, `INT[]`) have portable variants in the ORM so the SQLite unit-test
 schema still builds (`JSON().with_variant(JSONB, "postgresql")`).
 
@@ -247,13 +249,14 @@ IngestJob: {
   report (JSONB, nullable),      -- run report; `paper_metadata` maps each proposal paper's key to the
                                  -- metadata read from its cover, written by the worker's `segment` task (pre-fills
                                  -- the metadata sidebar; old jobs have `filename_metadata` instead);
-                                 -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped"
-                                 -- (written by the confirm/skip endpoints; the job is `confirmed` once all are set)
+                                 -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped" | "attached"
+                                 -- (written by confirm/skip/attach; the job is `confirmed` once all are set);
+                                 -- `cost` sums the job's Claude calls (calls, tokens, cost_usd)
   debug (JSONB, nullable),       -- debug bundle copied at report time: {"segments": segments.json, "ingest": ingest.json};
                                  -- all that is kept of the worker's scratch once the job is review_ready/settled
   error (text, nullable),
   created_at, updated_at,
-  confirmed_paper_ids (int[], nullable)   -- papers created by confirming proposal papers, in order
+  confirmed_paper_ids (int[], nullable)   -- papers created (confirm) or added to (attach) by this job, in order
 }
 
 IngestTask: {
@@ -282,7 +285,7 @@ IngestPaper: {                -- one row per paper an ingest job proposed; the q
   metadata_source ("cover" | "filename" | "admin", nullable),  -- NULL: nothing known
   status ("pending" | "confirmed" | "skipped" | "attached"),   -- default pending
   paper_id (nullable FK -> Paper, ON DELETE SET NULL),         -- the paper confirming it created
-  matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- set by the manual Match panel (and later automatic matching); both rows of a pair point at each other
+  matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- answer-only <-> pending question paper link (Match panel or auto link); both rows point at each other
   match_status ("proposed" | "manual" | "auto" | "unlinked", nullable),  -- automatic matching of an answer-only paper to the bank (proposed/manual) or to a pending question paper (auto link; unlinked = admin declined it); NULL: nothing to do
   proposed_paper_id (nullable FK -> Paper, ON DELETE SET NULL),  -- the one confirmed paper when match_status = proposed
   match_note (string(200), nullable),                          -- why manual, e.g. "2 papers have this key", "partial: year differ"
@@ -293,15 +296,15 @@ IngestPaper: {                -- one row per paper an ingest job proposed; the q
 -- (job_id, paper_key), so a re-run never duplicates; metadata from report.paper_metadata[key] -> `cover`, else
 -- the old report.filename_metadata -> `filename`). `PUT /api/import/jobs/{id}/papers/{key}/metadata`
 -- (the review sidebar, debounced) and confirm store the admin's values and set `metadata_source = admin` when a value
--- changed; confirm and skip set `status` (and `paper_id`) in the same transaction as the outcome. `attached` is
--- written by the attach flow (not built yet). Source of truth: `proposal`/`proposal_edited` for the paper's
+-- changed; confirm, skip and attach set `status` (and `paper_id`) in the same transaction as the outcome.
+-- Source of truth: `proposal`/`proposal_edited` for the paper's
 -- contents and `report.review_outcome` for the decision (the review flow reads only those); `ingest_paper` mirrors
 -- role, metadata and status and is what matching reads, kept in step on every write. The migration backfilled
 -- a row for every existing job with a proposal (`paper_id` left NULL; ids no longer in the reference tables dropped).
 
 IngestEvent: {                -- append-only audit trail, kept indefinitely (never pruned)
   id,
-  job_id (FK -> IngestJob, ON DELETE CASCADE),
+  job_id (nullable FK -> IngestJob, ON DELETE CASCADE),  -- NULL only for reconciler findings with no job row
   task_id (nullable FK -> IngestTask, ON DELETE SET NULL),
   at (timestamptz), kind (string(32)),
   actor_user_id (nullable FK -> AppUser, ON DELETE SET NULL),  -- the admin; NULL for the worker/sweep
@@ -310,7 +313,7 @@ IngestEvent: {                -- append-only audit trail, kept indefinitely (nev
 }
 -- kind: created, task_claimed, task_finished (data.status done/skipped/failed, error, warnings,
 -- duration_ms, traceback), retry, cancelled, proposal_edited, paper_confirmed, paper_skipped,
--- expired (historical; no longer written). Task rows are overwritten on claim/reopen; each attempt stays visible here.
+-- paper_attached, paper_deleted, reconcile (data.check = the reconciler check), expired (historical; no longer written). Task rows are overwritten on claim/reopen; each attempt stays visible here.
 
 WorkerHeartbeat: {             -- singleton
   id (int, CHECK id = 1),

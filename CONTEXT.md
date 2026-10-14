@@ -50,6 +50,24 @@ rectangles in PDF points on booklet pages (shape in `ingestion/README.md`). Each
 `question`, or `answer_only` for an answer section with no question section, whose answers keep their
 question numbers and are attached to a question paper rather than confirmed (docs/adr/0002-qa-booklet-pairing.md).
 
+**Paper key**
+How a proposal paper is named in the API: its question label (`q1`), else its answer label (`a1`),
+else `paper{n}`. Each proposal paper has one `ingest_paper` row keyed by it.
+
+**Outcome / settled**
+Each proposal paper ends `confirmed` (became a paper), `skipped`, or `attached` (its answers were
+added to an existing paper). A job is **settled** when every paper has an outcome, or when it is
+cancelled; a settled job's S3 prefix is empty.
+
+**Seven-field key**
+`school, year, level, subject, exam type, stream, paper number`: what identifies a paper when
+matching an answer booklet to its question paper.
+
+**Link / proposed attach**
+A **link** pairs a pending answer-only paper with a pending question paper of another job; confirming
+the question paper brings the answers in. A **proposed attach** names the one confirmed paper an
+answer-only paper matches; the admin accepts it with one click. See docs/features/qa-pairing.md.
+
 **Fingerprint**
 A hash of what a task's artefact was produced from (the content of the input artefacts, the
 slice of configuration and options the stage reads, and its code version), recorded when the task is
