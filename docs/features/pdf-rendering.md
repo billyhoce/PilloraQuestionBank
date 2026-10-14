@@ -126,7 +126,7 @@ Every page carries branded furniture, drawn by `LayoutEngine._draw_chrome` once 
   the mark on the line for any future padded asset. The asset is **optional** — if absent or
   unreadable the page renders without it, no error.
 - **Header** (`LayoutPlan.header_text`, the branding) drawn **right-aligned on the header rule** by
-  `_draw_page_header`, as [rich text](#rich-text). Its column runs from just right of the logo to the
+  `_draw_page_header`, as [rich text](#rich-text-apppdfrich_textpy). Its column runs from just right of the logo to the
   right margin, so a long line wraps rather than colliding with the logo, and the block is
   **bottom-aligned to the rule** — lines stack *upward* and the last one sits on the rule however many
   there are, without ever eating into the content band. A blank header draws nothing. The route sets

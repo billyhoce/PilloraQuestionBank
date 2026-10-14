@@ -452,7 +452,7 @@ INGEST_TASK_STATUSES = (
 
 
 class IngestJob(Base):
-    """One automatic import of a source PDF. See docs/features/ingestion.md."""
+    """One automatic import of a source PDF. See docs/features/auto-import.md."""
 
     __tablename__ = "ingest_job"
 

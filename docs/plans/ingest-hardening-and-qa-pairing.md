@@ -1,10 +1,12 @@
 # Plan: ingest hardening, traceability, retention, question/answer pairing and API auth
 
-Status: **proposed** — nothing here is implemented yet. Written 2026-10-09 from a code trace of the
-auto-import flow (`app/routes/ingest.py`, `app/services/ingest*.py`, `app/worker/`, `ingestion/`).
-When a phase ships, move the facts it establishes into the owning feature doc
-([features/ingestion.md](../features/ingestion.md), [features/ai-labelling.md](../features/ai-labelling.md),
-[DEPLOYMENT.md](../DEPLOYMENT.md), [DATA_MODEL.md](../DATA_MODEL.md)) and tick it off here.
+Status: **implemented** (issues #63–#84), except duplicate-paper protection (#81, waiting on a
+live-DB check). Phase 5 (API auth hardening) was dropped from this plan. Kept for its decisions and
+rationale only: **current behaviour is in the feature docs**, not here —
+[features/auto-import.md](../features/auto-import.md), [features/qa-pairing.md](../features/qa-pairing.md),
+[features/ingestion.md](../features/ingestion.md), [features/ai-labelling.md](../features/ai-labelling.md),
+[DEPLOYMENT.md](../DEPLOYMENT.md), [DATA_MODEL.md](../DATA_MODEL.md). "Where things stand" below
+describes the code *before* this plan.
 
 ## Contents
 
@@ -15,7 +17,6 @@ When a phase ships, move the facts it establishes into the owning feature doc
 - [Phase 2 — Retention and cleanup](#phase-2--retention-and-cleanup)
 - [Phase 3 — Direct-to-S3 upload](#phase-3--direct-to-s3-upload--done)
 - [Phase 4 — Question/answer booklet pairing](#phase-4--questionanswer-booklet-pairing)
-- [Phase 5 — API auth hardening](#phase-5--api-auth-hardening)
 - [Verification rules](#verification-rules)
 - [Open questions](#open-questions)
 
@@ -61,7 +62,7 @@ When a phase ships, move the facts it establishes into the owning feature doc
 | Topic | Decision |
 |---|---|
 | Job queue | **Keep Postgres as the queue** (`SELECT … FOR UPDATE SKIP LOCKED`, leases, heartbeats). This is the same pattern as Solid Queue, Oban, River, pg-boss and Procrastinate. It enqueues in the same transaction that creates the job and needs no extra infrastructure. Kafka is an event log, not a job queue. Redis/Celery or SQS would add infrastructure plus an outbox to keep the DB and queue consistent. Revisit only at thousands of jobs/s or when there are many independent consumers. |
-| Upload path | Move to **presigned direct-to-S3 uploads** ([Phase 3](#phase-3--direct-to-s3-upload--done)). The blocking-route bug is fixed first ([B2](#b2-the-upload-route-blocks-the-event-loop)). |
+| Upload path | Move to **presigned direct-to-S3 uploads** ([Phase 3](#phase-3--direct-to-s3-upload--done)). The blocking-route bug is fixed first ([B2](#b2-the-upload-route-blocks-the-event-loop--done)). |
 | Retention of unconfirmed jobs | **Keep until settled.** No auto-expiry for `review_ready` / `failed`; the job list shows an age badge instead. |
 | Protecting pending files from S3 lifecycle | **Separate prefix.** Job data lives under `ingest/{job_id}/`, which has no lifecycle rule. `tmp/` keeps a short expiry and holds only throwaway files. |
 | What survives a settled job | **A small debug bundle**: `segments.json`, `ingest.json` and the proposal, a few KB. It is kept on the `ingest_job` row. Everything under `ingest/{job_id}/` is deleted. |
@@ -418,7 +419,7 @@ As built: `ingest_paper` (see DATA_MODEL.md) is written by `after_report`, the r
 
 ### 4.5 Automatic matching — DONE (#83 confirmed-paper cases, #84 pending↔pending linking and combined confirm)
 
-As built: see [ingestion.md](../features/ingestion.md#automatic-matching-to-a-confirmed-paper).
+As built: see [ingestion.md](../features/qa-pairing.md#automatic-matching).
 
 Runs at the end of `after_report`, and again whenever an admin edits a paper's metadata on the review
 page.
@@ -449,7 +450,7 @@ page.
 
 ### 4.7 Manual matching UI — DONE (#82)
 
-As built: see [ingestion.md](../features/ingestion.md#matching-an-answer-only-paper-by-hand). The panel shows for answer-only papers only; a pending question paper is linked (`matched_ingest_paper_id` on both rows), not attached, and settling the pair on confirm is left to 4.5.
+As built: see [ingestion.md](../features/qa-pairing.md#match-panel-manual). The panel shows for answer-only papers only; a pending question paper is linked (`matched_ingest_paper_id` on both rows), not attached, and settling the pair on confirm is left to 4.5.
 
 - On `ReviewPage.jsx`, an answer-only paper (or any unmatched one) gets a **"Match to paper…"** panel:
   - pre-filled filters from its metadata;

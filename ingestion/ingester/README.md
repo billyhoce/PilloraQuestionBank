@@ -249,8 +249,8 @@ there changes everything downstream.
 | Module | Stage |
 | --- | --- |
 | `config.py` | `IngestConfig` — model, retry model, page caps, request limits, token caps, `max_question_columns`, each with its justification. |
-| `segments.py` | `Segment`, `SegmentPlan`, `Attempt`, the `q<n>`/`a<n>` label grammar, answer `TEMPLATES`, table `READING_ORDERS`, and reading/writing `segments.json`. |
-| `request.py` | **The only module that talks to the Messages API.** Base64 `document` block, `output_config.format`, the two thinking shapes, and reading segments out of the reply. |
+| `segments.py` | `Segment` (incl. `cover_pages`), `SegmentPlan`, `Attempt`, the `q<n>`/`a<n>` label grammar, answer `TEMPLATES`, table `READING_ORDERS`, reading/writing `segments.json`, `fill_cover_pages`, and `pair_segments` / `paper_key` (question/answer pairing and the paper key, shared by the proposal and the webapp's metadata hook). |
+| `request.py` | **The only module that talks to the Messages API.** Base64 `document` block, `output_config.format`, the two thinking shapes, and reading segments out of the reply. After each call it passes `(model, usage, request_id)` to the module-level `usage_listener` if one is set (the webapp's worker sets it to log the call and add it to the job's cost). |
 | `validation.py` | The gate. `validate` lists the reasons an answer cannot describe the document and rejects it whole; `anomalies` lists readings that are merely unusual and accepts them. |
 | `segmenter.py` | The segment stage: reuse a plan on disk → refuse a document too large to send → ask, validate, escalate once → write `segments.json` either way. |
 | `splitter.py` | The split stage: plan (via `find_plan`) → `_split/<label>.pdf` per section, plus `split.json` with each page map. A bad section is warned and skipped. |
