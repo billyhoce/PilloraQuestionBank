@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  deleteRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
+  addRect, assignAnswer, deleteRect, mergeWithPrevious, moveRect, renumber, renumberError, resizeRect, splitBetween, splitThrough,
+  toEditPayload,
 } from './proposalReducer'
 
 const r = (page, y0, y1, x0 = 10, x1 = 90) => ({ page, x0, y0, x1, y1 })
@@ -103,5 +104,62 @@ describe('proposalReducer', () => {
   it('builds the PUT payload from the editable parts only', () => {
     const body = toEditPayload([paper()])
     expect(Object.keys(body.papers[0]).sort()).toEqual(['orphan_answers', 'questions'])
+  })
+})
+
+describe('moving, drawing and reassigning boxes', () => {
+  const base = () => ({
+    pages: [{ page: 1, width_pt: 600, height_pt: 800 }, { page: 2, width_pt: 600, height_pt: 800 }],
+    questions: [
+      { number: 1, question_rects: [{ page: 1, x0: 10, y0: 10, x1: 110, y1: 60 }], answer_rects: [{ page: 2, x0: 0, y0: 0, x1: 50, y1: 50 }], flags: [] },
+      { number: 2, question_rects: [{ page: 1, x0: 10, y0: 100, x1: 110, y1: 160 }], answer_rects: [], flags: [] },
+    ],
+    orphan_answers: [{ page: 2, x0: 100, y0: 100, x1: 200, y1: 150 }],
+  })
+
+  it('moves a box keeping its size, stopping at the page edge', () => {
+    const p = moveRect(base(), { list: 'question', q: 0, i: 0 }, 550, -20)
+    expect(p.questions[0].question_rects[0]).toEqual({ page: 1, x0: 500, y0: 0, x1: 600, y1: 50 })
+    const same = base()
+    expect(moveRect(same, { list: 'question', q: 0, i: 0 }, 10, 10)).toBe(same)
+  })
+
+  it('adds a drawn question box to the selected question, or as a new question', () => {
+    const drawn = { page: 1, x0: 300, y0: 400, x1: 200, y1: 300 }
+    const toQ2 = addRect(base(), 'question', 1, drawn)
+    expect(toQ2.paper.questions[1].question_rects[1]).toEqual({ page: 1, x0: 200, y0: 300, x1: 300, y1: 400 })
+    expect(toQ2.sel).toEqual({ list: 'question', q: 1, i: 1 })
+    const fresh = addRect(base(), 'question', null, drawn)
+    expect(fresh.paper.questions[2]).toMatchObject({ number: 3, answer_rects: [], flags: [] })
+    expect(fresh.sel).toEqual({ list: 'question', q: 2, i: 0 })
+  })
+
+  it('adds an answer box to a question, as an orphan, or as a new answer in an answer-only paper', () => {
+    const drawn = { page: 2, x0: 10, y0: 200, x1: 100, y1: 260 }
+    expect(addRect(base(), 'answer', 1, drawn).paper.questions[1].answer_rects).toHaveLength(1)
+    const orphan = addRect(base(), 'answer', null, drawn)
+    expect(orphan.paper.orphan_answers).toHaveLength(2)
+    expect(orphan.sel).toEqual({ list: 'orphan', q: null, i: 1 })
+    const answerOnly = addRect({ ...base(), role: 'answer_only' }, 'answer', null, drawn)
+    expect(answerOnly.paper.questions[2]).toMatchObject({ number: 3, question_rects: [], answer_rects: [{ page: 2 }] })
+  })
+
+  it('refuses a box that is too small or on a page the paper does not have', () => {
+    const p = base()
+    expect(addRect(p, 'question', null, { page: 1, x0: 10, y0: 10, x1: 12, y1: 100 }).paper).toBe(p)
+    expect(addRect(p, 'question', null, { page: 9, x0: 10, y0: 10, x1: 100, y1: 100 }).paper).toBe(p)
+  })
+
+  it('assigns an orphan answer to a question, moves an answer between questions, and back to orphan', () => {
+    const a = assignAnswer(base(), { list: 'orphan', q: null, i: 0 }, 1)
+    expect(a.paper.orphan_answers).toHaveLength(0)
+    expect(a.paper.questions[1].answer_rects).toEqual([{ page: 2, x0: 100, y0: 100, x1: 200, y1: 150 }])
+    expect(a.sel).toEqual({ list: 'answer', q: 1, i: 0 })
+    const b = assignAnswer(a.paper, { list: 'answer', q: 0, i: 0 }, null)
+    expect(b.paper.questions[0].answer_rects).toHaveLength(0)
+    expect(b.paper.orphan_answers).toHaveLength(1)
+    const p = base()
+    expect(assignAnswer(p, { list: 'question', q: 0, i: 0 }, 1).paper).toBe(p)
+    expect(assignAnswer(p, { list: 'answer', q: 0, i: 0 }, 0).paper).toBe(p)
   })
 })

@@ -19,7 +19,7 @@ question by reading one file instead of three.
 | [features/users-and-premium.md](./features/users-and-premium.md) | The three tiers, user management, the `is_premium` flag, how the paywall is enforced |
 | [features/reference-data.md](./features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
 | [features/ingestion.md](./features/ingestion.md) | Manual import (wizard, PDF→image, confirm/delete), Manage Papers editor, provenance |
-| [features/auto-import.md](./features/auto-import.md) | Auto-detect import: direct-to-S3 upload, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
+| [features/auto-import.md](./features/auto-import.md) | Auto import: drop PDFs/folders, upload queue, processing board, review queue, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
 | [features/qa-pairing.md](./features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Match panel, automatic matching, linked confirm |
 | [features/ai-labelling.md](./features/ai-labelling.md) | Claude part-split + topic/marks labelling, paper metadata extraction, parts write path, review UI, costs |
 | [features/browse.md](./features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
@@ -34,6 +34,7 @@ question by reading one file instead of three.
 | Doc | What's inside |
 |---|---|
 | [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Implemented (except #81 duplicate-paper protection): kept for its decisions and rationale; behaviour lives in the feature docs |
+| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Proposed, awaiting confirmation:** fixing wrong question/answer matches and forcing missed ones (pairing panel, mapping table, pair from the queue) |
 
 ## Decisions
 

@@ -93,7 +93,7 @@ usually means opening one file. [docs/README.md](./docs/README.md) is the full i
 | [docs/features/users-and-premium.md](./docs/features/users-and-premium.md) | The three tiers, user management, `is_premium`, how the paywall is enforced |
 | [docs/features/reference-data.md](./docs/features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
 | [docs/features/ingestion.md](./docs/features/ingestion.md) | Manual import (wizard, PDF→image, confirm/delete), Manage Papers editor, provenance |
-| [docs/features/auto-import.md](./docs/features/auto-import.md) | Auto-detect import: direct-to-S3 upload, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
+| [docs/features/auto-import.md](./docs/features/auto-import.md) | Auto import: drop PDFs/folders, upload queue, processing board, review queue, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
 | [docs/features/qa-pairing.md](./docs/features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Match panel, automatic matching, linked confirm |
 | [docs/features/ai-labelling.md](./docs/features/ai-labelling.md) | Claude part-split + topic/marks labelling, paper metadata extraction, parts write path, review UI, costs |
 | [docs/features/browse.md](./docs/features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |

@@ -1,8 +1,8 @@
 # Auto-import
 
-**Scope:** the Auto-detect tab of `/admin/import`. A dropped booklet PDF becomes an **ingest job**.
-The worker runs the `ingestion/` pipeline over it and leaves a **proposal**. The admin reviews it and
-confirms, skips or attaches each proposed paper.
+**Scope:** the Auto import (`/admin/import/auto`) and Review queue (`/admin/import/review`) pages.
+A dropped booklet PDF becomes an **ingest job**. The worker runs the `ingestion/` pipeline over it
+and leaves a **proposal**. The admin reviews it and confirms, skips or attaches each proposed paper.
 
 Related docs:
 - Question/answer pairing (answer-only papers, attach, matching): [qa-pairing.md](./qa-pairing.md).
@@ -30,7 +30,7 @@ All admin-only (`403` otherwise). Any admin can see and act on any admin's job.
 |---|---|
 | `POST /api/import/uploads` `{filename, size}` | Size outside 1 B–100 MB → `422`. Creates the job (`awaiting_upload`, `source_key = ingest/{id}/source.pdf`, no task). Returns `201 {job_id, url, fields}`: a presigned POST pinned to that key, `Content-Type: application/pdf`, 1 B–100 MB, 15-minute expiry. |
 | `POST /api/import/jobs/{id}/uploaded` | HEADs the object. Missing → `409`. Size out of range or type not PDF → `422` (job stays `awaiting_upload`). Otherwise the job becomes `queued` and the `register` task is inserted. Calling it twice, or on a job not `awaiting_upload`, → `409`. The bytes are not inspected. |
-| `GET /api/import/jobs` | All jobs, newest first, each with its progress. Filters (combinable): `status` (one or comma-separated; unknown → `422`), `job_id`, `paper_id` (the job that created the paper, via `paper.source_job_id` or `confirmed_paper_ids`), `unmatched_answers=true`. Also returns `worker_alive` and `heartbeat_age_s`. |
+| `GET /api/import/jobs` | All jobs, newest first, each with its progress and `papers` (below). Filters (combinable): `status` (one or comma-separated; unknown → `422`), `job_id`, `paper_id` (the job that created the paper, via `paper.source_job_id` or `confirmed_paper_ids`), `unmatched_answers=true`. Also returns `worker_alive` and `heartbeat_age_s`. |
 | `GET /api/import/jobs/{id}` | The job, its `report` (including `cost`), its tasks (status, attempts, duration, warnings, reason, error, traceback) and worker liveness. Unknown id → `404`. |
 | `POST /api/import/jobs/{id}/retry` | Failed and blocked tasks, plus everything downstream, go back to the queue with attempts reset. Returns `reopened` (a count). `409` for a job that is `awaiting_upload`, `cancelled`, `confirmed` or `expired`, or that has any paper already decided. |
 | `DELETE /api/import/jobs/{id}` | Cancel: status `cancelled` is committed first, then the job's S3 prefix is deleted. `204`. A `confirmed`, `cancelled` or `expired` job → `409`. |
@@ -50,6 +50,11 @@ There is no multipart job-creation route; the old `POST /api/import/jobs` was re
   sections fan out.
 - `warnings_count`.
 - `needs_review`: any task flagged.
+
+**Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
+`{key, role, status, school_id, year, level_id, subject_id, exam_type_id, stream_id, paper_number,
+linked, match_status}`, where `linked` means it is linked to a paper of another job. Empty until
+`report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
 
 **Worker liveness:** `worker_alive` is true when the heartbeat is at most 90 s old. If the worker
 has never started: `false` / `null`. Both values are computed server-side.
@@ -83,33 +88,78 @@ has never started: `false` / `null`. Both values are computed server-side.
   - "The PDF has no pages"
 - After `register`: `page_count` and `sha256` are set on the job (both `NULL` until then).
 
-## Job list UI
+## Auto import page
 
-- **Drop zone:** each dropped PDF uploads with its own progress bar (XHR). If the S3 POST or
-  `uploaded` fails, the job is cancelled and the error shown.
-- **Rows show:**
-  - filename (opens the job detail), status, current stage, a `done/total` bar, warnings count
-  - a "Needs review" marker, and the failure reason of a `failed` job
-  - created time, Retry and Cancel buttons
-  - an `awaiting_upload` job reads "Uploading"
-- **Age badge** on unsettled jobs: "waiting N days" (or "waiting today"), from `created_at`.
-  Highlighted amber after more than 14 days.
-- **Filters:**
-  - **Awaiting review** = `review_ready` + `failed`.
-  - **Unmatched answers**: jobs with a pending answer-only paper linked to no question paper.
-  - **Search box**: a UUID searches by job id; digits search by paper id.
-  - All of these combine.
-- **Polling:** every 3 s while any job is `queued` or `running`.
+`/admin/import/auto` (`AutoImport.jsx`).
+
+- **Drop zone** (`PdfDropZone.jsx`): drop PDFs or whole folders (walked recursively through
+  `webkitGetAsEntry`), or use **Choose files** / **Choose folder** (`webkitdirectory`). Non-PDFs and
+  macOS `._*` files are ignored and counted; folder contents queue in path order. The zone never
+  locks: more files can be added while earlier ones upload. A status line says what was added,
+  skipped as a duplicate (same name, size and modified time already queued) or ignored.
+- **Upload queue** (`UploadQueue.jsx`, `UploadQueueProvider` mounted above the routes in `App.jsx`):
+  - each PDF is its own entry; at most **3** transfer at once, the rest wait their turn
+  - entries: waiting (**Remove**), uploading with a progress bar (XHR; **Stop** aborts the transfer
+    and the API client cancels the half-made job), failed with its error (**Retry upload** /
+    **Remove**). If the S3 POST or `uploaded` fails, the job is cancelled.
+  - uploads keep going while the admin moves to other pages; the navbar's Import link and the
+    Auto import tab show how many are in flight, and leaving the site mid-upload asks first
+    (`beforeunload`)
+  - a finished upload leaves the queue and the job list refreshes
+- **Processing board**: the upload queue's entries, then every job still in the pipeline
+  (`awaiting_upload`, `queued`, `running`) or stopped in it (`failed`). Each row shows:
+  - the filename (opens the job detail), page count, warnings, age badge
+  - a **step tracker** — Upload → Read PDF (`register`) → Find papers (`segment`) → Split →
+    Extract questions (`locate`/`render`/`grid`/`ocr`/`questions`) → Assemble (`report`) — built
+    from the job's `stage` (`pipelinePhases.js`): green behind, blue in hand, red where it failed
+  - a caption ("Extract questions · 5/9 tasks", "Waiting for the worker", "Failed at Read PDF") and,
+    while running, a `done/total` bar
+  - the failure reason, "Worker offline" on an active job when the heartbeat is stale, Retry
+    (failed jobs) and Cancel
+  - an `awaiting_upload` job not in this browser's queue reads "Upload not finished"
+- **Counts** above the board (uploading, queued, running, failed) and a link to the review queue
+  with the number of jobs ready.
+- **Finished while you were here**: jobs seen in the pipeline that became `review_ready` while the
+  page was open, each with a Review link (dismissable).
+- **Polling:** every 3 s while anything is uploading, queued or running; otherwise every 15 s (so
+  another admin's uploads still appear). Ticks are skipped while the tab is hidden and caught up
+  when it is shown (`usePoll.js`).
 - **"Worker offline"** banner when a job is active and `worker_alive` is false.
+- **All jobs** (`JobHistory.jsx`): every job, settled ones included, with status, failure reason,
+  created time, age badge, Review / Retry / Cancel.
+  - **Age badge** on unsettled jobs: "waiting N days" (or "waiting today"), from `created_at`.
+    Highlighted amber after more than 14 days.
+  - **Filters:** **Awaiting review** = `review_ready` + `failed`; **Unmatched answers**: jobs with a
+    pending answer-only paper linked to no question paper; **Search box**: a UUID searches by job
+    id, digits by paper id. All combine; a filtered list is fetched again on every poll.
 - **Job detail (`JobDetail.jsx`):**
   - the job id with a Copy button
   - every task: section, status, duration, warnings, reason or error
   - a collapsed "Traceback" for a failed task
   - refreshes with the poll
 
+## Review queue
+
+`/admin/import/review` (`ReviewQueuePage.jsx`): the jobs waiting for a decision.
+
+- `review_ready` jobs, **oldest first**, polled every 10 s by the import layout
+  (`useReviewQueue.js`, shared with the tab badge and the review page) so a job the worker finishes
+  appears without a reload. Jobs that arrive after the page loaded are tagged **New**.
+- **Each card:** filename (and a Review button), age badge, pages, papers and how many are still to
+  decide, warnings, "Pages flagged for a closer look" when a task needs review, and one line per
+  paper from the job list's `papers`:
+  - Questions / Answers and its key
+  - its metadata in words (school · year · level · subject · exam type · paper no.), with the
+    missing fields named, or "No details read from the cover"
+  - for an answer-only paper: linked / matching paper found / needs matching / not matched; for a
+    question paper: "Answers linked from another upload"
+  - a decided paper is greyed with its outcome
+- **Only jobs with unmatched answers** narrows the list in the browser.
+
 ## Review page
 
-`/admin/import/jobs/:jobId/review`, linked from each `review_ready` row.
+`/admin/import/jobs/:jobId/review`, opened from the review queue (and from `review_ready` rows of
+All jobs). The header links back to the queue and to the **next job** in it (the oldest other one).
 
 - **One paper at a time:** tabs when there are several, each tab showing its outcome.
 - **Page strip:** a flagged page has an amber border, with its reason as a tooltip.
@@ -127,13 +177,24 @@ has never started: `false` / `null`. Both values are computed server-side.
   - answer-only paper: the Match panel ([qa-pairing.md](./qa-pairing.md)).
 - **Metadata edits** are kept per paper and saved (debounced 800 ms) to
   `PUT .../papers/{key}/metadata`. This is best effort, since confirm sends the final values.
-- After the last decision the page returns to `/admin/import`.
+- After the last decision the page moves on to the next job in the review queue, or back to the
+  queue when it is empty. **Handle manually** opens `/admin/import/manual`.
 
 ### Editing
 
-- **Rectangles:**
-  - Click to select; drag the four edge handles to resize. Clamped to the page, minimum 4 pt.
-  - Delete/Backspace removes it (unless focus is in an input).
+- **Rectangles** (pure edits in `proposalReducer.js`):
+  - Click to select; drag the four edge handles to resize, or drag the box itself to move it.
+    Clamped to the page, minimum 4 pt.
+  - The **Selected box** bar names the box, offers **Delete box**, and for an answer box a
+    **Belongs to** menu: move it to another question, or to "No question" (an orphan answer, not
+    imported). An orphan answer can be given to a question the same way.
+  - Delete/Backspace removes it (unless focus is in an input); Esc deselects.
+- **Drawing boxes:** **Draw question box** / **Draw answer box** (an answer-only paper has only the
+  latter), then drag on the page. One box per press; Esc cancels. Where it goes is shown before
+  drawing:
+  - with a question selected: added to that question's question / answer boxes
+  - otherwise a question box becomes a new question numbered `max+1`; an answer box becomes an
+    orphan answer (in an answer-only paper, a new answer numbered `max+1`)
 - **Questions:**
   - Number field: a duplicate or non-positive number is refused, with the reason.
   - **Merge with previous**: keeps the previous question's number and concatenates rectangles and

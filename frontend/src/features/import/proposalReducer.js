@@ -136,3 +136,85 @@ export function splitThrough(paper, q, i, y) {
 export function toEditPayload(papers) {
   return { papers: papers.map(p => ({ questions: p.questions, orphan_answers: p.orphan_answers })) }
 }
+
+// Move a rectangle so its top-left corner is at (x0, y0) points, keeping its size and keeping it
+// on its page (it stops at the edges).
+export function moveRect(paper, sel, x0, y0) {
+  const rect = getRect(paper, sel)
+  const page = rect && pageOf(paper, rect.page)
+  if (!page) return paper
+  const w = rect.x1 - rect.x0
+  const h = rect.y1 - rect.y0
+  const nx = Math.min(Math.max(0, x0), page.width_pt - w)
+  const ny = Math.min(Math.max(0, y0), page.height_pt - h)
+  if (nx === rect.x0 && ny === rect.y0) return paper
+  const next = { ...rect, x0: nx, y0: ny, x1: nx + w, y1: ny + h }
+  return withRects(paper, sel, rectsOf(paper, sel).map((r, k) => (k === sel.i ? next : r)))
+}
+
+// A rectangle drawn by the admin, normalised (corners in either order) and clamped to its page;
+// null when it is off the paper's pages or smaller than MIN_SIZE_PT either way.
+export function normaliseRect(paper, { page, x0, y0, x1, y1 }) {
+  const p = pageOf(paper, page)
+  if (!p) return null
+  const clampX = v => Math.min(p.width_pt, Math.max(0, v))
+  const clampY = v => Math.min(p.height_pt, Math.max(0, v))
+  const r = {
+    page,
+    x0: clampX(Math.min(x0, x1)), x1: clampX(Math.max(x0, x1)),
+    y0: clampY(Math.min(y0, y1)), y1: clampY(Math.max(y0, y1)),
+  }
+  return r.x1 - r.x0 >= MIN_SIZE_PT && r.y1 - r.y0 >= MIN_SIZE_PT ? r : null
+}
+
+// Add a drawn rectangle. `kind` is 'question' or 'answer'; `q` the question it goes to, or null:
+// - a question box with no question becomes a new question (numbered max + 1); in an
+//   answer-only paper an answer box with no question does too (its answers are its questions);
+// - an answer box with no question becomes an orphan answer.
+// Returns { paper, sel } with the new rectangle selected ({ paper } unchanged if refused).
+export function addRect(paper, kind, q, drawn) {
+  const rect = normaliseRect(paper, drawn)
+  if (!rect) return { paper, sel: null }
+  if (q != null && paper.questions[q]) {
+    const list = kind === 'answer' ? 'answer' : 'question'
+    const sel = { list, q, i: rectsOf(paper, { list, q }).length }
+    return { paper: withRects(paper, sel, [...rectsOf(paper, sel), rect]), sel }
+  }
+  const answerOnly = paper.role === 'answer_only'
+  if (kind === 'answer' && !answerOnly) {
+    return {
+      paper: { ...paper, orphan_answers: [...paper.orphan_answers, rect] },
+      sel: { list: 'orphan', q: null, i: paper.orphan_answers.length },
+    }
+  }
+  const question = {
+    number: nextNumber(paper),
+    question_rects: kind === 'answer' ? [] : [rect],
+    answer_rects: kind === 'answer' ? [rect] : [],
+    flags: [],
+  }
+  return {
+    paper: { ...paper, questions: [...paper.questions, question] },
+    sel: { list: kind === 'answer' ? 'answer' : 'question', q: paper.questions.length, i: 0 },
+  }
+}
+
+// Give an answer rectangle (a question's, or an orphan) to question `toQ`, or make it an orphan
+// with toQ = null. Question rectangles are not moved this way. Returns { paper, sel }.
+export function assignAnswer(paper, sel, toQ) {
+  if (!sel || (sel.list !== 'answer' && sel.list !== 'orphan')) return { paper, sel }
+  const rect = getRect(paper, sel)
+  if (!rect) return { paper, sel }
+  if (toQ == null && sel.list === 'orphan') return { paper, sel }
+  if (toQ != null && (!paper.questions[toQ] || (sel.list === 'answer' && sel.q === toQ))) return { paper, sel }
+  const without = withRects(paper, sel, rectsOf(paper, sel).filter((_, k) => k !== sel.i))
+  if (toQ == null) {
+    return {
+      paper: { ...without, orphan_answers: [...without.orphan_answers, rect] },
+      sel: { list: 'orphan', q: null, i: without.orphan_answers.length },
+    }
+  }
+  const target = { list: 'answer', q: toQ }
+  const i = rectsOf(without, target).length
+  return { paper: withRects(without, target, [...rectsOf(without, target), rect]), sel: { ...target, i } }
+}

@@ -8,15 +8,19 @@ Related docs:
 - Answer booklets and matching: [qa-pairing.md](./qa-pairing.md).
 - AI part split, topics and metadata extraction: [ai-labelling.md](./ai-labelling.md).
 
-## Two ways in
+## Three pages
 
-`/admin/import` has two tabs. It opens on Manual when a manual import is in progress in
-`sessionStorage`.
+The import area (`ImportLayout.jsx`) is three pages under one sub-navigation. `/admin/import` itself
+redirects to Auto import, or to Manual import when a manual import is in progress in
+`sessionStorage` (so a reload or a review page's **Handle manually** lands back on it).
 
-| Tab | Input | Who splits the booklet | Result |
+| Page | Input | Who splits the booklet | Result |
 |---|---|---|---|
-| **Auto-detect** | Whole booklets, one job each | Worker pipeline, then admin review | One or more papers per booklet |
-| **Manual** | One paper's PDF | The admin, in the wizard | One paper |
+| **Auto import** (`/admin/import/auto`) | Whole booklets, one job each | Worker pipeline | Jobs, which move to the review queue when processed |
+| **Review queue** (`/admin/import/review`) | Processed jobs | Admin checks and corrects the proposal | One or more papers per booklet |
+| **Manual import** (`/admin/import/manual`) | One paper's PDF | The admin, in the wizard | One paper |
+
+The tabs carry live counts: files uploading (Auto import) and jobs ready for review (Review queue).
 
 ## Import API (admin only)
 

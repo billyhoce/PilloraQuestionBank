@@ -128,3 +128,18 @@ def test_unmatched_answers_filter(admin_client, db_session, admin_user, fake_obj
     assert ids("/api/import/jobs?unmatched_answers=true&job_id=" + str(linked.id)) == set()
     assert ids("/api/import/jobs?unmatched_answers=true&status=failed") == set()
     assert str(qjob.id) in ids("/api/import/jobs")
+
+
+def test_job_list_summarises_each_jobs_papers(admin_client, db_session, admin_user, fake_object_store):
+    qjob, qkey = job_with(db_session, admin_user, QUESTION, {"year": 2024, "paper_number": "1"}, filename="q.pdf")
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, filename="a.pdf")
+    admin_client.post(
+        f"/api/import/jobs/{ajob.id}/papers/{akey}/match", json={"ingest_paper_id": row(db_session, qjob, qkey).id}
+    )
+    jobs = {j["filename"]: j for j in admin_client.get("/api/import/jobs").json()["data"]}
+    [q] = jobs["q.pdf"]["papers"]
+    assert (q["key"], q["role"], q["status"], q["year"], q["paper_number"], q["linked"]) == (
+        "q1", "question", "pending", 2024, "1", True,
+    )
+    [a] = jobs["a.pdf"]["papers"]
+    assert (a["key"], a["role"], a["linked"]) == ("a1", "answer_only", True)

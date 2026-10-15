@@ -170,7 +170,10 @@ exports `filtersToListArgs`, which Generate's "Select All" reuses for its one-of
 | `/about` | About page (admins edit it in place) | Public | [site-config](./features/site-config.md) |
 | `/generate` | Paper generation | Authenticated | [paper-generation](./features/paper-generation.md) |
 | `/subscribe` | Subscribe — one plan per school level (payment stub) | Authenticated | [users-and-premium](./features/users-and-premium.md) |
-| `/admin/import` | Import: Auto-detect job list + Manual wizard | Admin | [auto-import](./features/auto-import.md), [ingestion](./features/ingestion.md) |
+| `/admin/import` | Redirects to Auto import (or Manual import when a manual import is in progress) | Admin | [ingestion](./features/ingestion.md#three-pages) |
+| `/admin/import/auto` | Auto import: drop PDFs/folders, upload queue, processing board, all jobs | Admin | [auto-import](./features/auto-import.md#auto-import-page) |
+| `/admin/import/review` | Review queue: finished jobs waiting for a decision (polled) | Admin | [auto-import](./features/auto-import.md#review-queue) |
+| `/admin/import/manual` | Manual import wizard | Admin | [ingestion](./features/ingestion.md) |
 | `/admin/import/jobs/:jobId/review` | Review an ingest job's proposal | Admin | [auto-import](./features/auto-import.md#review-page), [qa-pairing](./features/qa-pairing.md) |
 | `/admin/reference` | Reference data CRUD | Admin | [reference-data](./features/reference-data.md) |
 | `/admin/papers` | Papers list + editor | Admin | [ingestion](./features/ingestion.md) |

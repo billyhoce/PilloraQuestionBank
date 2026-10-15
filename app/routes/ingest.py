@@ -389,6 +389,40 @@ def _job_out(job: IngestJob) -> dict:
     }
 
 
+def _paper_summary(row: IngestPaper) -> dict:
+    """One proposed paper as the job list shows it: enough for an at-a-glance review queue card."""
+    return {
+        "key": row.paper_key,
+        "role": row.role,
+        "status": row.status,
+        "school_id": row.school_id,
+        "year": row.year,
+        "level_id": row.level_id,
+        "subject_id": row.subject_id,
+        "exam_type_id": row.exam_type_id,
+        "stream_id": row.stream_id,
+        "paper_number": row.paper_number,
+        "linked": row.matched_ingest_paper_id is not None,
+        "match_status": row.match_status,
+    }
+
+
+def _papers_by_job(db: Session, jobs: list[IngestJob]) -> dict:
+    """Each job's ``ingest_paper`` rows (one query for the whole list), in paper-key order."""
+    by_job: dict = {j.id: [] for j in jobs}
+    if not by_job:
+        return by_job
+    rows = (
+        db.query(IngestPaper)
+        .filter(IngestPaper.job_id.in_(list(by_job)))
+        .order_by(IngestPaper.job_id, IngestPaper.paper_key)
+        .all()
+    )
+    for r in rows:
+        by_job[r.job_id].append(_paper_summary(r))
+    return by_job
+
+
 def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
     """The job to act on. Every route here is admin-only and admins are trusted with each other's
     jobs, so any admin may open or act on any job; a non-admin (unreachable through these routes)
@@ -480,7 +514,8 @@ def list_ingest_jobs(
             .exists()
         )
     jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
-    return {"data": [_job_out(j) for j in jobs], **worker_state(db)}
+    papers = _papers_by_job(db, jobs)
+    return {"data": [{**_job_out(j), "papers": papers[j.id]} for j in jobs], **worker_state(db)}
 
 
 @router.get("/jobs/{job_id}")

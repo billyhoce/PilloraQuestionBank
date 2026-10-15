@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import ReviewPage from './ReviewPage'
 import { api } from '../../api/client'
 
@@ -16,6 +16,16 @@ vi.mock('../../api/client', () => ({
     topics: { list: vi.fn() }, papers: { get: vi.fn(), list: vi.fn() },
   },
 }))
+
+// jsdom has no PointerEvent; without one fireEvent.pointer* drops clientX/clientY.
+if (!window.PointerEvent) {
+  window.PointerEvent = class PointerEvent extends MouseEvent {
+    constructor(type, init = {}) {
+      super(type, init)
+      this.pointerId = init.pointerId ?? 0
+    }
+  }
+}
 
 const page = (n, extra = {}) => ({
   page: n, image: `pages/p${n}.webp`, url: `https://s3/p${n}.webp`,
@@ -45,12 +55,17 @@ function Where() {
   return <div data-testid="where">{useLocation().pathname}</div>
 }
 
-function renderPage() {
+// `reviewQueue` stands in for the import layout's polled queue (its outlet context).
+function renderPage(reviewQueue) {
+  const page = <Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} />
   return render(
     <MemoryRouter initialEntries={['/admin/import/jobs/j1/review']}>
       <Routes>
+        {reviewQueue ? <Route element={<Outlet context={{ reviewQueue }} />}>{page}</Route> : page}
         <Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} />
-        <Route path="/admin/import" element={<Where />} />
+        <Route path="/admin/import/manual" element={<Where />} />
+        <Route path="/admin/import/review" element={<Where />} />
+        <Route path="/admin/import/jobs/j7/review" element={<Where />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -102,7 +117,7 @@ describe('ReviewPage', () => {
     renderPage()
     expect(await screen.findByText(/a scanned paper needs OCR/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Handle manually' }))
-    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import'))
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/manual'))
     expect(api.import.manualPages).toHaveBeenCalledWith('j1', 12, 21)
     const session = JSON.parse(sessionStorage.getItem('pillora_import_session'))
     expect(session.step).toBe('review')
@@ -189,6 +204,79 @@ describe('ReviewPage', () => {
       await userEvent.click(screen.getByRole('button', { name: /Question 1/ }))
       await userEvent.click(screen.getByRole('button', { name: 'Split selected rectangle in half' }))
       expect(screen.getAllByText(/^Question \d$/)).toHaveLength(3)
+    })
+
+    // The overlay shows the 200x400 px page image at 1:1, so 2 px = 1 pt.
+    const overlayAtOneToOne = () => {
+      const svg = screen.getByTestId('overlay')
+      svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 400, right: 200, bottom: 400 })
+      return svg
+    }
+    const lastSaved = async () => {
+      await waitFor(() => expect(api.import.saveProposal).toHaveBeenCalled(), { timeout: 3000 })
+      return api.import.saveProposal.mock.calls.at(-1)[1].papers[0]
+    }
+
+    it('draws a box that becomes a new question when none is selected', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: 'Draw question box' }))
+      expect(screen.getByRole('status')).toHaveTextContent('It becomes a new question.')
+      const svg = overlayAtOneToOne()
+      fireEvent.pointerDown(svg, { clientX: 120, clientY: 380, pointerId: 1 })
+      fireEvent.pointerMove(svg, { clientX: 20, clientY: 300, pointerId: 1 })
+      expect(screen.getByTestId('draft-rect')).toBeInTheDocument()
+      fireEvent.pointerUp(svg, { clientX: 20, clientY: 300, pointerId: 1 })
+      expect(screen.getByText('Question 3')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Draw question box' })).toHaveAttribute('aria-pressed', 'false')
+      const saved = await lastSaved()
+      expect(saved.questions[2]).toEqual({
+        number: 3, question_rects: [{ page: 2, x0: 10, y0: 150, x1: 60, y1: 190 }], answer_rects: [], flags: [],
+      })
+    })
+
+    it('draws an answer box onto the selected question', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByText('Question 2'))
+      await userEvent.click(screen.getByRole('button', { name: 'Draw answer box' }))
+      expect(screen.getByRole('status')).toHaveTextContent('It is added to the answers of question 2.')
+      const svg = overlayAtOneToOne()
+      fireEvent.pointerDown(svg, { clientX: 0, clientY: 200, pointerId: 1 })
+      fireEvent.pointerMove(svg, { clientX: 100, clientY: 260, pointerId: 1 })
+      fireEvent.pointerUp(svg, { clientX: 100, clientY: 260, pointerId: 1 })
+      const saved = await lastSaved()
+      expect(saved.questions[1].answer_rects).toEqual([{ page: 3, x0: 0, y0: 100, x1: 50, y1: 130 }])
+    })
+
+    it('drags the selected box to move it', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(document.querySelector('g[data-kind="question"] rect'))
+      overlayAtOneToOne()
+      const rect = screen.getByTestId('selected-rect')
+      fireEvent.pointerDown(rect, { clientX: 40, clientY: 60, pointerId: 1 })
+      fireEvent.pointerMove(rect, { clientX: 60, clientY: 100, pointerId: 1 })
+      fireEvent.pointerUp(rect, { clientX: 60, clientY: 100, pointerId: 1 })
+      expect(screen.getByTestId('selected-rect')).toHaveAttribute('x', '40')
+      const saved = await lastSaved()
+      expect(saved.questions[0].question_rects[0]).toEqual({ page: 2, x0: 20, y0: 40, x1: 70, y1: 140 })
+    })
+
+    it('moves an answer box to another question or leaves it unmatched', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: /p3/ }))
+      await userEvent.click(document.querySelector('g[data-kind="answer"] rect'))
+      const panel = screen.getByRole('region', { name: 'Selected box' })
+      expect(panel).toHaveTextContent('Answer box of question 1')
+      await userEvent.selectOptions(within(panel).getByLabelText('Assign answer box to question'), 'Question 2')
+      expect(screen.getByRole('region', { name: 'Selected box' })).toHaveTextContent('Answer box of question 2')
+      await userEvent.selectOptions(screen.getByLabelText('Assign answer box to question'), 'No question (not imported)')
+      expect(screen.getByText(/1 answer rectangle not matched to a question/)).toBeInTheDocument()
+      const saved = await lastSaved()
+      expect(saved.questions.map(q => q.answer_rects.length)).toEqual([0, 0])
+      expect(saved.orphan_answers).toHaveLength(1)
     })
 
     it('shows the server message when a save is rejected', async () => {
@@ -279,7 +367,7 @@ describe('ReviewPage', () => {
       expect(api.import.savePaperMetadata).toHaveBeenCalledWith('j1', 'q1', { ...FILLED, paper_number: '2' })
     })
 
-    it('skipping the last undecided paper leaves for the import page', async () => {
+    it('skipping the last undecided paper leaves for the review queue', async () => {
       api.import.review.mockResolvedValue({
         ...TWO,
         proposal: { ...TWO.proposal, papers: [{ ...TWO.proposal.papers[0], outcome: 'confirmed' }, TWO.proposal.papers[1]] },
@@ -291,8 +379,31 @@ describe('ReviewPage', () => {
       await screen.findByAltText('Page 2')
       expect(screen.getByRole('tab', { name: /q1 \/ a1/ })).toHaveTextContent('(confirmed)')
       await userEvent.click(screen.getByRole('button', { name: 'Skip this paper' }))
-      await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import'))
+      await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/review'))
       expect(api.import.skipJobPaper).toHaveBeenCalledWith('j1', 'q2')
+    })
+
+    it('settling the job moves on to the oldest other job in the review queue', async () => {
+      api.import.review.mockResolvedValue({
+        ...TWO,
+        proposal: { ...TWO.proposal, papers: [{ ...TWO.proposal.papers[0], outcome: 'confirmed' }, TWO.proposal.papers[1]] },
+      })
+      api.import.skipJobPaper.mockResolvedValue({ job_status: 'confirmed' })
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      const refresh = vi.fn()
+      renderPage({
+        refresh,
+        jobs: [
+          { id: 'j1', filename: 'scan.pdf', created_at: '2026-10-01T00:00:00Z' },
+          { id: 'j8', filename: 'newer.pdf', created_at: '2026-10-09T00:00:00Z' },
+          { id: 'j7', filename: 'older.pdf', created_at: '2026-10-02T00:00:00Z' },
+        ],
+      })
+      await screen.findByAltText('Page 2')
+      expect(screen.getByRole('link', { name: /Next job: older.pdf/ })).toHaveAttribute('href', '/admin/import/jobs/j7/review')
+      await userEvent.click(screen.getByRole('button', { name: 'Skip this paper' }))
+      await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/jobs/j7/review'))
+      expect(refresh).toHaveBeenCalled()
     })
 
     it('shows the server error when a confirm is refused', async () => {

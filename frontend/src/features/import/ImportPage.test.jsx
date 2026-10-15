@@ -1,28 +1,32 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import ImportPage from './ImportPage'
 
-vi.mock('./AutoImport', () => ({ default: () => <div>auto-import-view</div> }))
-vi.mock('./ManualImport', () => ({ default: () => <div>manual-import-view</div> }))
+function Where() {
+  return <div data-testid="where">{useLocation().pathname}</div>
+}
+
+const renderAt = () => render(
+  <MemoryRouter initialEntries={['/admin/import']}>
+    <Routes>
+      <Route path="/admin/import" element={<ImportPage />} />
+      <Route path="/admin/import/*" element={<Where />} />
+    </Routes>
+  </MemoryRouter>,
+)
 
 beforeEach(() => sessionStorage.clear())
 
-describe('ImportPage', () => {
-  it('offers Auto-detect and Manual, defaulting to Auto-detect', async () => {
-    render(<ImportPage />)
-    expect(screen.getByRole('tab', { name: 'Auto-detect' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: 'Manual' })).toHaveAttribute('aria-selected', 'false')
-    expect(screen.getByText('auto-import-view')).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Manual' }))
-    expect(screen.getByText('manual-import-view')).toBeInTheDocument()
-    expect(screen.queryByText('auto-import-view')).toBeNull()
+describe('ImportPage (/admin/import)', () => {
+  it('opens Auto import by default', () => {
+    renderAt()
+    expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/auto')
   })
 
-  it('reopens on Manual when a manual import is in progress', () => {
+  it('reopens Manual import when one is in progress', () => {
     sessionStorage.setItem('pillora_import_session', '{"step":"review"}')
-    render(<ImportPage />)
-    expect(screen.getByText('manual-import-view')).toBeInTheDocument()
+    renderAt()
+    expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/manual')
   })
 })

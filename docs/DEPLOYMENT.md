@@ -158,7 +158,7 @@ echoed). `LOG_LEVEL` (default `INFO`) sets the root level.
         "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 2}}
      ]}
      ```
-   - **CORS for direct PDF uploads.** The Auto-detect import tab POSTs each PDF from the browser straight to the bucket (a presigned POST). The bucket must allow that cross-origin request from the app origin, and nothing else (no GET, no other origins):
+   - **CORS for direct PDF uploads.** The Auto import page POSTs each PDF from the browser straight to the bucket (a presigned POST). The bucket must allow that cross-origin request from the app origin, and nothing else (no GET, no other origins):
      ```bash
      aws s3api put-bucket-cors --bucket pillora-question-bank-prod --cors-configuration file://cors.json
      ```

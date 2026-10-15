@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
 import { clientToPt, firstPageOf, rectToPx } from './reviewGeometry'
 import {
-  deleteRect, getRect, mergeWithPrevious, renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
+  addRect, assignAnswer, deleteRect, getRect, mergeWithPrevious, moveRect, renumber, renumberError, resizeRect, splitBetween,
+  splitThrough, toEditPayload,
 } from './proposalReducer'
 import { startManualImport } from './manualHandoff'
 import MatchPanel from './MatchPanel'
@@ -34,13 +35,15 @@ const HANDLES = [
 
 const sameSel = (a, b) => a && b && a.list === b.list && a.i === b.i && (a.list === 'orphan' || a.q === b.q)
 
-function Overlay({ page, paper, sel, onSelect, onResize }) {
+function Overlay({ page, paper, sel, onSelect, onResize, onMove, drawKind, onDraw }) {
   const svgRef = useRef(null)
   const drag = useRef(null)
+  // The box being drawn, in points: { x0, y0, x1, y1 } (corners in drawing order).
+  const [draft, setDraft] = useState(null)
   const boxes = []
   const add = (list, q, rects, label) =>
     rects.forEach((r, i) => {
-      if (r.page === page.page) boxes.push({ list, q, i, label, box: rectToPx(r, page) })
+      if (r.page === page.page) boxes.push({ list, q, i, label, box: rectToPx(r, page), rect: r })
     })
   paper.questions.forEach((q, k) => {
     add('question', k, q.question_rects, `Q${q.number}`)
@@ -48,35 +51,81 @@ function Overlay({ page, paper, sel, onSelect, onResize }) {
   })
   add('orphan', null, paper.orphan_answers, null)
 
+  const toPt = e => clientToPt(e.clientX, e.clientY, svgRef.current.getBoundingClientRect(), page)
+
   function move(e) {
-    if (!drag.current) return
-    const pt = clientToPt(e.clientX, e.clientY, svgRef.current.getBoundingClientRect(), page)
-    onResize(drag.current.sel, { [drag.current.edge]: drag.current.edge[0] === 'x' ? pt.x : pt.y })
+    const d = drag.current
+    if (!d) return
+    const pt = toPt(e)
+    if (d.edge) onResize(d.sel, { [d.edge]: d.edge[0] === 'x' ? pt.x : pt.y })
+    else onMove(d.sel, d.rect.x0 + pt.x - d.start.x, d.rect.y0 + pt.y - d.start.y)
   }
+  const endDrag = () => { drag.current = null }
+
+  // Drawing: press on the page, drag, release.
+  function drawStart(e) {
+    if (!drawKind) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    const pt = toPt(e)
+    setDraft({ x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y })
+  }
+  function drawMove(e) {
+    if (!draft) return
+    const pt = toPt(e)
+    setDraft(d => ({ ...d, x1: pt.x, y1: pt.y }))
+  }
+  function drawEnd() {
+    if (!draft) return
+    onDraw({ page: page.page, ...draft })
+    setDraft(null)
+  }
+
+  const draftBox = draft && rectToPx({
+    x0: Math.min(draft.x0, draft.x1), x1: Math.max(draft.x0, draft.x1),
+    y0: Math.min(draft.y0, draft.y1), y1: Math.max(draft.y0, draft.y1),
+  }, page)
 
   return (
     <svg
       ref={svgRef}
       data-testid="overlay"
+      data-drawing={drawKind || undefined}
       viewBox={`0 0 ${page.width_px} ${page.height_px}`}
       className="absolute inset-0 w-full h-full"
-      onClick={() => onSelect(null)}
+      style={{ cursor: drawKind ? 'crosshair' : undefined, touchAction: drawKind ? 'none' : undefined }}
+      onClick={() => { if (!drawKind) onSelect(null) }}
+      onPointerDown={drawStart}
+      onPointerMove={drawMove}
+      onPointerUp={drawEnd}
+      onPointerCancel={() => setDraft(null)}
     >
       {boxes.map(b => {
         const s = { list: b.list, q: b.q, i: b.i }
         const on = sameSel(sel, s)
         const inQuestion = sel && sel.list !== 'orphan' && b.q === sel.q
         return (
-          <g key={`${b.list}-${b.q}-${b.i}`} data-kind={b.list} data-selected={on || undefined}>
+          <g key={`${b.list}-${b.q}-${b.i}`} data-kind={b.list} data-selected={on || undefined}
+            pointerEvents={drawKind ? 'none' : undefined}>
             <rect
               {...b.box}
+              data-testid={on ? 'selected-rect' : undefined}
               fill={COLOUR[b.list]}
               fillOpacity={on ? 0.3 : inQuestion ? 0.2 : 0.1}
               stroke={COLOUR[b.list]}
               strokeWidth={on || inQuestion ? 4 : 2}
               strokeDasharray={b.list === 'orphan' ? '8 4' : undefined}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: on ? 'move' : 'pointer', touchAction: on ? 'none' : undefined }}
               onClick={e => { e.stopPropagation(); onSelect(s) }}
+              onPointerDown={on ? e => {
+                // Drag the selected box to move it.
+                e.stopPropagation()
+                e.currentTarget.setPointerCapture?.(e.pointerId)
+                drag.current = { sel: s, rect: b.rect, start: toPt(e) }
+              } : undefined}
+              onPointerMove={on ? move : undefined}
+              onPointerUp={on ? endDrag : undefined}
+              onPointerCancel={on ? endDrag : undefined}
             />
             {b.label && (
               <text x={b.box.x + 6} y={b.box.y + 22} fontSize="20" fill={COLOUR[b.list]} pointerEvents="none">
@@ -98,14 +147,83 @@ function Overlay({ page, paper, sel, onSelect, onResize }) {
                   drag.current = { sel: s, edge: h.edge }
                 }}
                 onPointerMove={move}
-                onPointerUp={() => { drag.current = null }}
-                onPointerCancel={() => { drag.current = null }}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
               />
             ))}
           </g>
         )
       })}
+      {draftBox && (
+        <rect data-testid="draft-rect" {...draftBox} fill={COLOUR[drawKind]} fillOpacity={0.15}
+          stroke={COLOUR[drawKind]} strokeWidth={2} strokeDasharray="6 3" pointerEvents="none" />
+      )}
     </svg>
+  )
+}
+
+// What the selected box is, in words, and what can be done to it: delete it, and for an answer
+// box, give it to another question (or leave it unmatched).
+function SelectionPanel({ paper, sel, onDelete, onAssign }) {
+  const rect = getRect(paper, sel)
+  if (!rect) return null
+  const q = sel.list === 'orphan' ? null : paper.questions[sel.q]
+  const what = sel.list === 'orphan' ? 'Unmatched answer box'
+    : sel.list === 'answer' ? `Answer box of question ${q.number}`
+      : `Question box of question ${q.number}`
+  const canAssign = sel.list !== 'question' && paper.questions.length > 0
+  return (
+    <div role="region" aria-label="Selected box" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
+      <span className="font-medium text-gray-700">{what}</span>
+      <span className="text-gray-500">page {rect.page} · drag to move, drag an edge to resize</span>
+      {canAssign && (
+        <label className="flex items-center gap-1 text-gray-700">
+          Belongs to
+          <select
+            aria-label="Assign answer box to question"
+            value={sel.list === 'orphan' ? '' : String(sel.q)}
+            onChange={e => onAssign(e.target.value === '' ? null : Number(e.target.value))}
+            className="border border-gray-300 rounded px-1 py-0.5 text-xs"
+          >
+            <option value="">No question (not imported)</option>
+            {paper.questions.map((o, k) => <option key={k} value={k}>Question {o.number}</option>)}
+          </select>
+        </label>
+      )}
+      <button type="button" onClick={onDelete} className="ml-auto text-red-600 hover:underline">Delete box</button>
+    </div>
+  )
+}
+
+// The drawing tools: one press draws one box. Where it goes is said up front.
+function DrawToolbar({ answerOnly, drawKind, onDrawKind, target }) {
+  const tools = answerOnly ? [['answer', 'Draw answer box']] : [['question', 'Draw question box'], ['answer', 'Draw answer box']]
+  const where = drawKind === 'question'
+    ? (target != null ? `It is added to question ${target}.` : 'It becomes a new question.')
+    : drawKind === 'answer'
+      ? (target != null ? `It is added to the answers of question ${target}.` : answerOnly ? 'It becomes a new answer.' : 'It is left unmatched; assign it to a question afterwards.')
+      : null
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+      {tools.map(([kind, label]) => (
+        <button
+          key={kind}
+          type="button"
+          aria-pressed={drawKind === kind}
+          onClick={() => onDrawKind(drawKind === kind ? null : kind)}
+          className={`rounded border px-2 py-1 font-medium ${
+            drawKind === kind ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+      {drawKind ? (
+        <span role="status" className="text-gray-600">Drag on the page to draw. {where} Esc cancels.</span>
+      ) : (
+        <span className="text-gray-500">Click a box to select it; select a question first to add boxes to it.</span>
+      )}
+    </div>
   )
 }
 
@@ -144,6 +262,13 @@ const SAVE_LABEL = { saving: 'Saving…', saved: 'Saved', error: 'Not saved' }
 export default function ReviewPage() {
   const { jobId } = useParams()
   const navigate = useNavigate()
+  // The review queue, when this page sits under the import layout: for "next job".
+  const reviewQueue = useOutletContext()?.reviewQueue
+  const nextJob = (reviewQueue?.jobs ?? [])
+    .filter(j => j.id !== jobId)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0] ?? null
+  // Drawing a new box: null, 'question' or 'answer' (one box per press of the tool).
+  const [drawKind, setDrawKind] = useState(null)
   const [review, setReview] = useState(null)
   const [error, setError] = useState(null)
   const [paperIdx, setPaperIdx] = useState(0)
@@ -240,6 +365,7 @@ export default function ReviewPage() {
     setPaperIdx(i)
     setPageNo(null)
     setSel(null)
+    setDrawKind(null)
   }
 
   function chooseQuestion(k) {
@@ -265,12 +391,32 @@ export default function ReviewPage() {
   }
 
   const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s)
+  const onMove = (s, x0, y0) => edit(p => moveRect(p, s, x0, y0), s)
+
+  // A drawn box goes to the selected question if there is one, else starts a new question (or,
+  // for an answer box in a question paper, an unmatched answer). The new box is selected.
+  function onDraw(drawn) {
+    const q = sel && sel.list !== 'orphan' ? sel.q : null
+    const { paper: next, sel: nextSel } = addRect(paper, drawKind, q, drawn)
+    setDrawKind(null)
+    if (next !== paper) edit(() => next, nextSel)
+  }
+
+  function onAssign(toQ) {
+    const { paper: next, sel: nextSel } = assignAnswer(paper, sel, toQ)
+    if (next !== paper) edit(() => next, nextSel)
+  }
 
   useEffect(() => {
     function onKey(e) {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
       const t = e.target
       if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
+      if (e.key === 'Escape') {
+        if (drawKind) setDrawKind(null)
+        else setSel(null)
+        return
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
       if (!sel) return
       e.preventDefault()
       edit(p => deleteRect(p, sel))
@@ -287,7 +433,8 @@ export default function ReviewPage() {
     }))
     setTopicStep(null)
     if (jobStatus === 'confirmed') {
-      navigate('/admin/import')
+      reviewQueue?.refresh()
+      navigate(nextJob ? `/admin/import/jobs/${nextJob.id}/review` : '/admin/import/review')
       return
     }
     const next = papers.findIndex((p, i) => i !== paperIdx && !p.outcome)
@@ -354,7 +501,7 @@ export default function ReviewPage() {
     try {
       const result = await api.import.manualPages(jobId, item.first_page, item.last_page)
       startManualImport(result)
-      navigate('/admin/import')
+      navigate('/admin/import/manual')
     } catch (e) {
       setError(e.message)
       setHandoff(null)
@@ -365,7 +512,7 @@ export default function ReviewPage() {
     return (
       <div className="max-w-5xl mx-auto px-4 py-6">
         <ErrorBanner message={error} />
-        <Link to="/admin/import" className="text-blue-600 hover:underline text-sm">Back to import</Link>
+        <Link to="/admin/import/review" className="text-blue-600 hover:underline text-sm">Back to review queue</Link>
       </div>
     )
   }
@@ -408,13 +555,18 @@ export default function ReviewPage() {
   return (
     <div className="px-4 py-4">
       <div className="flex items-center gap-4 mb-3">
-        <Link to="/admin/import" className="text-sm text-blue-600 hover:underline">Back to import</Link>
+        <Link to="/admin/import/review" className="text-sm text-blue-600 hover:underline">← Review queue</Link>
         <h1 className="text-lg font-semibold text-gray-800 break-all">{review.filename}</h1>
         {review.edited && <span className="text-xs text-gray-500">edited</span>}
         {saveState !== 'idle' && (
           <span role="status" data-state={saveState} className={`text-xs ${saveState === 'error' ? 'text-red-600' : 'text-gray-500'}`}>
             {SAVE_LABEL[saveState]}
           </span>
+        )}
+        {nextJob && (
+          <Link to={`/admin/import/jobs/${nextJob.id}/review`} className="ml-auto text-sm text-blue-600 hover:underline">
+            Next job: <span className="break-all">{nextJob.filename}</span> →
+          </Link>
         )}
       </div>
       <ErrorBanner message={error} />
@@ -485,6 +637,17 @@ export default function ReviewPage() {
           <div className="flex-1 min-w-0">
             {page ? (
               <>
+                {!paper.outcome && (
+                  <DrawToolbar
+                    answerOnly={answerOnly}
+                    drawKind={drawKind}
+                    onDrawKind={setDrawKind}
+                    target={sel && sel.list !== 'orphan' ? paper.questions[sel.q]?.number : null}
+                  />
+                )}
+                {!paper.outcome && sel && !drawKind && (
+                  <SelectionPanel paper={paper} sel={sel} onDelete={() => edit(p => deleteRect(p, sel))} onAssign={onAssign} />
+                )}
                 {flaggedPage(page) && (
                   <p className="mb-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-1">
                     Page {page.page} needs review{page.review_reason ? `: ${page.review_reason}` : ''}
@@ -499,7 +662,10 @@ export default function ReviewPage() {
                   ) : (
                     <p className="p-4 text-sm text-gray-500">The image for this page is missing.</p>
                   )}
-                  <Overlay page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} />
+                  <Overlay
+                    page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} onMove={onMove}
+                    drawKind={paper.outcome ? null : drawKind} onDraw={onDraw}
+                  />
                 </div>
               </>
             ) : (

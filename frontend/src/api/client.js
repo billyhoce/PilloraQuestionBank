@@ -53,13 +53,24 @@ async function request(method, path, body, signal) {
 
 // POST a file to a presigned S3 form. XMLHttpRequest, not fetch: only XHR reports upload progress.
 // `fields` go first and the file last, as S3 requires. `onProgress` gets a 0..1 fraction.
-function postToS3(url, fields, file, onProgress) {
+// Aborting `signal` aborts the transfer and rejects with { aborted: true }.
+function postToS3(url, fields, file, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const form = new FormData()
     Object.entries(fields).forEach(([k, v]) => form.append(k, v))
     form.append('file', file)
     const xhr = new XMLHttpRequest()
     xhr.open('POST', url)
+    if (signal) {
+      if (signal.aborted) {
+        reject({ status: 0, aborted: true, message: 'Upload cancelled' })
+        return
+      }
+      signal.addEventListener('abort', () => {
+        xhr.abort?.()
+        reject({ status: 0, aborted: true, message: 'Upload cancelled' })
+      }, { once: true })
+    }
     xhr.upload.onprogress = (e) => {
       if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total)
     }
@@ -93,14 +104,16 @@ export const api = {
     },
     // Auto-detect: upload a PDF straight to S3 as an ingest job -> { job_id }.
     // 1. POST /uploads (creates the job `awaiting_upload` + a presigned POST), 2. XHR POST to S3 with
-    // progress, 3. POST /jobs/{id}/uploaded (queues it). If step 2 or 3 fails the job is cancelled.
-    uploadJob: async (file, onProgress) => {
+    // progress, 3. POST /jobs/{id}/uploaded (queues it). If step 2 or 3 fails, or `signal` is
+    // aborted during them, the job is cancelled. `onJob(job_id)` is told the id once it exists.
+    uploadJob: async (file, onProgress, { signal, onJob } = {}) => {
       const { job_id, url, fields } = await request('POST', '/api/import/uploads', {
         filename: file.name,
         size: file.size,
       })
+      onJob?.(job_id)
       try {
-        await postToS3(url, fields, file, onProgress)
+        await postToS3(url, fields, file, onProgress, signal)
         await request('POST', `/api/import/jobs/${job_id}/uploaded`)
       } catch (e) {
         await request('DELETE', `/api/import/jobs/${job_id}`).catch(() => {})
