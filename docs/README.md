@@ -34,7 +34,7 @@ question by reading one file instead of three.
 | Doc | What's inside |
 |---|---|
 | [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Implemented (except #81 duplicate-paper protection): kept for its decisions and rationale; behaviour lives in the feature docs |
-| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Proposed, awaiting confirmation:** fixing wrong question/answer matches and forcing missed ones (pairing panel, mapping table, pair from the queue) |
+| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Under review, not built:** the "Match this paper" popup (editable fields with a school combobox that can name a new school, found booklets with exact and best matches), unmatching that remembers the rejected pair, and the still-to-review mapping table and detach |
 
 ## Decisions
 
