@@ -22,6 +22,9 @@ function paperTitle(paper, i) {
   return paper.label ? `${paper.label}${paper.answer_label ? ` / ${paper.answer_label}` : ''}` : `Answers ${paper.answer_label ?? i + 1}`
 }
 
+// A linked partner's file: "this file" when it is in the same booklet (#90).
+const fileName = (link, jobId) => (link.job_id === jobId ? 'this file' : link.filename)
+
 const SAVE_DELAY_MS = 800
 const HANDLE_PX = 14
 const COLOUR = { question: '#2563eb', answer: '#16a34a', orphan: '#6b7280' }
@@ -537,7 +540,7 @@ export default function ReviewPage() {
           <div role="status" className="mx-4 mt-4 text-sm bg-blue-50 border border-blue-200 rounded px-3 py-2">
             {answersFrom && (
               <p>
-                Attached answers for question{answersFrom.attached.length === 1 ? '' : 's'} {answersFrom.attached.join(', ')} from {answersFrom.filename} ({answersFrom.paper_key}).
+                Attached answers for question{answersFrom.attached.length === 1 ? '' : 's'} {answersFrom.attached.join(', ')} from {fileName(answersFrom, jobId)} ({answersFrom.paper_key}).
               </p>
             )}
             {unmatched.length > 0 && (
@@ -772,7 +775,7 @@ export default function ReviewPage() {
               )}
               {!answerOnly && matches[paper.key] && (
                 <p role="status" className="w-52 mb-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
-                  Answers available from {matches[paper.key].filename} ({matches[paper.key].paper_key}) — they will be attached when you confirm.{' '}
+                  Answers available from {fileName(matches[paper.key], jobId)} ({matches[paper.key].paper_key}) — they will be attached when you confirm.{' '}
                   <button type="button" onClick={unmatchPaper} className="text-blue-700 hover:underline">Unmatch</button>
                 </p>
               )}

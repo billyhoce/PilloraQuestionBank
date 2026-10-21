@@ -143,13 +143,23 @@ On the review page of an answer-only paper (`MatchPanel.jsx`).
   - Answer side: "Linked to <filename> <key>" with Unmatch.
   - Question side: "Answers available from <filename> (<key>) — they will be attached when you
     confirm", with Unmatch.
+  - A partner in the same booklet (an [automatic](#automatic-matching) same-job link) is named
+    "this file" instead of its filename ("Linked to q1 in this file"), here and in the confirm
+    result ("Attached answers for questions 1, 2 from this file (a1)").
+  - Linking by hand is still across jobs only; a same-booklet pair comes from automatic matching.
 - Linking two papers by hand releases any earlier link of either one without rejecting it, so
   automatic matching may still propose that old pair later.
 
 ## Automatic matching
 
-For each **pending answer-only** paper. The result is stored on its row (`match_status`,
-`proposed_paper_id`, `match_note`).
+For each **pending answer-only** paper, and from the **question side** for each pending question
+paper (rules 4–5 only: a question paper never matches a bank paper). The result is stored on its row
+(`match_status`, `proposed_paper_id`, `match_note`).
+
+- **Same booklet:** a pending partner may be in the paper's own job, so a question paper and an
+  answer-only paper of one booklet that the pipeline did not pair are linked on the seven-field key.
+  The own job counts whatever its status, because `report` matches before the job turns
+  `review_ready`; other jobs must be `review_ready`.
 
 **Order of rules:**
 
@@ -158,7 +168,7 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 | 1 | Linked to a pending question paper (admin link, or an auto link that still holds) | Untouched; any proposal is hidden |
 | 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The panel shows "Answers match <paper>" with **Attach** (one click; asks append/replace only if needed) and **Not this one** |
 | 3 | All seven known, several confirmed papers share the key | `manual` ("N papers have this key") |
-| 4 | All seven known, no confirmed match, exactly one pending `question` paper of another `review_ready` job, not linked to anything, same key | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
+| 4 | All seven known, no confirmed match, exactly one pending `question` paper with the same key, not linked to anything, in another `review_ready` job **or the same job** | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
 | 5 | Same as 4, but several pending question papers | `manual` ("N pending question papers have this key") |
 | 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known; never for a [new school](#new-schools)) | `manual` ("partial: … differ" / "partial: unknown …") |
 | 7 | Otherwise | NULL (nothing to do) |
@@ -173,11 +183,12 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 - **Settling** an answer paper (attach or skip) clears its proposal.
 
 **When matching runs:**
-- At the end of `report`, in the same transaction as the proposal. For a question job, this also
-  links its question papers to older pending answer papers with the same key. If several answer
-  papers share the key, none is linked: the question paper and those answer papers are all marked
-  `manual` ("N pending answer papers have this key").
-- On `PUT .../papers/{key}/metadata`. The response includes the new `proposal`.
+- At the end of `report`, in the same transaction as the proposal. This also links the job's
+  question papers to pending answer papers with the same key, of older jobs or of the same job. If
+  several answer papers share the key, none is linked: the question paper and those answer papers
+  are all marked `manual` ("N pending answer papers have this key").
+- On `PUT .../papers/{key}/metadata`, of an answer-only or a question paper. The response includes
+  the new `proposal`.
 - On Unmatch (both papers) and on "Not this one".
 - On every new paper (auto-import confirm and manual import). Pending answer-only papers sharing the
   new paper's school, year and subject are re-matched, so the new paper becomes a ready-to-attach
@@ -208,10 +219,10 @@ not even a metadata edit; the admin can still link the pair by hand.
 
 ## Confirming a linked pair
 
-When a question paper is linked to a pending answer-only paper of another job, confirming it also
-attaches those answers and settles both papers.
+When a question paper is linked to a pending answer-only paper, of another job or of the same job,
+confirming it also attaches those answers and settles both papers.
 
-- **Locking:** both job rows are locked, lowest job id first.
+- **Locking:** both job rows are locked, lowest job id first. A same-job pair locks its one job.
 - **The answer paper is used only if:**
   - its job is still `review_ready`
   - the paper is still pending and undecided
@@ -219,7 +230,7 @@ attaches those answers and settles both papers.
 
   Otherwise the confirm proceeds without it and logs a warning.
 - **Cropping:** answer rectangles come from the **answer job's** `source.pdf` (its edited proposal
-  if any). They are mapped by question number and added **after** the question paper's own answer
+  if any). For a same-job pair that is the one `source.pdf`, read once. They are mapped by question number and added **after** the question paper's own answer
   pages, with provenance from the answer job's PDF.
 - **Unmatched numbers** are returned in `unmatched`. If none match, the answer paper stays pending
   and linked, and `answers_from` is null.
@@ -227,7 +238,8 @@ attaches those answers and settles both papers.
   - question paper `confirmed`, answer paper `attached` (with `paper_id`), in both jobs' outcomes and
     `ingest_paper` rows
   - events on both jobs (`paper_confirmed` with `answers_from_job`; `paper_attached` with `via_job`)
-  - each fully decided job becomes `confirmed`, and its prefix is dropped after the commit
+  - each fully decided job becomes `confirmed`, and its prefix is dropped after the commit (a
+    same-job pair is judged after both outcomes are recorded, so confirming it can settle the job)
 - **Response:** adds `answers_from` (`{job_id, filename, paper_key, attached}` or null) and
   `unmatched`. Both are shown above the topic review.
 
