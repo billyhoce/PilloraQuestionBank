@@ -297,7 +297,7 @@ def match_for_new_paper(db: Session, paper: Paper) -> None:
 
 def match_info(db: Session, job: IngestJob) -> dict[str, dict]:
     """The job's automatic matches by paper key: ``{status, note, paper}`` where ``paper`` (for a
-    proposal whose paper still exists) describes the proposed paper."""
+    proposal whose paper still exists) describes the proposed paper, with its ``answer_coverage``."""
     out = {}
     rows = db.scalars(
         select(IngestPaper).where(
@@ -318,6 +318,7 @@ def match_info(db: Session, job: IngestJob) -> dict[str, dict]:
                 "id": paper.id, "school": paper.school.name, "year": paper.year, "level": paper.level.name,
                 "subject": paper.subject.name, "exam_type": paper.exam_type.name,
                 "stream": paper.stream.name, "paper_number": paper.paper_number,
+                "answer_coverage": bank_coverage(db, [paper.id])[paper.id],
             }
         out[row.paper_key] = info
     return out

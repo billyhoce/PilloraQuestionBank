@@ -115,6 +115,7 @@ def test_new_paper_surfaces_on_pending_answer_job(db_session, admin_user, meta):
     assert state(r) == ("proposed", target.id, None)
     info = match_info(db_session, ajob)[r.paper_key]
     assert info["status"] == "proposed" and info["paper"]["id"] == target.id
+    assert info["paper"]["answer_coverage"] == "none"  # Attach asks append/replace only for "partial"
     other = add_paper(db_session, admin_user, meta)  # a duplicate arrives: now ambiguous
     match_for_new_paper(db_session, other)
     assert r.match_status == "manual" and match_info(db_session, ajob)[r.paper_key]["paper"] is None

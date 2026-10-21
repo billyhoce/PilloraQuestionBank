@@ -39,7 +39,7 @@ def proposal_coverage(paper: dict) -> dict:
     return {"answer_coverage": coverage_of(len(questions), len(questions) - len(unanswered)), "unanswered": unanswered}
 
 
-def _current_papers(job: IngestJob) -> dict[str, dict]:
+def current_papers(job: IngestJob) -> dict[str, dict]:
     """``job``'s current proposal papers (the admin's edit, else the worker's) by paper key."""
     from app.services.ingest_confirm import paper_key  # confirm imports this module
 
@@ -50,13 +50,13 @@ def _current_papers(job: IngestJob) -> dict[str, dict]:
 def job_coverage(job: IngestJob) -> dict[str, dict]:
     """Coverage of every paper of ``job``'s current proposal, by paper key. Empty while the job has
     no proposal."""
-    return {key: proposal_coverage(p) for key, p in _current_papers(job).items()}
+    return {key: proposal_coverage(p) for key, p in current_papers(job).items()}
 
 
 def paper_answer_numbers(job: IngestJob, key: str) -> list:
     """The numbers of proposal paper ``key``'s questions that have an answer box: for an answer-only
     paper, the answers a linked confirm brings in by number."""
-    paper = _current_papers(job).get(key)
+    paper = current_papers(job).get(key)
     return answered_numbers(paper) if paper is not None else []
 
 

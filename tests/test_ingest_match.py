@@ -1,5 +1,6 @@
-"""Manual matching of an answer-only paper to a question paper (#82): the pending-papers search,
-link / unlink, the review's ``matches`` and the job list's ``unmatched_answers`` filter."""
+"""Manual matching of an answer-only paper and a question paper (#82, #91): link from either side,
+unlink, the review's ``matches`` and the job list's ``unmatched_answers`` filter. The search for a
+partner is in test_match_candidates.py."""
 
 import pytest
 
@@ -39,30 +40,6 @@ def row(db, job, key):
     return db.query(IngestPaper).filter_by(job_id=job.id, paper_key=key).one()
 
 
-def test_pending_lists_question_papers_of_other_jobs_filtered_by_metadata(
-    admin_client, db_session, admin_user, fake_object_store
-):
-    a, _ = job_with(db_session, admin_user, QUESTION, {"year": 2024, "paper_number": "1"}, filename="a.pdf")
-    job_with(db_session, admin_user, QUESTION, {"year": 2023, "paper_number": "1"}, filename="b.pdf")
-    job_with(db_session, admin_user, ANSWERS, {"year": 2024, "paper_number": "1"}, filename="ans.pdf")
-    job_with(db_session, admin_user, QUESTION, {"year": 2024}, filename="done.pdf", status="confirmed")
-    got = admin_client.get("/api/import/papers/pending").json()["data"]
-    assert sorted(x["filename"] for x in got) == ["a.pdf", "b.pdf"]  # not the answers, not a confirmed job
-    got = admin_client.get("/api/import/papers/pending?year=2024&paper_number=1").json()["data"]
-    assert [x["filename"] for x in got] == ["a.pdf"]
-    item = got[0]
-    assert (item["job_id"], item["paper_key"]) == (str(a.id), "q1")
-    assert item["metadata"]["year"] == 2024
-    prev = item["preview"]
-    assert prev["url"] == f"https://fake.url/tmp/ingest/{a.id}/pages/p03.webp"
-    assert prev["rect"] == rect(3) and prev["page"]["page"] == 3 and prev["page"]["width_px"] > 0
-    assert admin_client.get(f"/api/import/papers/pending?exclude_job_id={a.id}").json()["data"][0]["filename"] == "b.pdf"
-
-
-def test_pending_non_admin_forbidden(public_client):
-    assert public_client.get("/api/import/papers/pending").status_code == 403
-
-
 def test_link_sets_both_sides_review_shows_it_and_unlink_clears(
     admin_client, db_session, admin_user, fake_object_store
 ):
@@ -99,17 +76,61 @@ def test_link_refuses_bad_targets(admin_client, db_session, admin_user, fake_obj
     qjob, qkey = job_with(db_session, admin_user, QUESTION)
     ajob, akey = job_with(db_session, admin_user, ANSWERS)
     other_answers, ok = job_with(db_session, admin_user, ANSWERS)
+    other_question, oq = job_with(db_session, admin_user, QUESTION)
+    done, dk = job_with(db_session, admin_user, QUESTION, status="confirmed")
     url = f"/api/import/jobs/{ajob.id}/papers/{akey}/match"
-    assert admin_client.post(url, json={"ingest_paper_id": 999999}).status_code == 404
-    assert admin_client.post(url, json={"ingest_paper_id": row(db_session, other_answers, ok).id}).status_code == 422
-    assert admin_client.post(url, json={"ingest_paper_id": row(db_session, ajob, akey).id}).status_code == 422
-    # only an answer-only paper is linked from this side
-    assert admin_client.post(
+    link = lambda u, target: admin_client.post(u, json={"ingest_paper_id": target}).status_code  # noqa: E731
+    assert link(url, 999999) == 404
+    assert link(url, row(db_session, other_answers, ok).id) == 422  # two answer papers
+    assert link(url, row(db_session, ajob, akey).id) == 422  # itself
+    assert link(url, row(db_session, done, dk).id) == 422  # a job no longer under review
+    assert link(f"/api/import/jobs/{qjob.id}/papers/{qkey}/match", row(db_session, other_question, oq).id) == 422
+    assert link(f"/api/import/jobs/{ajob.id}/papers/nope/match", row(db_session, qjob, qkey).id) == 404
+
+
+def test_link_from_the_question_side(admin_client, db_session, admin_user, fake_object_store):
+    qjob, qkey = job_with(db_session, admin_user, QUESTION, filename="q.pdf")
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, filename="a.pdf")
+    resp = admin_client.post(
         f"/api/import/jobs/{qjob.id}/papers/{qkey}/match", json={"ingest_paper_id": row(db_session, ajob, akey).id}
-    ).status_code == 422
-    assert admin_client.post(
-        f"/api/import/jobs/{ajob.id}/papers/nope/match", json={"ingest_paper_id": row(db_session, qjob, qkey).id}
-    ).status_code == 404
+    )
+    assert resp.status_code == 200
+    assert resp.json()["matches"]["filename"] == "a.pdf"
+    assert row(db_session, ajob, akey).matched_ingest_paper_id == row(db_session, qjob, qkey).id
+
+
+def test_link_within_one_booklet(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user, proposal=proposal(QUESTION, ANSWERS), filename="both.pdf")
+    sync_job_papers(db_session, job)
+    db_session.commit()
+    resp = admin_client.post(
+        f"/api/import/jobs/{job.id}/papers/a1/match", json={"ingest_paper_id": row(db_session, job, "q1").id}
+    )
+    assert resp.status_code == 200
+    assert (resp.json()["matches"]["job_id"], resp.json()["matches"]["paper_key"]) == (str(job.id), "q1")
+    assert row(db_session, job, "q1").matched_ingest_paper_id == row(db_session, job, "a1").id
+
+
+def test_link_saves_the_papers_details_in_the_same_request(admin_client, db_session, admin_user, fake_object_store):
+    qjob, qkey = job_with(db_session, admin_user, QUESTION, {"year": 2023, "paper_number": "2A"})
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, {"year": 2023})
+    resp = admin_client.post(f"/api/import/jobs/{ajob.id}/papers/{akey}/match", json={
+        "ingest_paper_id": row(db_session, qjob, qkey).id,
+        "metadata": {"year": 2024, "paper_number": "2A", "new_school_name": "Raffles Instn"},
+    })
+    assert resp.status_code == 200
+    a = row(db_session, ajob, akey)
+    assert (a.year, a.paper_number, a.new_school_name, a.metadata_source) == (2024, "2A", "Raffles Instn", "admin")
+    assert a.matched_ingest_paper_id == row(db_session, qjob, qkey).id
+
+
+def test_a_refused_link_saves_no_details(admin_client, db_session, admin_user, fake_object_store):
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, {"year": 2023})
+    resp = admin_client.post(
+        f"/api/import/jobs/{ajob.id}/papers/{akey}/match", json={"ingest_paper_id": 999999, "metadata": {"year": 2024}}
+    )
+    assert resp.status_code == 404
+    assert row(db_session, ajob, akey).year == 2023
 
 
 def test_unmatched_answers_filter(admin_client, db_session, admin_user, fake_object_store):
