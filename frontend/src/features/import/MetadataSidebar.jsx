@@ -1,5 +1,6 @@
 import Spinner from '../../components/Spinner'
 import ErrorBanner from '../../components/ErrorBanner'
+import SchoolCombobox from './SchoolCombobox'
 
 function SelectField({ label, value, onChange, options }) {
   return (
@@ -19,8 +20,11 @@ function SelectField({ label, value, onChange, options }) {
   )
 }
 
+// `schoolCombobox` swaps the school dropdown for the type-to-search SchoolCombobox (the review page);
+// `extractedSchool` is the school name read from the cover, shown there while it matches no school.
 export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error,
-  confirmLabel = 'Confirm & Import →', cancelLabel = 'Cancel Import', canConfirm = true }) {
+  confirmLabel = 'Confirm & Import →', cancelLabel = 'Cancel Import', canConfirm = true,
+  schoolCombobox = false, extractedSchool = null }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -37,6 +41,8 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
     metadata.exam_type_id &&
     metadata.year &&
     metadata.paper_number
+  // A school was read but matched none in the list: it counts as blank, and says why confirm waits.
+  const unresolvedSchool = schoolCombobox && extractedSchool && !metadata.school_id ? extractedSchool : null
 
   return (
     <div className="w-52 flex-shrink-0 flex flex-col gap-3 p-4 bg-white border-l border-gray-200 overflow-y-auto">
@@ -47,7 +53,12 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
           <SelectField label="Subject" value={metadata.subject_id} onChange={handleSelect('subject_id')} options={refs.subjects} />
           <SelectField label="Stream" value={metadata.stream_id} onChange={handleSelect('stream_id')} options={refs.streams} />
           <SelectField label="Level" value={metadata.level_id} onChange={handleSelect('level_id')} options={refs.levels} />
-          <SelectField label="School" value={metadata.school_id} onChange={handleSelect('school_id')} options={refs.schools} />
+          {schoolCombobox ? (
+            <SchoolCombobox schools={refs.schools} value={metadata.school_id} onChange={id => set('school_id', id)}
+              extractedName={extractedSchool} />
+          ) : (
+            <SelectField label="School" value={metadata.school_id} onChange={handleSelect('school_id')} options={refs.schools} />
+          )}
           <SelectField label="Exam Type" value={metadata.exam_type_id} onChange={handleSelect('exam_type_id')} options={refs.examTypes} />
         </>
       )}
@@ -85,6 +96,9 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
         {answerCount > 0 && <div>{answerCount} answer set{answerCount !== 1 ? 's' : ''}</div>}
       </div>
       {error && <ErrorBanner message={error} />}
+      {unresolvedSchool && (
+        <p className="text-xs text-amber-800">Pick a school: “{unresolvedSchool}” is not in the list.</p>
+      )}
       <button
         type="button"
         onClick={onNext}

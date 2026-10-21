@@ -111,6 +111,14 @@ Cost and request ids are recorded through `record_usage` (into the job's `report
 reference-table ID (`school_id`, `subject_id`, `level_id`, `stream_id`, `exam_type_id`) by **exact,
 case-insensitive name match** — unmatched fields are left blank for the user to fill.
 
+- **Names come from the lists,** except the school: when the cover names a school that is not in the
+  list, the model gives the name **as printed** (e.g. "Raffles Instn").
+- **The raw names are kept.** The result also carries `extracted`: the school, subject, level,
+  stream and exam type exactly as read (each `null` when none was), resolved or not. It is stored
+  with the ids in `report["paper_metadata"][key]` and returned by the review endpoint, so the review
+  page can show a school that matched nothing ([auto-import.md](./auto-import.md#review-page)).
+  Jobs from before this have no `extracted`, and a failed extraction stores none.
+
 ```json
 {
   "school": "Raffles Institution",
@@ -123,7 +131,19 @@ case-insensitive name match** — unmatched fields are left blank for the user t
 }
 ```
 
-Any field can be `null` if the cover and filename don't say. **Failures never fail the job:** a
+Any field can be `null` if the cover and filename don't say. The stored result is the ids plus
+`extracted`:
+
+```json
+{
+  "school_id": null, "subject_id": 2, "level_id": 3, "stream_id": 5, "exam_type_id": 4,
+  "year": 2024, "paper_number": "1",
+  "extracted": { "school": "Raffles Instn", "subject": "Mathematics", "level": "Sec 3",
+                 "stream": "Express", "exam_type": "EOY" }
+}
+```
+
+ **Failures never fail the job:** a
 failed call with a cover is retried on the filename alone, and a failure there stores empty
 metadata for that paper (the worker also guards the call, so an injected extractor that raises
 yields `{}`).

@@ -48,7 +48,10 @@ _EXTRACTION_TOOL: dict = {
         "properties": {
             "school": {
                 "type": ["string", "null"],
-                "description": "School name exactly as listed in Available Schools, or null.",
+                "description": (
+                    "School name exactly as listed in Available Schools. If the paper names a school "
+                    "that is not in the list, give the name as printed instead; null if none is named."
+                ),
             },
             "year": {
                 "type": ["integer", "null"],
@@ -146,6 +149,15 @@ def resolve_metadata(extracted: dict, ref_data: dict) -> dict:
     return result
 
 
+# The names whose raw text is kept beside the resolved ids (``extracted``), so a name that matched
+# nothing in the reference lists (e.g. "Raffles Instn") is still shown to the admin at review.
+EXTRACTED_NAMES = ("school", "subject", "level", "stream", "exam_type")
+
+
+def _raw_names(extracted: dict) -> dict:
+    return {k: (extracted.get(k) or None) for k in EXTRACTED_NAMES}
+
+
 MODEL = "claude-haiku-4-5-20251001"
 # The tool result is a handful of short fields; 256 truncated it once ``stream`` was added.
 MAX_TOKENS = 512
@@ -190,11 +202,13 @@ def _call(client, ref_data: dict, filename: str, cover: bytes | None) -> dict:
 
 
 def extract_paper_metadata(filename: str, db, cover: bytes | None = None) -> dict:
-    """The paper's metadata, resolved to reference-data ids.
+    """The paper's metadata, resolved to reference-data ids, plus ``extracted``: the raw names read
+    (school, subject, level, stream, exam type; each null when none was read), resolved or not.
 
     ``cover`` is a PDF of the paper's cover pages (or, without any, its first page); the filename
     stays as a hint, and is all there is when ``cover`` is ``None``. A failed call with a cover is
-    retried once on the filename alone; a failure there gives empty metadata. Never raises.
+    retried once on the filename alone; a failure there gives empty metadata (no ``extracted``).
+    Never raises.
     """
     with Timer() as t_total:
         try:
@@ -206,7 +220,7 @@ def extract_paper_metadata(filename: str, db, cover: bytes | None = None) -> dic
                 if cover is None:
                     raise
                 extracted = _call(client, ref_data, filename, None)
-            result = resolve_metadata(extracted, ref_data)
+            result = {**resolve_metadata(extracted, ref_data), "extracted": _raw_names(extracted)}
         except Exception:
             result = dict(_EMPTY)
     log_event("extract_metadata", "total", seconds=t_total.s)

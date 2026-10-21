@@ -87,6 +87,15 @@ def test_review_returns_each_papers_metadata_and_the_filename_fallback(
     assert body["paper_metadata"] == {} and body["filename_metadata"] == {"year": 2022}
 
 
+def test_review_carries_the_names_read_from_the_cover(admin_client, db_session, admin_user, fake_object_store):
+    job = make_job(db_session, admin_user)
+    extracted = {"school": "Raffles Instn", "subject": None, "level": None, "stream": None, "exam_type": None}
+    job.report = {"paper_metadata": {"q1": {"school_id": None, "year": 2024, "extracted": extracted}}}
+    db_session.commit()
+    body = admin_client.get(f"/api/import/jobs/{job.id}/review").json()
+    assert body["paper_metadata"]["q1"]["extracted"] == extracted
+
+
 def test_extract_pages_joins_separate_runs():
     from app.services.ingest_review import extract_pages
 

@@ -247,7 +247,8 @@ IngestJob: {
   proposal (JSONB, nullable),    -- the pipeline's proposed split
   proposal_edited (JSONB, nullable),  -- the admin's edits to it
   report (JSONB, nullable),      -- run report; `paper_metadata` maps each proposal paper's key to the
-                                 -- metadata read from its cover, written by the worker's `segment` task (pre-fills
+                                 -- metadata read from its cover (ids, plus `extracted`: the raw names read),
+                                 -- written by the worker's `segment` task (pre-fills
                                  -- the metadata sidebar; old jobs have `filename_metadata` instead);
                                  -- `review_outcome` maps each proposal paper's key to "confirmed" | "skipped" | "attached"
                                  -- (written by confirm/skip/attach; the job is `confirmed` once all are set);

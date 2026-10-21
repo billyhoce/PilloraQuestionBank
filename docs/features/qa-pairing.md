@@ -21,7 +21,9 @@ it is in [auto-import.md](./auto-import.md).
 ## Per-paper metadata and the `ingest_paper` row
 
 - **Metadata source:** each paper's metadata is read from its own cover
-  ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)).
+  ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)). A school name that matched no
+  school is kept (`extracted.school`) and shown on the review page, but it counts as blank for
+  matching: only `school_id` is in the key.
 - **The `ingest_paper` row** ([DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs)) is one row per
   proposed paper. It holds the role, the seven-field key, metadata source, status, the created or
   attached paper, the link and the match result.
