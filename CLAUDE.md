@@ -8,7 +8,7 @@ generate custom papers as PDFs; premium papers unlock per school level.
   container) · Claude API (Haiku 4.5; segmentation retries on Opus) · Tesseract OCR.
 - A **question** is one set of page images labelled as a list of **parts** ((a), (b)(i) …), each
   with its own topics and marks; the question's marks are the sum of its parts.
-- Domain vocabulary (job, task, stage, section, proposal, link, …): [docs/CONTEXT.md](docs/CONTEXT.md).
+- Domain vocabulary (job, task, stage, section, proposal, link, …): [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Where to look
 

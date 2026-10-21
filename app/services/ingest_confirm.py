@@ -332,7 +332,8 @@ def confirm_job_paper(
 
 
 def _release_link(db: Any, job: IngestJob, key: str) -> None:
-    """A skipped paper gives up its link; the partner (if still pending) is looked at afresh."""
+    """A skipped or attached paper gives up its link; the partner (if still pending) is looked at
+    afresh."""
     from app.services.ingest_matching import match_row
     from app.services.ingest_papers import _clear_link
 
@@ -478,6 +479,7 @@ def attach_answers(
                 row.source_page, row.source_rect = p["source_page"], p["source_rect"]
         settled = _record(job, key, "attached", paper_id)
         set_status(db, job, key, "attached", paper_id)
+        _release_link(db, job, key)  # else its question paper would still confirm expecting these answers
         add_event(
             db, job_id, "paper_attached", actor_user_id=getattr(admin, "id", None), paper_id=paper_id,
             paper_label=key, attached=numbers, unmatched=[str(n) for n in unmatched], job_settled=settled,

@@ -143,7 +143,7 @@ flowchart TD
 - At the end of the worker's `report` stage, in the same transaction as the proposal: every paper of
   the job, which also links the job's question papers to older jobs' (or its own) answer papers.
 - When a pending paper's details are edited.
-- After **Unmatch** (both papers), **Not this one**, and skipping a linked paper (its partner).
+- After **Unmatch** (both papers), **Not this one**, and skipping or attaching a linked paper (its partner).
 - On every new bank paper (auto-import confirm or manual import): pending answer-only papers in
   `review_ready` jobs sharing its school, year and subject are re-matched, so the new paper becomes a
   ready-to-attach proposal. This never fails the confirm.
@@ -272,8 +272,8 @@ inside one booklet are fixed with the answer-box editor ([auto-import.md](./auto
   of its own) and "Answer 13 has no question".
 - **Stored** on the pair (on the answer paper) for a link; none means by number, which an automatic
   link uses until someone edits it. An attach's mapping is used once, not stored.
-- **Changing the match discards it:** a new pair, Unmatch, skipping either paper, or an auto link
-  dropped by a detail edit. An auto link re-made with the same partner keeps it.
+- **Changing the match discards it:** a new pair, Unmatch, skipping either paper, attaching the
+  answer paper to a bank paper, or an auto link dropped by a detail edit. An auto link re-made with the same partner keeps it.
 
 ## Attaching answers to an existing paper
 
@@ -293,6 +293,8 @@ Puts an answer-only paper's answers onto a bank paper and settles the answer pap
   partly answered bank paper (default append).
 - New answer pages are cropped like a confirm, carry provenance ([manage-papers.md](./manage-papers.md)),
   and never collide with existing page orders.
+- **Releases its link:** a linked answer paper attached elsewhere (via **Change match…**) frees its
+  question paper, which is matched afresh and no longer expects those answers on confirm.
 - **One transaction:** the page rows, the job's outcome, the paper record and a `paper_attached` event.
   On failure nothing changes and temporary crops are removed; replaced images are deleted after the
   commit. Attaching counts as a decision for settling the job.
@@ -321,9 +323,6 @@ also attaches those answers and settles both.
 
 ## Known gaps
 
-- **Attaching a linked answer paper to a bank paper** (via **Change match…**) does not release the
-  link: the question paper still shows it as its partner, and confirming it goes ahead without those
-  answers.
 - **Detaching answers after confirm** is not supported; fix a wrong attach in
   [Manage Papers](./manage-papers.md).
 - **Duplicate-paper protection (#81)** waits on a live-DB check. The bank has no uniqueness on the

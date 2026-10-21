@@ -9,7 +9,7 @@ It is the `ingestion/` library; the webapp's ingest worker runs it (see
 `ingestion/ingester/` (segment, split, routing), `ingestion/question_extractor/` (locating questions,
 answer tables, OCR, renders), `ingestion/docker/tesseract/`
 **Related:** [auto-import.md](./auto-import.md), [qa-pairing.md](./qa-pairing.md), [ai-labelling.md](./ai-labelling.md),
-[CONTEXT.md](../CONTEXT.md), [ADR 0001](../adr/0001-stage-pipeline.md), [ADR 0002](../adr/0002-qa-booklet-pairing.md)
+[GLOSSARY.md](../GLOSSARY.md), [ADR 0001](../adr/0001-stage-pipeline.md), [ADR 0002](../adr/0002-qa-booklet-pairing.md)
 
 ## Flow
 

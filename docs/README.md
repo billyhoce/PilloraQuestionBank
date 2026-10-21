@@ -10,7 +10,7 @@ each opening with a `Code:` line that names its implementation paths. Local setu
 |---|---|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Components, system diagram, code map, page routes, cross-cutting conventions |
 | [DATA_MODEL.md](./DATA_MODEL.md) | Entities and relationships, S3 key layout, image conventions |
-| [CONTEXT.md](./CONTEXT.md) | Domain glossary (job, task, stage, section, proposal, link, …) |
+| [GLOSSARY.md](./GLOSSARY.md) | Domain glossary (job, task, stage, section, proposal, link, …) |
 
 ## Features
 

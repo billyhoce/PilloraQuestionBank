@@ -1,4 +1,4 @@
-# Context
+# Glossary
 
 The words this project uses on purpose. Most belong to ingestion
 ([features/ingestion-pipeline.md](./features/ingestion-pipeline.md),
