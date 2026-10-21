@@ -382,6 +382,24 @@ describe('ReviewPage', () => {
       expect(screen.queryByText(/Pick a school/)).not.toBeInTheDocument()
     })
 
+    it('confirms with a school typed as new, which also lifts the hold on confirm', async () => {
+      const extracted = { school: 'Raffles Instn', subject: null, level: null, stream: null, exam_type: null }
+      api.import.review.mockResolvedValue({
+        ...TWO, filename_metadata: {}, paper_metadata: { q1: { ...FILLED, school_id: null, extracted } },
+      })
+      api.import.confirmJobPaper.mockResolvedValue({ paper_id: 7, job_status: 'review_ready', questions: [] })
+      renderPage()
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await userEvent.type(await screen.findByRole('combobox', { name: 'School' }), 'Raffles Instn')
+      await userEvent.click(screen.getByRole('option', { name: 'Use “Raffles Instn” as a new school' }))
+      expect(screen.queryByText(/Pick a school/)).not.toBeInTheDocument()
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(api.import.confirmJobPaper).toHaveBeenCalledWith('j1', {
+        paper_label: 'q1', ...FILLED, school_id: null, new_school_name: 'Raffles Instn', is_premium: true,
+      })
+    })
+
     it('an old job without the names read shows the school as before', async () => {
       api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1: FILLED } })
       renderPage()

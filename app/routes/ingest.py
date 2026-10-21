@@ -400,6 +400,7 @@ def _paper_summary(row: IngestPaper, coverage: dict | None = None) -> dict:
         "role": row.role,
         "status": row.status,
         "school_id": row.school_id,
+        "new_school_name": row.new_school_name,
         "year": row.year,
         "level_id": row.level_id,
         "subject_id": row.subject_id,
@@ -649,12 +650,18 @@ def manual_pages(
 class JobConfirmIn(PaperMetadataIn):
     # Which proposal paper: its question label, else its answer label (see paper_key).
     paper_label: str
+    # A school not in the list yet (#87): give its name instead of school_id; confirm creates it.
+    school_id: Optional[int] = None
+    new_school_name: Optional[str] = Field(None, max_length=128)
 
 
 class PaperMetadataEditIn(BaseModel):
-    """The review sidebar's seven fields as the admin has them so far; any may be unset."""
+    """The review sidebar's seven fields as the admin has them so far; any may be unset.
+    ``new_school_name`` is a school typed that is not in the list yet (used when ``school_id`` is
+    unset; a name equal to an existing school resolves to it)."""
 
     school_id: Optional[int] = None
+    new_school_name: Optional[str] = Field(None, max_length=128)
     year: Optional[int] = None
     level_id: Optional[int] = None
     subject_id: Optional[int] = None

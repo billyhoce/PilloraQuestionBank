@@ -8,8 +8,11 @@ import { closestSchools } from './schoolSuggestions'
  *   onChange      - (id | null) => void
  *   extractedName - the name the cover was read as; while no school is chosen it is shown in amber
  *                   as "<name> — not in the list", and the closest schools are listed first
+ *   onNewSchool   - (name) => void; when given, the list ends with 'Use "<typed>" as a new school'
+ *                   (unless the typed name is an existing school's, in any case)
+ *   newName       - the new school's name once chosen that way (value is then null)
  */
-export default function SchoolCombobox({ schools, value, onChange, extractedName = null }) {
+export default function SchoolCombobox({ schools, value, onChange, extractedName = null, onNewSchool = null, newName = null }) {
   const chosen = schools.find(s => s.id === value) ?? null
   // The text being typed; null while not editing, when the input shows the chosen school.
   const [query, setQuery] = useState(null)
@@ -17,13 +20,18 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
   const [activeIdx, setActiveIdx] = useState(0)
   const containerRef = useRef(null)
   const listId = useId()
-  const unresolved = extractedName && !chosen
+  const unresolved = extractedName && !chosen && !newName
 
   const options = useMemo(() => {
-    const q = (query ?? '').trim().toLowerCase()
-    if (q) return schools.filter(s => s.name.toLowerCase().includes(q)).slice(0, 50)
-    return (unresolved ? closestSchools(extractedName, schools) : schools).slice(0, 50)
-  }, [schools, query, unresolved, extractedName])
+    const typed = (query ?? '').trim()
+    const q = typed.toLowerCase()
+    if (!q) return (unresolved ? closestSchools(extractedName, schools) : schools).slice(0, 50)
+    const found = schools.filter(s => s.name.toLowerCase().includes(q))
+    const exact = found.find(s => s.name.toLowerCase() === q)
+    // An existing name (any case) is that school, listed first; anything else may be a new school.
+    const list = (exact ? [exact, ...found.filter(s => s !== exact)] : found).slice(0, 50)
+    return onNewSchool && !exact ? [...list, { id: null, name: typed, isNew: true }] : list
+  }, [schools, query, unresolved, extractedName, onNewSchool])
 
   useEffect(() => {
     function onDocClick(e) {
@@ -44,14 +52,15 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
   }
 
   function pick(school) {
-    onChange(school.id)
+    if (school.isNew) onNewSchool(school.name)
+    else onChange(school.id)
     close()
   }
 
   function onType(text) {
     setQuery(text)
     openList()
-    if (text.trim() === '' && value != null) onChange(null)
+    if (text.trim() === '' && (value != null || newName)) onChange(null)
   }
 
   function onKeyDown(e) {
@@ -80,7 +89,7 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        value={query ?? chosen?.name ?? ''}
+        value={query ?? chosen?.name ?? newName ?? ''}
         onChange={e => onType(e.target.value)}
         onFocus={openList}
         onBlur={() => setQuery(null)}
@@ -90,6 +99,9 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
           unresolved ? 'border-amber-400 bg-amber-50' : 'border-gray-300'
         }`}
       />
+      {newName && !chosen && (
+        <p className="mt-1 text-xs text-blue-800">New school — created when you confirm</p>
+      )}
       {unresolved && (
         <p className="mt-1 text-xs text-amber-800">
           <em>{extractedName}</em> — not in the list
@@ -100,14 +112,14 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
           className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-md max-h-60 overflow-auto text-sm">
           {options.map((s, i) => (
             <li
-              key={s.id}
+              key={s.isNew ? 'new' : s.id}
               role="option"
-              aria-selected={s.id === value}
+              aria-selected={!s.isNew && s.id === value}
               onMouseDown={e => { e.preventDefault(); pick(s) }}
               onMouseEnter={() => setActiveIdx(i)}
               className={`px-2 py-1 cursor-pointer ${i === activeIdx ? 'bg-blue-50' : ''}`}
             >
-              {s.name}
+              {s.isNew ? `Use “${s.name}” as a new school` : s.name}
             </li>
           ))}
           {options.length === 0 && <li className="px-2 py-1 text-gray-500">No matches</li>}

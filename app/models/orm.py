@@ -525,6 +525,9 @@ class IngestPaper(Base):
     exam_type_id: Mapped[int | None] = mapped_column(ForeignKey("exam_type.id", ondelete="SET NULL"), nullable=True)
     stream_id: Mapped[int | None] = mapped_column(ForeignKey("stream.id", ondelete="SET NULL"), nullable=True)
     paper_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # A school the admin typed that is not in the reference list (``school_id`` is then NULL); the
+    # school is only created when a question paper carrying it is confirmed (#87).
+    new_school_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Where the metadata came from: ``cover``, ``filename`` or ``admin`` (NULL: nothing known).
     metadata_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")

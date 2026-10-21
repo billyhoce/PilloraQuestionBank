@@ -19,7 +19,7 @@ from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
-from app.services.ingest_papers import get_row, set_metadata, set_status
+from app.services.ingest_papers import create_new_school, get_row, set_metadata, set_status
 from app.services.paper_admin import apply_page_changes, commit_with_page_moves
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
@@ -232,7 +232,10 @@ def confirm_job_paper(
     come in too: cropped from the other job's ``source.pdf``, appended after this paper's own answer
     pages, and the answer paper is recorded ``attached`` in the same transaction. ``answers_info``,
     if given, is filled with ``answers_from`` (``{job_id, filename, paper_key, attached}`` or None),
-    ``unmatched`` (answer numbers with no question) and ``answers_job_settled``."""
+    ``unmatched`` (answer numbers with no question) and ``answers_job_settled``.
+
+    ``metadata`` may name a school not in the list yet (``new_school_name``, no ``school_id``): it is
+    found or created here and given to the other pending papers carrying that name (#87)."""
     partner, partner_job = _linked_answers(db, job, key)
     # Lock both jobs, lowest id first, so two confirms of a linked pair cannot deadlock.
     for j in sorted([j for j in (job, partner_job) if j is not None], key=lambda j: str(j.id)):
@@ -250,6 +253,10 @@ def confirm_job_paper(
             "confirm_job_paper/linked_answers_unavailable job=%s key=%s answer_job=%s", job.id, key, partner_job.id
         )
         partner = partner_job = None
+    try:  # a school typed as new is created now, in the confirm's transaction (#87)
+        metadata = create_new_school(db, metadata)
+    except ValueError as e:
+        raise ReviewActionError(422, str(e))
     payload, temp_keys = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
     attached: list[int] = []
     unmatched: list[Any] = []

@@ -1,11 +1,12 @@
 // Words for the review queue's paper lines.
 
 // The paper's identity in words — "Raffles · 2024 · Sec 4 · E Maths · Prelim · P1" — from the
-// ids on its ingest_paper row; `missing` lists what is not known yet.
+// ids on its ingest_paper row (or its new school's name); `missing` lists what is not known yet.
 export function describeMetadata(p, refs) {
   const name = (list, id) => (id == null ? null : refs?.[list]?.find(o => o.id === id)?.name ?? `#${id}`)
   const fields = [
-    ['school', name('schools', p.school_id)],
+    // A school typed during review is only created on confirm (#87).
+    ['school', name('schools', p.school_id) ?? (p.new_school_name ? `${p.new_school_name} (new)` : null)],
     ['year', p.year != null ? String(p.year) : null],
     ['level', name('levels', p.level_id)],
     ['subject', name('subjects', p.subject_id)],

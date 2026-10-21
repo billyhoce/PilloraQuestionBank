@@ -105,6 +105,12 @@ describe('reviewQueueText', () => {
     expect(d.missing).toEqual(['level', 'exam type', 'paper no.'])
   })
 
+  it('labels a school typed during review as new', () => {
+    const d = describeMetadata({ school_id: null, new_school_name: 'Raffles Instn', year: 2024 }, { schools: [] })
+    expect(d.text).toBe('Raffles Instn (new) · 2024')
+    expect(d.missing).not.toContain('school')
+  })
+
   it('says where an answer paper stands', () => {
     expect(matchState({ role: 'answer_only', linked: true }).text).toMatch(/Linked/)
     expect(matchState({ role: 'answer_only', match_status: 'proposed' }).text).toMatch(/found/)
