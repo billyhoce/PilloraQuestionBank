@@ -153,17 +153,20 @@ export const api = {
     skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
     // Attach an answer-only paper to an existing paper: { key, paper_id, mode? } -> { attached, unmatched, modes, job_status }.
     attachJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/attach`, payload),
-    // Pending question papers of other review-ready jobs, filtered by metadata (+ exclude_job_id):
-    // { data: [{ ingest_paper_id, job_id, filename, paper_key, metadata, preview }] }.
-    pendingPapers: (filters = {}) => {
+    // "Match this paper": the booklets paper `key` could be paired with, ranked against `query`
+    // (the seven fields, or new_school_name; blank = any) -> { exact, best }.
+    paperCandidates: (id, key, query = {}) => {
       const params = new URLSearchParams()
-      for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== null && v !== '') params.set(k, v)
+      for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== '') params.set(k, v)
       const qs = params.toString()
-      return request('GET', `/api/import/papers/pending${qs ? `?${qs}` : ''}`).then(r => r.data)
+      return request('GET', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/candidates${qs ? `?${qs}` : ''}`)
     },
-    // Link an answer-only paper (its `key`) with a pending question paper of another job.
-    matchJobPaper: (id, key, ingest_paper_id) =>
-      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, { ingest_paper_id }),
+    // Pair paper `key` with a pending paper of the other role (another job's, or this one's),
+    // optionally saving this paper's `metadata` too. Returns { matches, proposal }.
+    matchJobPaper: (id, key, ingest_paper_id, metadata) =>
+      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, {
+        ingest_paper_id, ...(metadata && { metadata }),
+      }),
     // Unmatch a linked paper (either side): the pair is rejected for good and both are re-matched.
     // Returns what this paper has now: { matches, proposal }.
     unmatchJobPaper: (id, key) => request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`),

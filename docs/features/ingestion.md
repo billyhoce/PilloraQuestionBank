@@ -30,7 +30,7 @@ The tabs carry live counts: files uploading (Auto import) and jobs ready for rev
 | `POST /api/import/confirm` | Creates the paper, its questions and pages from temp images. |
 | `POST /api/import/ai-topics`, `POST /api/import/save-topics` | Part split / topic labelling; see [ai-labelling.md](./ai-labelling.md). |
 | `DELETE /api/import/papers/{paper_id}` | Deletes a paper (same as `DELETE /api/papers/{id}`). |
-| `/api/import/uploads`, `/api/import/jobs/…`, `/api/import/papers/pending` | Auto-detect; see [auto-import.md](./auto-import.md#routes). |
+| `/api/import/uploads`, `/api/import/jobs/…` | Auto-detect; see [auto-import.md](./auto-import.md#routes). |
 
 Upload routes are plain `def` (run in the thread pool, reading `file.file.read()`), so a large PDF
 never blocks other requests. This also applies to `POST /api/papers/upload-image`.

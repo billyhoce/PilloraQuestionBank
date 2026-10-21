@@ -284,7 +284,8 @@ def reject_proposed_paper(db: Session, job: IngestJob, key: str) -> None:
 
 
 def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
-    """The job's linked papers by paper key: the partner's ingest paper id, job id, filename and key,
+    """The job's linked papers by paper key: the partner's ingest paper id, job id, filename, key and
+    ``details`` (its seven fields and ``new_school_name``), ``matched_by`` (``auto`` or ``admin``),
     and ``answer_numbers``, the partner's question numbers that have an answer box (for a question
     paper, the answers its confirm brings in; the review warns about the rest, #89)."""
     from app.services.answer_coverage import paper_answer_numbers
@@ -301,6 +302,8 @@ def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
         out[row.paper_key] = {
             "ingest_paper_id": other.id, "job_id": str(other.job_id),
             "filename": other_job.filename if other_job else None, "paper_key": other.paper_key,
+            "details": {**{f: getattr(other, f) for f in METADATA_FIELDS}, "new_school_name": other.new_school_name},
+            "matched_by": "auto" if row.match_status == "auto" else "admin",
             "answer_numbers": paper_answer_numbers(other_job, other.paper_key) if other_job else [],
         }
     return out

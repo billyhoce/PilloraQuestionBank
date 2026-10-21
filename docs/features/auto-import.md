@@ -40,7 +40,7 @@ All admin-only (`403` otherwise). Any admin can see and act on any admin's job.
 | `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` | Cuts that range of the job's PDF into Manual-flow pages, using the job's stored metadata (no Claude call). Bad range → `422`. |
 | `POST /api/import/jobs/{id}/confirm` | Confirm one paper. See [Confirm and skip](#confirm-and-skip). |
 | `POST /api/import/jobs/{id}/skip` `{paper_label}` | Skip one paper. |
-| `POST /api/import/jobs/{id}/attach`, `GET /api/import/papers/pending`, `POST`/`DELETE /api/import/jobs/{id}/papers/{key}/match`, `DELETE /api/import/jobs/{id}/papers/{key}/proposed-paper` | Pairing, Unmatch and "Not this one". See [qa-pairing.md](./qa-pairing.md). |
+| `POST /api/import/jobs/{id}/attach`, `GET /api/import/jobs/{id}/papers/{key}/candidates`, `POST`/`DELETE /api/import/jobs/{id}/papers/{key}/match`, `DELETE /api/import/jobs/{id}/papers/{key}/proposed-paper` | Pairing, Unmatch and "Not this one". See [qa-pairing.md](./qa-pairing.md). |
 
 There is no multipart job-creation route; the old `POST /api/import/jobs` was removed.
 
@@ -193,7 +193,10 @@ All jobs). The header links back to the queue and to the **next job** in it (the
   - A question paper that would be confirmed **partly answered** shows "Q5–Q7 have no answers. Add
     them with the answer-box editor, or confirm anyway." above **Confirm paper**, which stays
     enabled ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)).
-  - answer-only paper: the Match panel ([qa-pairing.md](./qa-pairing.md)).
+  - A paper that needs a partner (answer-only, or a question paper with no answers at all) or has
+    one: the Pairing block, with **Match this paper…**
+    ([qa-pairing.md](./qa-pairing.md#the-pairing-block-and-match-this-paper)). An answer-only
+    paper has no metadata sidebar, only the Pairing block and **Skip this paper**.
 - **Metadata edits** are kept per paper and saved (debounced 800 ms) to
   `PUT .../papers/{key}/metadata`. This is best effort, since confirm sends the final values.
 - After the last decision the page moves on to the next job in the review queue, or back to the

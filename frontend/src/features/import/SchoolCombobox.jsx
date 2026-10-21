@@ -11,8 +11,12 @@ import { closestSchools } from './schoolSuggestions'
  *   onNewSchool   - (name) => void; when given, the list ends with 'Use "<typed>" as a new school'
  *                   (unless the typed name is an existing school's, in any case)
  *   newName       - the new school's name once chosen that way (value is then null)
+ *   label, listLabel - its label and its list's; without the school-only props it is a plain
+ *                   type-to-search picker of any reference list (the Match dialog's other fields)
  */
-export default function SchoolCombobox({ schools, value, onChange, extractedName = null, onNewSchool = null, newName = null }) {
+export default function SchoolCombobox({
+  schools, value, onChange, extractedName = null, onNewSchool = null, newName = null, label = 'School', listLabel = 'Schools',
+}) {
   const chosen = schools.find(s => s.id === value) ?? null
   // The text being typed; null while not editing, when the input shows the chosen school.
   const [query, setQuery] = useState(null)
@@ -81,7 +85,7 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
 
   return (
     <div ref={containerRef} className="relative">
-      <label htmlFor={`${listId}-input`} className="block text-xs font-medium text-gray-600 mb-1">School</label>
+      <label htmlFor={`${listId}-input`} className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
       <input
         id={`${listId}-input`}
         type="text"
@@ -108,7 +112,7 @@ export default function SchoolCombobox({ schools, value, onChange, extractedName
         </p>
       )}
       {open && (
-        <ul id={listId} role="listbox" aria-label="Schools"
+        <ul id={listId} role="listbox" aria-label={listLabel}
           className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-md max-h-60 overflow-auto text-sm">
           {options.map((s, i) => (
             <li

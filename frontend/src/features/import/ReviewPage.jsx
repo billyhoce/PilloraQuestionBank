@@ -10,8 +10,9 @@ import {
 } from './proposalReducer'
 import { partlyAnsweredWarning } from './answerCoverage'
 import { startManualImport } from './manualHandoff'
-import MatchPanel from './MatchPanel'
 import MetadataSidebar from './MetadataSidebar'
+import PairingBlock from './PairingBlock'
+import { metadataBody, needsPartner, pairingState } from './pairing'
 import TopicReview from './TopicReview'
 import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
 
@@ -320,13 +321,7 @@ export default function ReviewPage() {
     clearTimeout(metaTimers.current[key])
     metaTimers.current[key] = setTimeout(() => {
       delete metaTimers.current[key]
-      api.import.savePaperMetadata(jobId, key, {
-        subject_id: m.subject_id, stream_id: m.stream_id, level_id: m.level_id,
-        school_id: m.school_id, exam_type_id: m.exam_type_id,
-        ...(m.new_school_name && { new_school_name: m.new_school_name }),
-        year: m.year === '' || m.year == null ? null : Number(m.year),
-        paper_number: m.paper_number === '' ? null : m.paper_number,
-      }).catch(() => {})
+      api.import.savePaperMetadata(jobId, key, metadataBody(m)).catch(() => {})
     }, 800)
   }
   const dropMetadataSave = key => {
@@ -479,18 +474,14 @@ export default function ReviewPage() {
     }
   }
 
-  // After Unmatch or "Not this one": what matching found for the paper instead.
-  function rematched(key, { matches: link, proposal }) {
+  // After a pair, Unmatch or "Not this one": what the paper has now. A pair that also updated the
+  // paper's details (saved by the match route) shows them in the sidebar, without saving again.
+  function matched(key, { matches: link, proposal }, fields = null) {
     setMatches(m => ({ ...m, [key]: link ?? null }))
     setProposals(p => ({ ...p, [key]: proposal ?? null }))
-  }
-
-  async function unmatchPaper() {
-    const key = paper.key
-    try {
-      rematched(key, await api.import.unmatchJobPaper(jobId, key))
-    } catch (e) {
-      setConfirmError(e.message)
+    if (fields) {
+      dropMetadataSave(key)
+      setMetadataEdits(e => ({ ...e, [key]: { ...metadata, ...fields } }))
     }
   }
 
@@ -765,7 +756,7 @@ export default function ReviewPage() {
             <div className="shrink-0">
               {answerOnly && (
                 <p className="w-52 mb-2 text-xs text-gray-600">
-                  These are answers only, with no question paper in this booklet. Attach them to the paper they belong to.
+                  These are answers only, with no question paper in this booklet. Pair them with the paper they belong to.
                 </p>
               )}
               {paper.questions.length === 0 && (
@@ -773,28 +764,30 @@ export default function ReviewPage() {
                   A paper without questions cannot be imported; skip it.
                 </p>
               )}
-              {!answerOnly && matches[paper.key] && (
-                <p role="status" className="w-52 mb-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
-                  Answers available from {fileName(matches[paper.key], jobId)} ({matches[paper.key].paper_key}) — they will be attached when you confirm.{' '}
-                  <button type="button" onClick={unmatchPaper} className="text-blue-700 hover:underline">Unmatch</button>
-                </p>
-              )}
-              {answerOnly ? (
-                <MatchPanel
+              {(needsPartner(paper) || pairingState({ link: matches[paper.key], proposal: proposals[paper.key] }) !== 'none') && (
+                <PairingBlock
                   key={paper.key}
                   jobId={jobId}
                   paper={paper}
-                  metadata={metadata}
-                  refs={refs}
                   link={matches[paper.key] ?? null}
                   proposal={proposals[paper.key] ?? null}
-                  onLink={link => setMatches(m => ({ ...m, [paper.key]: link }))}
-                  onRematched={r => rematched(paper.key, r)}
-                  onFlush={async () => { if (timer.current) await flush() }}
-                  onAttached={jobStatus => decided('attached', jobStatus)}
-                  onSkip={handleSkipPaper}
+                  metadata={metadata}
+                  extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
+                  refs={refs}
                   busy={confirming}
+                  beforeSave={async () => { if (timer.current) await flush() }}  // the server crops the saved proposal
+                  onMatched={(state, fields) => matched(paper.key, state, fields)}
+                  onAttached={jobStatus => decided('attached', jobStatus)}
                 />
+              )}
+              {answerOnly ? (
+                <div className="w-52 flex flex-col gap-2">
+                  {confirmError && <ErrorBanner message={confirmError} />}
+                  <button type="button" onClick={handleSkipPaper} disabled={confirming}
+                    className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50">
+                    Skip this paper
+                  </button>
+                </div>
               ) : (
                 <MetadataSidebar
                   metadata={metadata}
