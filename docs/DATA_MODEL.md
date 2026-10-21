@@ -283,6 +283,7 @@ IngestPaper: {                -- one row per paper an ingest job proposed; the q
   role ("question" | "answer_only"),
   school_id, level_id, subject_id, exam_type_id, stream_id (nullable FKs, ON DELETE SET NULL),
   year (int, nullable), paper_number (string(32), nullable),   -- stored as given (no normalisation yet)
+  new_school_name (string(128), nullable),  -- a school typed during review that is not in the list (school_id NULL); created on confirm (docs/features/qa-pairing.md#new-schools)
   metadata_source ("cover" | "filename" | "admin", nullable),  -- NULL: nothing known
   status ("pending" | "confirmed" | "skipped" | "attached"),   -- default pending
   paper_id (nullable FK -> Paper, ON DELETE SET NULL),         -- the paper confirming it created

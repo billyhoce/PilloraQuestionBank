@@ -320,6 +320,7 @@ export default function ReviewPage() {
       api.import.savePaperMetadata(jobId, key, {
         subject_id: m.subject_id, stream_id: m.stream_id, level_id: m.level_id,
         school_id: m.school_id, exam_type_id: m.exam_type_id,
+        ...(m.new_school_name && { new_school_name: m.new_school_name }),
         year: m.year === '' || m.year == null ? null : Number(m.year),
         paper_number: m.paper_number === '' ? null : m.paper_number,
       }).catch(() => {})
@@ -458,6 +459,7 @@ export default function ReviewPage() {
         stream_id: metadata.stream_id,
         level_id: metadata.level_id,
         school_id: metadata.school_id,
+        ...(metadata.new_school_name && { new_school_name: metadata.new_school_name }),  // created on confirm
         exam_type_id: metadata.exam_type_id,
         year: Number(metadata.year),
         paper_number: metadata.paper_number,

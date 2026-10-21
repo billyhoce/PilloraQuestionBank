@@ -52,8 +52,9 @@ There is no multipart job-creation route; the old `POST /api/import/jobs` was re
 - `needs_review`: any task flagged.
 
 **Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
-`{key, role, status, school_id, year, level_id, subject_id, exam_type_id, stream_id, paper_number,
-linked, match_status, answer_coverage, unanswered}`, where `linked` means it is linked to a paper
+`{key, role, status, school_id, new_school_name, year, level_id, subject_id, exam_type_id, stream_id,
+paper_number, linked, match_status, answer_coverage, unanswered}`, where `new_school_name` is a school
+typed during review that confirm will create ([qa-pairing.md](./qa-pairing.md#new-schools)), `linked` means it is linked to a paper
 of another job, and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
 without an answer box) describe its own booklet's answers
 ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)). Empty until `report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
@@ -152,7 +153,8 @@ has never started: `false` / `null`. Both values are computed server-side.
   paper from the job list's `papers`:
   - Questions / Answers and its key
   - its metadata in words (school · year · level · subject · exam type · paper no.), with the
-    missing fields named, or "No details read from the cover"
+    missing fields named, or "No details read from the cover"; a school typed as new reads
+    "Raffles Instn (new)"
   - for an answer-only paper: linked / matching paper found / needs matching / not matched; for a
     question paper: "Answers linked from another upload"
   - for a pending question paper only partly answered by its own booklet: "Q5–Q7 have no answers"
@@ -182,8 +184,12 @@ All jobs). The header links back to the queue and to the **next job** in it (the
     `school_id`), it is shown in amber as "*Raffles Instn* — not in the list", and the closest
     existing names (character-bigram likeness) are listed first. It counts as blank: **Confirm** is
     disabled, with "Pick a school: “Raffles Instn” is not in the list." shown, until a school is
-    picked. A job without `extracted` (from before it existed) shows nothing extra. The Manual
-    import sidebar keeps its plain dropdown.
+    picked or typed as new. A job without `extracted` (from before it existed) shows nothing extra.
+    The Manual import sidebar keeps its plain dropdown.
+  - The combobox's last option is **Use “<typed text>” as a new school** (not offered when the text
+    is an existing school's name, in any case: that school is listed first instead). The school is
+    then shown as "New school — created when you confirm", sent as `new_school_name`, and only
+    created by **Confirm** ([qa-pairing.md](./qa-pairing.md#new-schools)).
   - A question paper that would be confirmed **partly answered** shows "Q5–Q7 have no answers. Add
     them with the answer-box editor, or confirm anyway." above **Confirm paper**, which stays
     enabled ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)).
@@ -235,7 +241,9 @@ All jobs). The header links back to the queue and to the **next job** in it (the
 - else `paper{n}`
 
 **`POST .../confirm`** `{paper_label, subject_id, stream_id, level_id, school_id, exam_type_id,
-year, paper_number, is_premium}` → `201`.
+year, paper_number, is_premium}` → `201`. Instead of `school_id` it may carry `new_school_name`: the
+school is found by case-insensitive name or created, in the confirm's transaction
+([qa-pairing.md](./qa-pairing.md#new-schools)).
 
 - **Refused when:**
 
@@ -244,6 +252,7 @@ year, paper_number, is_premium}` → `201`.
   | Job not `review_ready`, or paper already decided | `409` |
   | Unknown key | `404` |
   | Stream and level from different school levels | `422` |
+  | Neither `school_id` nor `new_school_name` | `422` |
   | Paper has no questions (skip it instead) | `422` |
   | `answer_only` paper (attach or skip it instead) | `422` |
 

@@ -61,7 +61,9 @@ cancelled; a settled job's S3 prefix is empty.
 
 **Seven-field key**
 `school, year, level, subject, exam type, stream, paper number`: what identifies a paper when
-matching an answer booklet to its question paper.
+matching an answer booklet to its question paper. A school typed during review that is not in the
+reference list yet is a **new school**: held by name on the pending paper and created only when a
+question paper carrying it is confirmed.
 
 **Link / proposed attach**
 A **link** pairs a pending answer-only paper with a pending question paper of another job; confirming

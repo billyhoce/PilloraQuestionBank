@@ -8,10 +8,10 @@ so the two never disagree, and it is what matching queries read. See docs/DATA_M
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.orm import IngestJob, IngestPaper
+from app.models.orm import IngestJob, IngestPaper, School
 
 METADATA_FIELDS = ("school_id", "year", "level_id", "subject_id", "exam_type_id", "stream_id", "paper_number")
 
@@ -84,13 +84,57 @@ def _row_or_sync(db: Session, job: IngestJob, key: str) -> IngestPaper | None:
     return row
 
 
+def school_named(db: Session, name: str) -> School | None:
+    """The school called ``name``, ignoring case and surrounding spaces."""
+    return db.scalar(select(School).where(func.lower(School.name) == name.strip().lower()))
+
+
+def _school_fields(db: Session, metadata: dict, school_id: int | None) -> dict[str, Any]:
+    """``school_id`` and ``new_school_name`` as stored: a chosen school drops any typed name, and a
+    typed name equal to an existing school (any case) becomes that school's id (#87)."""
+    name = ((metadata or {}).get("new_school_name") or "").strip() or None
+    if school_id is not None or name is None:
+        return {"school_id": school_id, "new_school_name": None}
+    existing = school_named(db, name)
+    if existing is not None:
+        return {"school_id": existing.id, "new_school_name": None}
+    return {"school_id": None, "new_school_name": name}
+
+
+def create_new_school(db: Session, metadata: dict) -> dict:
+    """``metadata`` with a ``school_id``: the given one, else the school named ``new_school_name``,
+    found ignoring case (another admin may have created it since it was typed) or created now. A
+    school found or created is also given to every other pending paper carrying the same new name,
+    so they keep matching. Raises ``ValueError`` if there is neither. Does not commit (#87)."""
+    out = {k: v for k, v in metadata.items() if k != "new_school_name"}
+    if out.get("school_id") is not None:
+        return out
+    name = (metadata.get("new_school_name") or "").strip()
+    if not name:
+        raise ValueError("Choose a school, or type the name of a new one")
+    school = school_named(db, name)
+    if school is None:
+        school = School(name=name)
+        db.add(school)
+        db.flush()
+    waiting = db.scalars(select(IngestPaper).where(
+        IngestPaper.status == "pending", IngestPaper.school_id.is_(None),
+        func.lower(func.trim(IngestPaper.new_school_name)) == name.lower(),
+    ))
+    for row in waiting:
+        row.school_id, row.new_school_name = school.id, None
+    return {**out, "school_id": school.id}
+
+
 def set_metadata(db: Session, job: IngestJob, key: str, metadata: dict, source: str = "admin") -> IngestPaper | None:
-    """Store ``metadata`` (the seven fields) on the paper's row. ``source`` becomes ``admin`` only
-    if a value actually changed. Does not commit. Returns None for an unknown key."""
+    """Store ``metadata`` (the seven fields, plus ``new_school_name`` for a school not in the list
+    yet) on the paper's row. ``source`` becomes ``admin`` only if a value actually changed. Does not
+    commit. Returns None for an unknown key."""
     row = _row_or_sync(db, job, key)
     if row is None:
         return None
     new = _clean(metadata)
+    new.update(_school_fields(db, metadata, new["school_id"]))
     if any(getattr(row, f) != v for f, v in new.items()):
         for f, v in new.items():
             setattr(row, f, v)

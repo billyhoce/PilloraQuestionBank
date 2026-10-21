@@ -20,7 +20,8 @@ function SelectField({ label, value, onChange, options }) {
   )
 }
 
-// `schoolCombobox` swaps the school dropdown for the type-to-search SchoolCombobox (the review page);
+// `schoolCombobox` swaps the school dropdown for the type-to-search SchoolCombobox (the review page),
+// which also takes a school not in the list as `metadata.new_school_name` (created on confirm);
 // `extractedSchool` is the school name read from the cover, shown there while it matches no school.
 // `warning` is shown above the confirm button without disabling it.
 export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error,
@@ -38,12 +39,13 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
     metadata.subject_id &&
     metadata.stream_id &&
     metadata.level_id &&
-    metadata.school_id &&
+    (metadata.school_id || metadata.new_school_name) &&
     metadata.exam_type_id &&
     metadata.year &&
     metadata.paper_number
   // A school was read but matched none in the list: it counts as blank, and says why confirm waits.
-  const unresolvedSchool = schoolCombobox && extractedSchool && !metadata.school_id ? extractedSchool : null
+  const unresolvedSchool = schoolCombobox && extractedSchool && !metadata.school_id && !metadata.new_school_name
+    ? extractedSchool : null
 
   return (
     <div className="w-52 flex-shrink-0 flex flex-col gap-3 p-4 bg-white border-l border-gray-200 overflow-y-auto">
@@ -55,8 +57,10 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
           <SelectField label="Stream" value={metadata.stream_id} onChange={handleSelect('stream_id')} options={refs.streams} />
           <SelectField label="Level" value={metadata.level_id} onChange={handleSelect('level_id')} options={refs.levels} />
           {schoolCombobox ? (
-            <SchoolCombobox schools={refs.schools} value={metadata.school_id} onChange={id => set('school_id', id)}
-              extractedName={extractedSchool} />
+            <SchoolCombobox schools={refs.schools} value={metadata.school_id}
+              onChange={id => onChange({ ...metadata, school_id: id, new_school_name: null })}
+              onNewSchool={name => onChange({ ...metadata, school_id: null, new_school_name: name })}
+              newName={metadata.new_school_name ?? null} extractedName={extractedSchool} />
           ) : (
             <SelectField label="School" value={metadata.school_id} onChange={handleSelect('school_id')} options={refs.schools} />
           )}

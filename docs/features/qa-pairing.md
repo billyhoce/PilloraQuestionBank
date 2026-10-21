@@ -23,7 +23,7 @@ it is in [auto-import.md](./auto-import.md).
 - **Metadata source:** each paper's metadata is read from its own cover
   ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)). A school name that matched no
   school is kept (`extracted.school`) and shown on the review page, but it counts as blank for
-  matching: only `school_id` is in the key.
+  matching until the admin picks a school or types it as a [new school](#new-schools).
 - **The `ingest_paper` row** ([DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs)) is one row per
   proposed paper. It holds the role, the seven-field key, metadata source, status, the created or
   attached paper, the link and the match result.
@@ -32,8 +32,8 @@ it is in [auto-import.md](./auto-import.md).
   | Event | What changes |
   |---|---|
   | `report` finishes | Upserted, with metadata source `cover`, or `filename` for old jobs. A re-run refreshes cover metadata only while the paper is pending and the admin has not edited it. |
-  | Sidebar edit (`PUT .../papers/{key}/metadata`) | Stores the values; source becomes `admin` if a value changed. `409` unless the job is `review_ready` and the paper pending; unknown key → `404`. Re-runs matching. |
-  | Confirm, skip or attach | Status and `paper_id`, in the same transaction as the job outcome. |
+  | Sidebar edit (`PUT .../papers/{key}/metadata`) | Stores the values (and `new_school_name`, see [New schools](#new-schools)); source becomes `admin` if a value changed. `409` unless the job is `review_ready` and the paper pending; unknown key → `404`. Re-runs matching. |
+  | Confirm, skip or attach | Status and `paper_id`, in the same transaction as the job outcome. Confirming a new school also gives its id to the other pending papers carrying its name. |
 
 - **Source of truth:** the proposal JSON holds the paper's contents and `report.review_outcome` the
   decision. `ingest_paper` mirrors role, metadata and status for querying and matching.
@@ -41,6 +41,27 @@ it is in [auto-import.md](./auto-import.md).
   paper_number`.
 - **`paper_number` comparison:** trimmed and case-folded only (`"2A"` = `" 2a "`, but ≠ `"02A"`).
   There is no normalisation; see [Not built](#not-built).
+
+### New schools
+
+The admin can enter a school that is not in the reference list during review, without leaving for
+the Reference page. Nothing is added to the list until a question paper is confirmed, so a skipped
+job or a typo leaves nothing behind.
+
+- **Before confirm,** the row holds the typed name in `new_school_name` and no `school_id`. The
+  review sidebar sends it on `PUT .../papers/{key}/metadata`; a name equal to an existing school
+  (trimmed, any case) is stored as that school's id instead, and choosing a school drops the name.
+- **Matching** treats two papers as having the same school if their `school_id`s are equal, or if
+  both have no id and the same `new_school_name` (trimmed, case-folded). A new school counts as a
+  known field. A bank paper always has an id, so a new-school paper only matches pending papers
+  (rules 4–5 below; rules 2, 3 and 6 find nothing).
+- **Confirming a question paper** with `new_school_name` and no `school_id`: finds the school by
+  case-insensitive name, creating it if missing (another admin may have created it meanwhile), uses
+  its id for the paper, and gives the same id to every other pending paper carrying that name, all
+  in the confirm's transaction. Neither a `school_id` nor a name → `422`.
+- **Attaching answers to a bank paper** creates nothing: the bank paper's school is kept.
+- **Only school** accepts new values; subject, stream, level and exam type still need the Reference
+  page.
 
 ## Answers are all or none
 
@@ -139,7 +160,7 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 | 3 | All seven known, several confirmed papers share the key | `manual` ("N papers have this key") |
 | 4 | All seven known, no confirmed match, exactly one pending `question` paper of another `review_ready` job, not linked to anything, same key | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
 | 5 | Same as 4, but several pending question papers | `manual` ("N pending question papers have this key") |
-| 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known) | `manual` ("partial: … differ" / "partial: unknown …") |
+| 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known; never for a [new school](#new-schools)) | `manual` ("partial: … differ" / "partial: unknown …") |
 | 7 | Otherwise | NULL (nothing to do) |
 
 - **`manual`** shows "Several or partial matches — pick one below" in the Match panel.

@@ -25,6 +25,11 @@ the pair in ``ingest_match_rejection``. Every rule above skips a rejected pair (
 in either direction), so that pair is never proposed again while both papers stay free to match
 something else.
 
+New schools (#87): a paper whose school the admin typed as new has no ``school_id`` but a
+``new_school_name``; its school counts as known. Two pending papers have the same school if their
+``school_id``s are equal, or if neither has one and their ``new_school_name``s are equal (trimmed,
+case-folded). A confirmed paper always has an id, so a new-school paper only matches pending papers.
+
 Answers are all or none (#89): a confirmed paper whose every question already has an answer page
 (coverage ``all``) is never a candidate, exact or partial; a partly answered one still is.
 
@@ -52,6 +57,31 @@ def _norm(value) -> str:
 
 def _paper_number_clause(value):
     return func.lower(func.trim(Paper.paper_number)) == _norm(value)
+
+
+def unknown_fields(row: IngestPaper) -> list[str]:
+    """The key fields ``row`` does not know yet (a new school's name counts as knowing the school)."""
+    return [
+        f for f in METADATA_FIELDS
+        if getattr(row, f) is None and not (f == "school_id" and row.new_school_name)
+    ]
+
+
+def _ip_school_clause(row: IngestPaper):
+    """Pending papers with ``row``'s school: the same id, or both new with the same name."""
+    if row.school_id is not None:
+        return IngestPaper.school_id == row.school_id
+    return IngestPaper.school_id.is_(None) & (func.lower(func.trim(IngestPaper.new_school_name)) == _norm(row.new_school_name))
+
+
+def _ip_key_clauses(q, row: IngestPaper):
+    for f in METADATA_FIELDS:
+        value = getattr(row, f)
+        if f == "school_id":
+            q = q.where(_ip_school_clause(row))
+        else:
+            q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
+    return q
 
 
 def rejected_paper_ids(db: Session, row: IngestPaper) -> set[int]:
@@ -96,6 +126,8 @@ def _open_to_answers(db: Session, papers: list[Paper]) -> list[Paper]:
 
 
 def exact_candidates(db: Session, row: IngestPaper) -> list[Paper]:
+    if row.school_id is None:  # a new school: no confirmed paper can have it
+        return []
     q = _without(select(Paper), Paper.id, rejected_paper_ids(db, row))
     for f in METADATA_FIELDS:
         value = getattr(row, f)
@@ -124,10 +156,7 @@ def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPap
             IngestJob.status == "review_ready",
         )
     )
-    q = _without(q, IngestPaper.id, rejected_ingest_ids(db, row))
-    for f in METADATA_FIELDS:
-        value = getattr(row, f)
-        q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
+    q = _ip_key_clauses(_without(q, IngestPaper.id, rejected_ingest_ids(db, row)), row)
     return list(db.scalars(q.order_by(IngestPaper.id)))
 
 
@@ -181,7 +210,7 @@ def _match(db: Session, row: IngestPaper) -> None:
         return
     if row.role != "answer_only":
         return
-    unknown = [f for f in METADATA_FIELDS if getattr(row, f) is None]
+    unknown = unknown_fields(row)
     if not unknown:
         exact = exact_candidates(db, row)
         if len(exact) == 1:
@@ -223,7 +252,7 @@ def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
     decides uniqueness)."""
     if row.status != "pending" or row.matched_ingest_paper_id is not None:
         return []
-    if any(getattr(row, f) is None for f in METADATA_FIELDS):
+    if unknown_fields(row):
         return []
     q = (
         select(IngestPaper)
@@ -234,10 +263,7 @@ def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
             IngestJob.status == "review_ready",
         )
     )
-    q = _without(q, IngestPaper.id, rejected_ingest_ids(db, row))
-    for f in METADATA_FIELDS:
-        value = getattr(row, f)
-        q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
+    q = _ip_key_clauses(_without(q, IngestPaper.id, rejected_ingest_ids(db, row)), row)
     return list(db.scalars(q.order_by(IngestPaper.id)))
 
 

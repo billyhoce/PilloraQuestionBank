@@ -54,4 +54,28 @@ describe('SchoolCombobox', () => {
     await userEvent.clear(screen.getByRole('combobox', { name: 'School' }))
     expect(onChange).toHaveBeenCalledWith(null)
   })
+
+  it('offers the typed text as a new school, last', async () => {
+    const onNewSchool = vi.fn()
+    render(<SchoolCombobox schools={SCHOOLS} value={null} onChange={() => {}} onNewSchool={onNewSchool} />)
+    await userEvent.type(screen.getByRole('combobox', { name: 'School' }), 'Raffles Instn')
+    expect(optionNames().at(-1)).toBe('Use “Raffles Instn” as a new school')
+    await userEvent.click(screen.getByRole('option', { name: 'Use “Raffles Instn” as a new school' }))
+    expect(onNewSchool).toHaveBeenCalledWith('Raffles Instn')
+  })
+
+  it('typing an existing name in any case offers that school, not a new one', async () => {
+    const onChange = vi.fn()
+    render(<SchoolCombobox schools={SCHOOLS} value={null} onChange={onChange} onNewSchool={() => {}} />)
+    await userEvent.type(screen.getByRole('combobox', { name: 'School' }), 'raffles institution{Enter}')
+    expect(onChange).toHaveBeenCalledWith(3)
+  })
+
+  it('shows a new school as chosen, marked new, and with no unresolved warning', () => {
+    render(<SchoolCombobox schools={SCHOOLS} value={null} onChange={() => {}} onNewSchool={() => {}}
+      newName="Raffles Instn" extractedName="Raffles Instn" />)
+    expect(screen.getByRole('combobox', { name: 'School' })).toHaveValue('Raffles Instn')
+    expect(screen.getByText(/New school/)).toHaveTextContent('New school — created when you confirm')
+    expect(screen.queryByText(/not in the list/)).not.toBeInTheDocument()
+  })
 })
