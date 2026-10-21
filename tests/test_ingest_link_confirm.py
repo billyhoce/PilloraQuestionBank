@@ -101,7 +101,7 @@ def test_confirmed_paper_proposal_wins_over_auto_link(db_session, admin_user, fa
     assert a.match_status == "proposed" and a.matched_ingest_paper_id is None
 
 
-def test_metadata_edit_drops_an_auto_link_and_unlink_sticks(admin_client, db_session, admin_user, fake_object_store, meta):
+def test_metadata_edit_drops_an_auto_link_and_unmatch_rejects_the_pair(admin_client, db_session, admin_user, fake_object_store, meta):
     qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
@@ -112,8 +112,46 @@ def test_metadata_edit_drops_an_auto_link_and_unlink_sticks(admin_client, db_ses
     assert prow(db_session, qj, "q1").match_status is None
     admin_client.put(url, json=meta)  # back to the same key: linked again
     assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, qj, "q1").id
-    assert admin_client.delete(f"/api/import/jobs/{aj.id}/papers/a1/match").status_code == 204
+    resp = admin_client.delete(f"/api/import/jobs/{aj.id}/papers/a1/match")
+    assert resp.status_code == 200 and resp.json() == {"matches": None, "proposal": None}
     assert prow(db_session, aj, "a1").matched_ingest_paper_id is None  # not re-made at once
+    match_job(db_session, qj)  # nor from the question side
+    db_session.commit()
+    assert prow(db_session, aj, "a1").matched_ingest_paper_id is None
+    admin_client.put(url, json={**meta, "year": 2020})
+    admin_client.put(url, json=meta)  # nor after a metadata edit: the pair itself was rejected
+    assert prow(db_session, aj, "a1").matched_ingest_paper_id is None
+    assert prow(db_session, aj, "a1").match_status is None and prow(db_session, qj, "q1").match_status is None
+
+
+def test_unmatch_frees_both_papers_to_find_another_partner(admin_client, db_session, admin_user, fake_object_store, meta):
+    q1 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q1.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    q2 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q2.pdf")  # a linked answer is left alone
+    match_job(db_session, q2)
+    db_session.commit()
+    assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, q1, "q1").id
+    resp = admin_client.delete(f"/api/import/jobs/{aj.id}/papers/a1/match")
+    assert resp.status_code == 200
+    a = prow(db_session, aj, "a1")
+    assert a.matched_ingest_paper_id == prow(db_session, q2, "q1").id and a.match_status == "auto"
+    assert resp.json()["matches"]["filename"] == "q2.pdf"
+    # and the freed question paper takes another answer paper with its key
+    a2 = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a2.pdf")
+    match_job(db_session, a2)
+    db_session.commit()
+    assert prow(db_session, a2, "a1").matched_ingest_paper_id == prow(db_session, q1, "q1").id
+
+
+def test_unmatch_from_the_question_side_rejects_the_pair(admin_client, db_session, admin_user, fake_object_store, meta):
+    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    assert admin_client.delete(f"/api/import/jobs/{qj.id}/papers/q1/match").status_code == 200
+    match_job(db_session, aj)
     match_job(db_session, qj)
     db_session.commit()
     assert prow(db_session, aj, "a1").matched_ingest_paper_id is None

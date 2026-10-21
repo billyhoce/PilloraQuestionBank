@@ -23,12 +23,12 @@ from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
 from app.services.ingest_matching import match_info, match_row
 from app.services.ingest_papers import (
-    METADATA_FIELDS,
     MatchError,
     get_row as get_paper_row,
     link_papers,
     paper_links,
     pending_question_papers,
+    reject_proposed_paper,
     set_metadata as set_paper_metadata,
     sync_job_papers,
     unlink_paper,
@@ -657,10 +657,6 @@ class PaperMetadataEditIn(BaseModel):
     paper_number: Optional[str] = None
 
 
-def _metadata_tuple(row) -> tuple:
-    return tuple(getattr(row, f) for f in METADATA_FIELDS)
-
-
 @router.put("/jobs/{job_id}/papers/{paper_key}/metadata")
 def save_paper_metadata(
     job_id: uuid.UUID,
@@ -680,10 +676,7 @@ def save_paper_metadata(
         raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
     if row.status != "pending":
         raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} was already {row.status}")
-    before = _metadata_tuple(row)
     set_paper_metadata(db, job, paper_key, payload.model_dump())
-    if row.match_status == "unlinked" and _metadata_tuple(row) != before:
-        row.match_status = None  # a new key deserves a fresh look (an unlinked pair may match now)
     match_row(db, row)  # the key may now match (or stop matching) a confirmed paper
     db.commit()
     return {"saved": True, "metadata_source": row.metadata_source, "proposal": match_info(db, job).get(paper_key)}
@@ -742,14 +735,20 @@ def match_job_paper(
     return {"matches": paper_links(db, job).get(paper_key)}
 
 
-@router.delete("/jobs/{job_id}/papers/{paper_key}/match", status_code=204)
+def _match_state(db: Session, job, paper_key: str) -> dict:
+    """What matching now offers one paper: its link (``matches``) and its proposal."""
+    return {"matches": paper_links(db, job).get(paper_key), "proposal": match_info(db, job).get(paper_key)}
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/match")
 def unmatch_job_paper(
     job_id: uuid.UUID,
     paper_key: str,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Remove a paper's link (on both sides)."""
+    """Unmatch: remove a paper's link (on both sides) and reject that pair, so automatic matching
+    never re-makes it. Both papers are re-matched; the response is what this paper has now."""
     job = _get_own_job(db, job_id, current_user)
     db.refresh(job, with_for_update=True)
     try:
@@ -758,7 +757,29 @@ def unmatch_job_paper(
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)
     db.commit()
-    return None
+    return _match_state(db, job, paper_key)
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/proposed-paper")
+def reject_job_paper_proposal(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Not this one": reject an answer-only paper's proposed confirmed paper and re-run matching,
+    which may propose or link something else. The response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        reject_proposed_paper(db, job, paper_key)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
 
 
 class JobSkipIn(BaseModel):

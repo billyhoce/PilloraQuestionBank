@@ -88,11 +88,13 @@ On the review page of an answer-only paper (`MatchPanel.jsx`).
     releases any earlier link of either row.
   - `422` unless this paper is answer-only and the target is a pending question paper of another
     review-ready job. `409` unless this job is `review_ready`.
-  - `DELETE` on the same path unlinks both rows.
+  - `DELETE` on the same path is **Unmatch** ([below](#rejecting-a-match)).
 - **Link display:**
-  - Answer side: "Linked to <filename> <key>" with Unlink.
+  - Answer side: "Linked to <filename> <key>" with Unmatch.
   - Question side: "Answers available from <filename> (<key>) — they will be attached when you
-    confirm", with Unlink.
+    confirm", with Unmatch.
+- Linking two papers by hand releases any earlier link of either one without rejecting it, so
+  automatic matching may still propose that old pair later.
 
 ## Automatic matching
 
@@ -104,9 +106,9 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 | # | Situation | Result |
 |---|---|---|
 | 1 | Linked to a pending question paper (admin link, or an auto link that still holds) | Untouched; any proposal is hidden |
-| 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The panel shows "Answers match <paper> — Attach" (one click; asks append/replace only if needed) |
+| 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The panel shows "Answers match <paper>" with **Attach** (one click; asks append/replace only if needed) and **Not this one** |
 | 3 | All seven known, several confirmed papers share the key | `manual` ("N papers have this key") |
-| 4 | All seven known, no confirmed match, exactly one pending `question` paper of another `review_ready` job, unlinked, same key | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
+| 4 | All seven known, no confirmed match, exactly one pending `question` paper of another `review_ready` job, not linked to anything, same key | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
 | 5 | Same as 4, but several pending question papers | `manual` ("N pending question papers have this key") |
 | 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known) | `manual` ("partial: … differ" / "partial: unknown …") |
 | 7 | Otherwise | NULL (nothing to do) |
@@ -114,8 +116,8 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 - **`manual`** shows "Several or partial matches — pick one below" in the Match panel.
 - **Auto links** are recomputed from scratch on every re-evaluation, so a metadata change that breaks
   the key drops them.
-- **Unlinking** sets both rows to `unlinked`, which stops auto-linking until either paper's metadata
-  is edited.
+- **Rejected pairs are skipped** by every rule: a rejected candidate is not counted, proposed,
+  linked or used as a partial hint ([Rejecting a match](#rejecting-a-match)).
 - **Settling** an answer paper (attach or skip) clears its proposal.
 
 **When matching runs:**
@@ -124,7 +126,7 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
   papers share the key, none is linked: the question paper and those answer papers are all marked
   `manual` ("N pending answer papers have this key").
 - On `PUT .../papers/{key}/metadata`. The response includes the new `proposal`.
-- On unlink.
+- On Unmatch (both papers) and on "Not this one".
 - On every new paper (auto-import confirm and manual import). Pending answer-only papers sharing the
   new paper's school, year and subject are re-matched, so the new paper becomes a ready-to-attach
   target. This runs in a savepoint and never fails the confirm.
@@ -133,6 +135,23 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 - `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key}}`, covering manual and auto
   links.
 - `proposals`: `{key: {status, note, paper}}`.
+
+## Rejecting a match
+
+Turning down one wrong pair rejects only that pair. It is recorded in `ingest_match_rejection`
+([DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs)); automatic matching never proposes or
+auto-links it again, but both papers stay free to match something else. Nothing lifts a rejection,
+not even a metadata edit; the admin can still link the pair by hand.
+
+- **Unmatch** (`DELETE /api/import/jobs/{id}/papers/{key}/match`, from either side of a link,
+  auto or by hand): breaks the link on both rows, rejects the pair, and re-matches both papers, so
+  either may be linked to, or proposed, another partner at once.
+- **Not this one** (`DELETE /api/import/jobs/{id}/papers/{key}/proposed-paper`, an answer-only
+  paper with a `proposed` bank paper): rejects that bank paper and re-matches the paper, which may
+  propose another bank paper, auto-link a pending question paper, or find nothing. `404` for an
+  unknown key; `409` unless the job is `review_ready` and the paper pending with a proposal.
+- **Response** of both: what the paper has now, `{matches, proposal}` (each as in the review
+  response, or null). The review page shows it in place of the old link or proposal.
 
 ## Confirming a linked pair
 

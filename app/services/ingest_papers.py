@@ -182,16 +182,15 @@ def pending_question_papers(
     return out
 
 
-def _clear_link(row: IngestPaper, decline: bool = False) -> None:
-    """Break ``row``'s link, on both sides. ``decline`` marks both ``unlinked`` so automatic
-    matching does not re-make it (until a metadata edit resets that)."""
+def _clear_link(row: IngestPaper) -> None:
+    """Break ``row``'s link, on both sides, and clear both rows' automatic match state."""
     other = row.matched_ingest_paper
     row.matched_ingest_paper_id = None
     if other is not None and other.matched_ingest_paper_id == row.id:
         other.matched_ingest_paper_id = None
     for r in (row, other):
         if r is not None:
-            r.match_status = "unlinked" if decline else None
+            r.match_status = None
             r.match_note = None
             r.proposed_paper_id = None
 
@@ -225,15 +224,39 @@ def link_papers(db: Session, job: IngestJob, key: str, other_id: int) -> IngestP
 
 
 def unlink_paper(db: Session, job: IngestJob, key: str) -> None:
-    """Remove the link of paper ``key`` (and its partner's side). Does not commit."""
+    """Unmatch paper ``key``: remove its link (on both sides) and record the pair as rejected, so
+    automatic matching never re-makes it; then re-match both papers, which may find another partner.
+    Does not commit."""
+    from app.services.ingest_matching import match_row, reject  # imports this module's constants
+
     row = _row_or_sync(db, job, key)
     if row is None:
         raise MatchError(404, f"This job has no paper {key!r}")
-    _clear_link(row, decline=True)
+    other = row.matched_ingest_paper
+    _clear_link(row)
+    if other is not None:
+        reject(db, row, other=other)
     db.flush()
-    from app.services.ingest_matching import match_row  # imports this module's constants
+    match_row(db, row)  # back to what the bank offers, or another pending partner
+    if other is not None and other.matched_ingest_paper_id is None:
+        match_row(db, other)
+    db.flush()
 
-    match_row(db, row)  # back to what the bank offers
+
+def reject_proposed_paper(db: Session, job: IngestJob, key: str) -> None:
+    """"Not this one": record answer-only paper ``key``'s proposed confirmed paper as rejected and
+    re-match it. ``409`` unless it is pending with a proposal. Does not commit."""
+    from app.services.ingest_matching import match_row, reject
+
+    row = _row_or_sync(db, job, key)
+    if row is None:
+        raise MatchError(404, f"This job has no paper {key!r}")
+    if row.status != "pending":
+        raise MatchError(409, f"Paper {key!r} was already {row.status}")
+    if row.match_status != "proposed" or row.proposed_paper_id is None:
+        raise MatchError(409, f"Paper {key!r} has no proposed paper")
+    reject(db, row, paper_id=row.proposed_paper_id)
+    match_row(db, row)
     db.flush()
 
 

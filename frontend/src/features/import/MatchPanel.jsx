@@ -50,8 +50,9 @@ const metaText = m => [m.year, m.paper_number && `Paper ${m.paper_number}`].filt
 // metadata; candidates are the confirmed papers (GET /api/papers) and the pending question papers of
 // other review-ready jobs. Selecting a confirmed paper enables Attach (append / replace prompt as
 // before, unless the answers have nowhere to clash); selecting a pending one links the two ingest
-// papers instead (they are settled together when the question paper is confirmed).
-export default function MatchPanel({ jobId, paper, metadata, refs, link, proposal, onLink, onFlush, onAttached, onSkip, busy }) {
+// papers instead (they are settled together when the question paper is confirmed). Unmatch and
+// "Not this one" reject the pair for good; `onRematched` gets what matching found instead.
+export default function MatchPanel({ jobId, paper, metadata, refs, link, proposal, onLink, onRematched, onFlush, onAttached, onSkip, busy }) {
   const [filters, setFilters] = useState(() => ({
     subject_id: metadata.subject_id ?? '', stream_id: metadata.stream_id ?? '', level_id: metadata.level_id ?? '',
     school_id: metadata.school_id ?? '', exam_type_id: metadata.exam_type_id ?? '',
@@ -145,12 +146,12 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, proposa
     }
   }
 
-  async function handleUnlink() {
+  // Unmatch a link, or ("Not this one") a proposed paper; either way matching runs again.
+  async function reject(call) {
     setLoading(true)
     setError(null)
     try {
-      await api.import.unmatchJobPaper(jobId, paper.key)
-      onLink(null)
+      onRematched(await call(jobId, paper.key))
     } catch (e) {
       setError(e.message)
     } finally {
@@ -196,8 +197,11 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, proposa
       {link && (
         <div role="status" className="text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5 space-y-1">
           <p>Linked to {link.filename} {link.paper_key}. Confirming that question paper will bring these answers in.</p>
-          <button type="button" onClick={handleUnlink} disabled={loading || busy} className="text-blue-700 hover:underline disabled:opacity-50">
-            Unlink
+          <button
+            type="button" onClick={() => reject(api.import.unmatchJobPaper)} disabled={loading || busy}
+            className="text-blue-700 hover:underline disabled:opacity-50"
+          >
+            Unmatch
           </button>
         </div>
       )}
@@ -212,6 +216,14 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, proposa
             className="text-green-800 font-medium hover:underline disabled:opacity-50"
           >
             Attach
+          </button>
+          <button
+            type="button"
+            onClick={() => reject(api.import.rejectProposedPaper)}
+            disabled={loading || busy}
+            className="ml-3 text-gray-700 hover:underline disabled:opacity-50"
+          >
+            Not this one
           </button>
         </div>
       )}

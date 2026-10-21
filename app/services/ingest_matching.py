@@ -18,8 +18,12 @@ with the exact key (``matched_ingest_paper_id`` on both rows, ``match_status`` `
 (the #83 proposal). The same runs from the question side (``match_job`` of a question job tries the
 older pending answer papers). An *auto* link is recomputed from scratch on every re-evaluation
 (metadata edit, new job, new paper), so it follows the data; a link the admin set (``match_status``
-NULL) is never touched; unlinking an auto link leaves ``match_status`` ``unlinked`` on both rows so it
-is not re-made until a metadata edit resets it.
+NULL) is never touched.
+
+Rejections (#88): Unmatch on a linked pair, or "Not this one" on a proposed confirmed paper, records
+the pair in ``ingest_match_rejection``. Every rule above skips a rejected pair (a pending pair counts
+in either direction), so that pair is never proposed again while both papers stay free to match
+something else.
 
 ``paper_number`` is not normalised in the bank, so it is compared after trimming and case-folding
 only. Nothing here commits; callers run it inside their own transaction.
@@ -28,7 +32,7 @@ only. Nothing here commits; callers run it inside their own transaction.
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.orm import IngestJob, IngestPaper, Paper
+from app.models.orm import IngestJob, IngestMatchRejection, IngestPaper, Paper
 from app.services.ingest_papers import METADATA_FIELDS
 
 PARTIAL_FIELDS = ("school_id", "year", "subject_id")
@@ -46,8 +50,43 @@ def _paper_number_clause(value):
     return func.lower(func.trim(Paper.paper_number)) == _norm(value)
 
 
+def rejected_paper_ids(db: Session, row: IngestPaper) -> set[int]:
+    """The confirmed papers the admin turned down for ``row``."""
+    return set(db.scalars(
+        select(IngestMatchRejection.rejected_paper_id).where(
+            IngestMatchRejection.ingest_paper_id == row.id, IngestMatchRejection.rejected_paper_id.isnot(None),
+        )
+    ))
+
+
+def rejected_ingest_ids(db: Session, row: IngestPaper) -> set[int]:
+    """The pending papers the admin turned down as ``row``'s partner, recorded from either side."""
+    R = IngestMatchRejection
+    pairs = db.execute(
+        select(R.ingest_paper_id, R.rejected_ingest_paper_id).where(
+            R.rejected_ingest_paper_id.isnot(None), (R.ingest_paper_id == row.id) | (R.rejected_ingest_paper_id == row.id),
+        )
+    )
+    return {b if a == row.id else a for a, b in pairs}
+
+
+def reject(db: Session, row: IngestPaper, *, other: IngestPaper | None = None, paper_id: int | None = None) -> None:
+    """Record that ``row`` must not be matched to ``other`` (a pending paper) or ``paper_id`` (a
+    confirmed paper) again. Idempotent."""
+    if other is not None:
+        if other.id not in rejected_ingest_ids(db, row):
+            db.add(IngestMatchRejection(ingest_paper_id=row.id, rejected_ingest_paper_id=other.id))
+    elif paper_id is not None and paper_id not in rejected_paper_ids(db, row):
+        db.add(IngestMatchRejection(ingest_paper_id=row.id, rejected_paper_id=paper_id))
+    db.flush()
+
+
+def _without(q, column, ids):
+    return q.where(column.notin_(ids)) if ids else q
+
+
 def exact_candidates(db: Session, row: IngestPaper) -> list[Paper]:
-    q = select(Paper)
+    q = _without(select(Paper), Paper.id, rejected_paper_ids(db, row))
     for f in METADATA_FIELDS:
         value = getattr(row, f)
         q = q.where(_paper_number_clause(value) if f == "paper_number" else getattr(Paper, f) == value)
@@ -57,23 +96,25 @@ def exact_candidates(db: Session, row: IngestPaper) -> list[Paper]:
 def partial_candidates(db: Session, row: IngestPaper) -> list[Paper]:
     if any(getattr(row, f) is None for f in PARTIAL_FIELDS):
         return []
-    q = select(Paper)
+    q = _without(select(Paper), Paper.id, rejected_paper_ids(db, row))
     for f in PARTIAL_FIELDS:
         q = q.where(getattr(Paper, f) == getattr(row, f))
     return list(db.scalars(q.order_by(Paper.id)))
 
 
 def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
-    """Unlinked pending question papers of other review-ready jobs with ``row``'s exact key."""
+    """Unlinked pending question papers of other review-ready jobs with ``row``'s exact key, bar
+    those rejected as its partner."""
     q = (
         select(IngestPaper)
         .join(IngestJob, IngestJob.id == IngestPaper.job_id)
         .where(
             IngestPaper.role == "question", IngestPaper.status == "pending",
             IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
-            IngestPaper.match_status.is_distinct_from("unlinked"), IngestJob.status == "review_ready",
+            IngestJob.status == "review_ready",
         )
     )
+    q = _without(q, IngestPaper.id, rejected_ingest_ids(db, row))
     for f in METADATA_FIELDS:
         value = getattr(row, f)
         q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)
@@ -130,7 +171,6 @@ def _match(db: Session, row: IngestPaper) -> None:
         return
     if row.role != "answer_only":
         return
-    declined = row.match_status == "unlinked"
     unknown = [f for f in METADATA_FIELDS if getattr(row, f) is None]
     if not unknown:
         exact = exact_candidates(db, row)
@@ -140,21 +180,20 @@ def _match(db: Session, row: IngestPaper) -> None:
         if len(exact) > 1:
             _set(row, "manual", None, f"{len(exact)} papers have this key")
             return
-        if not declined:
-            pending = pending_question_candidates(db, row)
-            if len(pending) == 1:
-                other = pending[0]
-                row.matched_ingest_paper_id, other.matched_ingest_paper_id = other.id, row.id
-                _set(row, "auto", None, "auto-linked")
-                _set(other, "auto", None, "auto-linked")
-                db.flush()
-                return
-            if len(pending) > 1:
-                _set(row, "manual", None, f"{len(pending)} pending question papers have this key")
-                return
+        pending = pending_question_candidates(db, row)
+        if len(pending) == 1:
+            other = pending[0]
+            row.matched_ingest_paper_id, other.matched_ingest_paper_id = other.id, row.id
+            _set(row, "auto", None, "auto-linked")
+            _set(other, "auto", None, "auto-linked")
+            db.flush()
+            return
+        if len(pending) > 1:
+            _set(row, "manual", None, f"{len(pending)} pending question papers have this key")
+            return
     partial = partial_candidates(db, row)
     if not partial:
-        _set(row, "unlinked" if declined else None)
+        _set(row, None)
     elif unknown:
         _set(row, "manual", None, "partial: unknown " + ", ".join(_LABELS[f] for f in unknown))
     else:
@@ -170,8 +209,9 @@ def _match(db: Session, row: IngestPaper) -> None:
 
 def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
     """Pending, unlinked answer-only papers of other review-ready jobs with question paper ``row``'s
-    exact key (so each can be matched from its own side, which decides uniqueness)."""
-    if row.status != "pending" or row.matched_ingest_paper_id is not None or row.match_status == "unlinked":
+    exact key, bar those rejected as its partner (so each can be matched from its own side, which
+    decides uniqueness)."""
+    if row.status != "pending" or row.matched_ingest_paper_id is not None:
         return []
     if any(getattr(row, f) is None for f in METADATA_FIELDS):
         return []
@@ -181,9 +221,10 @@ def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
         .where(
             IngestPaper.role == "answer_only", IngestPaper.status == "pending",
             IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
-            IngestPaper.match_status.is_distinct_from("unlinked"), IngestJob.status == "review_ready",
+            IngestJob.status == "review_ready",
         )
     )
+    q = _without(q, IngestPaper.id, rejected_ingest_ids(db, row))
     for f in METADATA_FIELDS:
         value = getattr(row, f)
         q = q.where(_ip_number_clause(value) if f == "paper_number" else getattr(IngestPaper, f) == value)

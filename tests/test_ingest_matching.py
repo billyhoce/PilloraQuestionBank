@@ -1,4 +1,4 @@
-"""Automatic matching of an answer-only paper to a confirmed paper (#83)."""
+"""Automatic matching of an answer-only paper to a confirmed paper (#83), and "Not this one" (#88)."""
 
 from datetime import UTC, datetime
 
@@ -175,3 +175,41 @@ def test_confirming_a_paper_proposes_it_to_pending_answers(admin_client, db_sess
     assert resp.status_code == 201, resp.text
     got = row(db_session, ajob, r.paper_key)
     assert state(got) == ("proposed", resp.json()["paper_id"], None)
+
+
+def test_not_this_one_rejects_the_proposed_paper_and_rematches(admin_client, db_session, admin_user, meta):
+    wrong = add_paper(db_session, admin_user, meta)
+    ajob, r = answers_job(db_session, admin_user, meta)
+    match_row(db_session, r)
+    db_session.commit()
+    url = f"/api/import/jobs/{ajob.id}/papers/{r.paper_key}/proposed-paper"
+    resp = admin_client.delete(url)
+    assert resp.status_code == 200, resp.text
+    # the only candidate was the rejected one: nothing left, not even a partial hint
+    assert resp.json() == {"matches": None, "proposal": None}
+    assert state(row(db_session, ajob, r.paper_key)) == (None, None, None)
+    match_for_new_paper(db_session, wrong)  # re-running matching never proposes it again
+    assert state(row(db_session, ajob, r.paper_key)) == (None, None, None)
+    right = add_paper(db_session, admin_user, meta)  # but another paper with the key is proposed
+    match_for_new_paper(db_session, right)
+    assert state(row(db_session, ajob, r.paper_key)) == ("proposed", right.id, None)
+
+
+def test_not_this_one_can_fall_through_to_a_pending_question_paper(admin_client, db_session, admin_user, meta):
+    add_paper(db_session, admin_user, meta)
+    qjob, qkey = job_with(db_session, admin_user, QUESTION, meta, filename="q.pdf")
+    ajob, r = answers_job(db_session, admin_user, meta)
+    match_row(db_session, r)
+    db_session.commit()
+    assert r.match_status == "proposed"  # a confirmed paper wins over the pending one
+    resp = admin_client.delete(f"/api/import/jobs/{ajob.id}/papers/{r.paper_key}/proposed-paper")
+    assert resp.json()["matches"]["filename"] == "q.pdf" and resp.json()["proposal"] is None
+    assert row(db_session, ajob, r.paper_key).matched_ingest_paper_id == row(db_session, qjob, qkey).id
+
+
+def test_not_this_one_needs_a_pending_proposal(admin_client, db_session, admin_user, meta):
+    ajob, r = answers_job(db_session, admin_user, meta)
+    db_session.commit()
+    url = f"/api/import/jobs/{ajob.id}/papers/{r.paper_key}/proposed-paper"
+    assert admin_client.delete(url).status_code == 409  # nothing proposed
+    assert admin_client.delete(f"/api/import/jobs/{ajob.id}/papers/nope/proposed-paper").status_code == 404

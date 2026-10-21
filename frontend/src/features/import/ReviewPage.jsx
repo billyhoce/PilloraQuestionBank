@@ -470,11 +470,16 @@ export default function ReviewPage() {
     }
   }
 
-  async function unlinkPaper() {
+  // After Unmatch or "Not this one": what matching found for the paper instead.
+  function rematched(key, { matches: link, proposal }) {
+    setMatches(m => ({ ...m, [key]: link ?? null }))
+    setProposals(p => ({ ...p, [key]: proposal ?? null }))
+  }
+
+  async function unmatchPaper() {
     const key = paper.key
     try {
-      await api.import.unmatchJobPaper(jobId, key)
-      setMatches(m => ({ ...m, [key]: null }))
+      rematched(key, await api.import.unmatchJobPaper(jobId, key))
     } catch (e) {
       setConfirmError(e.message)
     }
@@ -762,7 +767,7 @@ export default function ReviewPage() {
               {!answerOnly && matches[paper.key] && (
                 <p role="status" className="w-52 mb-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
                   Answers available from {matches[paper.key].filename} ({matches[paper.key].paper_key}) — they will be attached when you confirm.{' '}
-                  <button type="button" onClick={unlinkPaper} className="text-blue-700 hover:underline">Unlink</button>
+                  <button type="button" onClick={unmatchPaper} className="text-blue-700 hover:underline">Unmatch</button>
                 </p>
               )}
               {answerOnly ? (
@@ -775,6 +780,7 @@ export default function ReviewPage() {
                   link={matches[paper.key] ?? null}
                   proposal={proposals[paper.key] ?? null}
                   onLink={link => setMatches(m => ({ ...m, [paper.key]: link }))}
+                  onRematched={r => rematched(paper.key, r)}
                   onFlush={async () => { if (timer.current) await flush() }}
                   onAttached={jobStatus => decided('attached', jobStatus)}
                   onSkip={handleSkipPaper}

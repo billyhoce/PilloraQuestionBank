@@ -535,9 +535,10 @@ class IngestPaper(Base):
     matched_ingest_paper: Mapped["IngestPaper | None"] = relationship(
         "IngestPaper", foreign_keys=[matched_ingest_paper_id], remote_side="IngestPaper.id", post_update=True
     )
-    # Automatic matching of a pending answer-only paper to the bank (app/services/ingest_matching.py):
-    # NULL (nothing to do), ``proposed`` (one confirmed paper, ``proposed_paper_id``) or ``manual``
-    # (several or only partial candidates); ``match_note`` says why.
+    # Automatic matching (app/services/ingest_matching.py): NULL (nothing to do), ``proposed`` (one
+    # confirmed paper, ``proposed_paper_id``), ``manual`` (several or only partial candidates) or
+    # ``auto`` (auto-linked to a pending paper); ``match_note`` says why. Pairs the admin turned down
+    # are in ``ingest_match_rejection``.
     match_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     proposed_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
     match_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -545,6 +546,30 @@ class IngestPaper(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class IngestMatchRejection(Base):
+    """A pair the admin turned down (Unmatch, or "Not this one" on a proposed paper), so automatic
+    matching never proposes it again. Exactly one of ``rejected_ingest_paper_id`` (a pending paper;
+    the pair counts in either direction) and ``rejected_paper_id`` (a bank paper) is set."""
+
+    __tablename__ = "ingest_match_rejection"
+    __table_args__ = (
+        CheckConstraint(
+            "(rejected_ingest_paper_id IS NULL) <> (rejected_paper_id IS NULL)",
+            name="ck_ingest_match_rejection_one_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingest_paper_id: Mapped[int] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rejected_ingest_paper_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    rejected_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class IngestEvent(Base):
