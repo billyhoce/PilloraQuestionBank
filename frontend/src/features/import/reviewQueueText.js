@@ -30,3 +30,12 @@ export function matchState(p) {
   }
   return p.linked ? { text: 'Answers linked from another upload', tone: 'green' } : null
 }
+
+// Whether a queue line gets a Match button: the summary's version of pairing.js's needsPartner. A
+// pending, unlinked paper with questions that is answer-only, or a question paper whose own
+// booklet had no answers at all. A paper has questions when it has coverage or unanswered numbers.
+export function needsPartner(p) {
+  if (p.status !== 'pending' || p.linked) return false
+  if (p.answer_coverage === 'none' && !p.unanswered?.length) return false
+  return p.role === 'answer_only' || p.answer_coverage === 'none'
+}

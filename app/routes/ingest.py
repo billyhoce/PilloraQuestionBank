@@ -392,10 +392,11 @@ def _job_out(job: IngestJob) -> dict:
     }
 
 
-def _paper_summary(row: IngestPaper, coverage: dict | None = None) -> dict:
+def _paper_summary(row: IngestPaper, coverage: dict | None = None, extracted_school: str | None = None) -> dict:
     """One proposed paper as the job list shows it: enough for an at-a-glance review queue card.
     ``answer_coverage`` (``none``/``partial``/``all``, of its own answer boxes) and ``unanswered``
-    (its question numbers without one) come from the job's current proposal."""
+    (its question numbers without one) come from the job's current proposal; ``extracted_school``
+    is the school name read from its cover (pre-fills the queue's "Match this paper" popup, #93)."""
     coverage = coverage or {"answer_coverage": "none", "unanswered": []}
     return {
         "key": row.paper_key,
@@ -411,6 +412,7 @@ def _paper_summary(row: IngestPaper, coverage: dict | None = None) -> dict:
         "paper_number": row.paper_number,
         "linked": row.matched_ingest_paper_id is not None,
         "match_status": row.match_status,
+        "extracted_school": extracted_school,
         **coverage,
     }
 
@@ -427,8 +429,10 @@ def _papers_by_job(db: Session, jobs: list[IngestJob]) -> dict:
         .all()
     )
     coverage = {j.id: job_coverage(j) for j in jobs}
+    meta = {j.id: (j.report or {}).get("paper_metadata") or {} for j in jobs}
     for r in rows:
-        by_job[r.job_id].append(_paper_summary(r, coverage[r.job_id].get(r.paper_key)))
+        extracted = (meta[r.job_id].get(r.paper_key) or {}).get("extracted") or {}
+        by_job[r.job_id].append(_paper_summary(r, coverage[r.job_id].get(r.paper_key), extracted.get("school")))
     return by_job
 
 
