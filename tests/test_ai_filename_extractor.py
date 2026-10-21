@@ -325,3 +325,36 @@ def test_a_failed_cover_call_is_retried_on_the_filename_alone(mock_cls, mock_fet
     result = extract_paper_metadata("RI_2021.pdf", db=MagicMock(), cover=b"%PDF")
     assert result["year"] == 2021
     assert isinstance(client.messages.create.call_args.kwargs["messages"][0]["content"], str)
+
+
+# ---------------------------------------------------------------------------
+# The raw names read are kept alongside the ids (#86)
+# ---------------------------------------------------------------------------
+
+
+@patch("app.ai.filename_extractor._fetch_reference_data")
+@patch("app.ai.filename_extractor.anthropic.Anthropic")
+def test_the_names_read_are_kept_even_when_they_do_not_resolve(mock_cls, mock_fetch):
+    mock_fetch.return_value = _make_ref_data()
+    mock_cls.return_value.messages.create.return_value = _make_mock_response(
+        {**_ALL_NULL, "school": "Raffles Instn", "subject": "Math", "year": 2024}
+    )
+
+    result = extract_paper_metadata("RI_2024.pdf", db=MagicMock(), cover=b"%PDF")
+
+    assert result["school_id"] is None and result["subject_id"] == 2
+    assert result["extracted"] == {
+        "school": "Raffles Instn", "subject": "Math", "level": None, "stream": None, "exam_type": None,
+    }
+
+
+@patch("app.ai.filename_extractor._fetch_reference_data")
+@patch("app.ai.filename_extractor.anthropic.Anthropic")
+def test_a_failed_extraction_keeps_no_names(mock_cls, mock_fetch):
+    mock_fetch.return_value = _make_ref_data()
+    mock_cls.return_value.messages.create.side_effect = Exception("API error")
+    assert "extracted" not in extract_paper_metadata("x.pdf", db=MagicMock())
+
+
+def test_the_school_may_be_read_as_printed_when_it_is_not_listed():
+    assert "as printed" in _EXTRACTION_TOOL["input_schema"]["properties"]["school"]["description"]

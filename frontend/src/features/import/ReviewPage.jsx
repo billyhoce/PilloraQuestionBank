@@ -794,6 +794,8 @@ export default function ReviewPage() {
                   confirmLabel="Confirm paper →"
                   cancelLabel="Skip this paper"
                   canConfirm={paper.questions.length > 0}
+                  schoolCombobox
+                  extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
                 />
               )}
             </div>

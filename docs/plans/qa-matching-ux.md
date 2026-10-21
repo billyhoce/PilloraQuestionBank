@@ -1,7 +1,8 @@
 # Fixing and forcing question/answer matches (plan)
 
 **Status: agreed.** The "Match this paper" popup and the answer mapping table (below) are agreed.
-Nothing here is built yet. What exists today is in
+Built so far: keeping the extracted names and the review-sidebar school combobox (#86, backend
+step 1 and part of frontend steps 1 and 6). What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found
@@ -17,8 +18,8 @@ booklet** is a candidate partner for it.
 - **Answer-only paper → pending question paper of another job:** automatic link on the seven-field
   key, or the Match panel's Link. Unlink exists on both sides.
 - Answers always go onto questions **by question number**.
-- **Extracted names are lost when they don't match exactly.** `resolve_metadata` keeps only ids; a
-  cover that reads "Raffles Instn" leaves `school_id` blank and the text is discarded.
+- **Extracted names were lost when they did not match exactly** (fixed by #86: they are now kept as
+  `extracted` and shown in the review sidebar's school combobox).
 
 ## The gaps
 

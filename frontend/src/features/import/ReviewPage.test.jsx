@@ -355,6 +355,31 @@ describe('ReviewPage', () => {
       })
     })
 
+    it('holds confirm while the school read from the cover is not in the list, until one is picked', async () => {
+      const extracted = { school: 'Raffles Instn', subject: null, level: null, stream: null, exam_type: null }
+      api.import.review.mockResolvedValue({
+        ...TWO, filename_metadata: {}, paper_metadata: { q1: { ...FILLED, school_id: null, extracted } },
+      })
+      renderPage()
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      const school = await screen.findByRole('combobox', { name: 'School' })
+      expect(screen.getByText(/— not in the list/)).toHaveTextContent('Raffles Instn — not in the list')
+      expect(button).toBeDisabled()
+      expect(screen.getByText(/Pick a school: “Raffles Instn” is not in the list/)).toBeInTheDocument()
+      await userEvent.click(school)
+      await userEvent.click(screen.getByRole('option', { name: 'RI' }))
+      expect(button).toBeEnabled()
+      expect(screen.queryByText(/Pick a school/)).not.toBeInTheDocument()
+    })
+
+    it('an old job without the names read shows the school as before', async () => {
+      api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1: FILLED } })
+      renderPage()
+      expect(await screen.findByRole('combobox', { name: 'School' })).toHaveValue('RI')
+      expect(screen.queryByText(/— not in the list/)).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.getByRole('button', { name: /Confirm paper/ })).toBeEnabled())
+    })
+
     it('mirrors sidebar edits to the server, debounced', async () => {
       api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1: FILLED } })
       api.import.savePaperMetadata.mockResolvedValue({ saved: true })

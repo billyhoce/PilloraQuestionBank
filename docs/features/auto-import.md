@@ -34,7 +34,7 @@ All admin-only (`403` otherwise). Any admin can see and act on any admin's job.
 | `GET /api/import/jobs/{id}` | The job, its `report` (including `cost`), its tasks (status, attempts, duration, warnings, reason, error, traceback) and worker liveness. Unknown id → `404`. |
 | `POST /api/import/jobs/{id}/retry` | Failed and blocked tasks, plus everything downstream, go back to the queue with attempts reset. Returns `reopened` (a count). `409` for a job that is `awaiting_upload`, `cancelled`, `confirmed` or `expired`, or that has any paper already decided. |
 | `DELETE /api/import/jobs/{id}` | Cancel: status `cancelled` is committed first, then the job's S3 prefix is deleted. `204`. A `confirmed`, `cancelled` or `expired` job → `409`. |
-| `GET /api/import/jobs/{id}/review` | The proposal under review (`proposal_edited` if present, else `proposal`), with presigned page URLs and pixel sizes. Also `filename`, `edited`, `page_count`, `paper_metadata`, `filename_metadata` (old jobs), each paper's `key`/`outcome`, `matches`, `proposals`. No proposal yet → `409`. |
+| `GET /api/import/jobs/{id}/review` | The proposal under review (`proposal_edited` if present, else `proposal`), with presigned page URLs and pixel sizes. Also `filename`, `edited`, `page_count`, `paper_metadata` (each paper's ids, plus `extracted`: the raw names read), `filename_metadata` (old jobs), each paper's `key`/`outcome`, `matches`, `proposals`. No proposal yet → `409`. |
 | `PUT /api/import/jobs/{id}/proposal` | Saves the admin's edits as `proposal_edited` (see [Editing](#editing)). |
 | `PUT /api/import/jobs/{id}/papers/{key}/metadata` | Stores sidebar metadata on the paper's `ingest_paper` row and re-runs matching. See [qa-pairing.md](./qa-pairing.md). |
 | `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` | Cuts that range of the job's PDF into Manual-flow pages, using the job's stored metadata (no Claude call). Bad range → `422`. |
@@ -174,6 +174,13 @@ All jobs). The header links back to the queue and to the **next job** in it (the
 - **Right column:**
   - question paper: the metadata sidebar, pre-filled from the paper's own `paper_metadata[key]`
     (old jobs: `filename_metadata`), plus **Confirm paper** and **Skip this paper**.
+  - **School** is a combobox (`SchoolCombobox.jsx`): type to search the existing schools. When the
+    cover named a school that matched none (`paper_metadata[key].extracted.school` with no
+    `school_id`), it is shown in amber as "*Raffles Instn* — not in the list", and the closest
+    existing names (character-bigram likeness) are listed first. It counts as blank: **Confirm** is
+    disabled, with "Pick a school: “Raffles Instn” is not in the list." shown, until a school is
+    picked. A job without `extracted` (from before it existed) shows nothing extra. The Manual
+    import sidebar keeps its plain dropdown.
   - answer-only paper: the Match panel ([qa-pairing.md](./qa-pairing.md)).
 - **Metadata edits** are kept per paper and saved (debounced 800 ms) to
   `PUT .../papers/{key}/metadata`. This is best effort, since confirm sends the final values.
