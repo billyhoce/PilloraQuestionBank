@@ -140,6 +140,14 @@ describe('MatchDialog', () => {
     expect(within(row).queryByRole('button')).not.toBeInTheDocument()
   })
 
+  it('greys out a pending question paper that has answers of its own, even partly', async () => {
+    api.import.paperCandidates.mockResolvedValue({ exact: [pending({ answer_coverage: 'partial', answer_numbers: [1] })], best: [] })
+    renderDialog()
+    const row = (await screen.findByText('Already has answers')).closest('li')
+    expect(row).toHaveAttribute('aria-disabled', 'true')
+    expect(within(row).queryByRole('button')).not.toBeInTheDocument()
+  })
+
   it('attaches to a bank paper without answers after the mapping table', async () => {
     api.import.paperCandidates.mockResolvedValue({ exact: [bank()], best: [] })
     const result = { attached: [1], unmatched: [], modes: {}, job_status: 'confirmed' }

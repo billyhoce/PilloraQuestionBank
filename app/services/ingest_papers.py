@@ -12,15 +12,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.orm import IngestJob, IngestPaper, School
+from app.services.answer_coverage import NONE, current_papers, job_coverage
 
 METADATA_FIELDS = ("school_id", "year", "level_id", "subject_id", "exam_type_id", "stream_id", "paper_number")
 
 
 def _proposal_papers(job: IngestJob) -> list[tuple[str, dict]]:
-    from app.services.ingest_confirm import paper_key  # confirm imports this module's siblings
-
-    proposal = job.proposal if job.proposal is not None else job.proposal_edited
-    return [(paper_key(p, i), p) for i, p in enumerate((proposal or {}).get("papers", []))]
+    """``(key, paper)`` of the admin's edit, else the worker's proposal, as review and confirm read
+    it: an edit keeps every paper's key and role but may renumber questions and move their boxes."""
+    return list(current_papers(job).items())
 
 
 def _clean(metadata: dict | None) -> dict[str, Any]:
@@ -222,6 +222,14 @@ def _clear_link(row: IngestPaper) -> None:
 PARTNER_ROLE = {"answer_only": "question", "question": "answer_only"}
 
 
+def open_to_answers(row: IngestPaper, job: IngestJob) -> bool:
+    """Whether pending question paper ``row`` (of ``job``) may take another booklet's answers: only
+    when it has none of its own (coverage ``none``). Answers are all or none, so a partly answered
+    paper counts as answered (see docs/features/qa-pairing.md)."""
+    coverage = job_coverage(job).get(row.paper_key)
+    return coverage is None or coverage["answer_coverage"] == NONE
+
+
 def link_papers(
     db: Session, job: IngestJob, key: str, other_id: int, metadata: dict | None = None, mapping: dict | None = None
 ) -> IngestPaper:
@@ -248,6 +256,9 @@ def link_papers(
     ):
         wanted = "question paper" if row.role == "answer_only" else "answer-only paper"
         raise MatchError(422, f"That is not a pending {wanted} awaiting review")
+    question = row if row.role == "question" else other
+    if not open_to_answers(question, job if question is row else other_job):
+        raise MatchError(409, f"Question paper {question.paper_key!r} already has answers of its own")
     if metadata is not None:
         set_metadata(db, job, key, metadata)
     for r in (row, other):

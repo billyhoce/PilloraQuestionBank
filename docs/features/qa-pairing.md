@@ -66,8 +66,9 @@ job or a typo leaves nothing behind.
 ## Answers are all or none
 
 A paper has answers on **every** question or on **none**. Anything in between raises a
-**warning**, never a hard stop: the admin can always go ahead. The one refusal is attaching to a
-bank paper that already has answers everywhere.
+**warning**, never a hard stop: the admin can always go ahead. The refusals are attaching to a
+bank paper that already has answers everywhere, and pairing a pending question paper that has any
+answers of its own.
 
 - **Answer coverage** (`app/services/answer_coverage.py`) is `none`, `partial` or `all`. A paper
   with no questions is `none`.
@@ -84,13 +85,19 @@ bank paper that already has answers everywhere.
 - **Automatic matching** never counts a bank paper with coverage `all` as a candidate, exact or
   partial. A partly answered bank paper is still a normal candidate.
 - **Attach** to a bank paper with coverage `all` is refused (`409`).
-- **A question paper whose own booklet answered only some questions** counts as having answers. Its
-  review page shows "Q5–Q7 have no answers. Add them with the answer-box editor, or confirm anyway."
+- **Another booklet's answers go only onto a question paper with none of its own.** A pending
+  question paper is a pairing target only while its coverage is `none`; a partly answered one counts
+  as answered, exactly like a fully answered one. Automatic matching never links it (from either
+  side), [pairing by hand](#pairing-by-hand) refuses it (`409`), and the popup greys it out as
+  "Already has answers". Coverage is read from the job's current proposal, so removing the boxes in
+  the answer-box editor makes the paper a target again.
+- **A question paper whose own booklet answered only some questions** counts as having answers: it
+  cannot be paired, and its missing answers cannot come from a second booklet. Its review page shows "Q5–Q7 have no answers. Add them with the answer-box editor, or confirm anyway."
   above **Confirm paper**, which stays enabled. The warning follows the admin's box edits.
-- **A linked pair** is judged as it will be confirmed: the question paper's own answer boxes plus the
-  questions the linked answers land on (`matches[key].answer_numbers`, placed by the pair's
-  [mapping](#the-answer-mapping-table)). It warns when that combination is partial. A question paper with no answers at all is not warned about; it
-  needs a partner instead.
+- **A linked pair** is judged as it will be confirmed: the questions the linked answers land on
+  (`matches[key].answer_numbers`, placed by the pair's [mapping](#the-answer-mapping-table)). It
+  warns when that is partial. A question paper with no answers at all is not warned about; it needs
+  a partner instead.
 
 ## Attaching answers to an existing paper
 
@@ -164,8 +171,9 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
 - **Each row:** where the booklet is ("In the bank (paper 7)", "Pending in <file> (<key>)", "Same
   file (<key>)"), its details in words, its first question beside this paper's first answer (or the
   other way round for a question paper), "This will unpair it from <file>" when it is paired
-  already, and for a bank paper "Only 8 of 12 questions have answers" (partly answered) or, greyed
-  out with no action, "Already has answers".
+  already, and for a bank paper "Only 8 of 12 questions have answers" (partly answered). Greyed out
+  with no action, "Already has answers": a bank paper with answers on every question, or a pending
+  question paper with any answers of its own (`alreadyAnswered` in `pairing.js`).
 - **Pair** (a pending booklet) or **Attach** (a bank paper) moves on to the
   [answer mapping table](#the-answer-mapping-table) for that booklet; nothing is saved yet. Its
   **Pair** button links the two papers and stores the mapping; its **Attach answers** button attaches
@@ -207,8 +215,10 @@ On the [Review queue](./auto-import.md#review-queue), each paper line that needs
     `review_ready` jobs or in the paper's own job (its own job first, then newest), not the paper
     itself nor its current partner. Rejected pairs are listed: the admin may still pair them by hand;
   - for an answer-only paper only, bank papers. A question paper never matches a bank paper (that
-    would be a duplicate). Bank papers with coverage `all` are returned, not dropped, so the popup
-    can grey them out.
+    would be a duplicate).
+  - Candidates that cannot take the answers are returned, not dropped, with their
+    `answer_coverage`, so the popup can grey them out: bank papers with coverage `all`, and pending
+    question papers with any answers of their own (coverage `partial` or `all`).
 - **Each candidate:** `kind` (`pending`/`bank`), `ingest_paper_id` or `paper_id`, `job_id`,
   `filename`, `paper_key`, `same_job`, `role`, `details` (the seven fields and `new_school_name`),
   `agree` and `differ` (field names), `partner` (`{ingest_paper_id, job_id, filename, paper_key}`
@@ -223,7 +233,8 @@ On the [Review queue](./auto-import.md#review-queue), each paper line that needs
 - **Either role:** an answer-only paper pairs with a pending question paper and a question paper
   with a pending answer-only paper, of another `review_ready` job **or the same job**. Anything else
   (same role, itself, a decided paper, a job no longer under review) → `422`; unknown key or target
-  → `404`; this job not `review_ready` or this paper decided → `409`.
+  → `404`; this job not `review_ready`, this paper decided, or the question paper of the pair has
+  answers of its own ([coverage](#answers-are-all-or-none) not `none`) → `409`.
 - Sets `matched_ingest_paper_id` on both rows (no automatic status: "matched by an admin") and
   releases any earlier link of either one **without** rejecting it, so automatic matching may still
   propose that old pair later.
@@ -297,7 +308,7 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
 | 1 | Linked to a pending question paper (admin link, or an auto link that still holds) | Untouched; any proposal is hidden |
 | 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The Pairing block shows "Answers match <paper>" with **Attach…**, **Change match…** and **Not this one** |
 | 3 | All seven known, several confirmed papers share the key | `manual` ("N papers have this key") |
-| 4 | All seven known, no confirmed match, exactly one pending `question` paper with the same key, not linked to anything, in another `review_ready` job **or the same job** | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
+| 4 | All seven known, no confirmed match, exactly one pending `question` paper with the same key, not linked to anything, with no answers of its own, in another `review_ready` job **or the same job** | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
 | 5 | Same as 4, but several pending question papers | `manual` ("N pending question papers have this key") |
 | 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known; never for a [new school](#new-schools)) | `manual` ("partial: … differ" / "partial: unknown …") |
 | 7 | Otherwise | NULL (nothing to do) |
@@ -308,6 +319,8 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
   partner keeps it).
 - **Fully answered bank papers are skipped** by rules 2, 3 and 6: a confirmed paper whose
   [coverage](#answers-are-all-or-none) is `all` is never a candidate.
+- **Answered question papers are skipped** by rules 4 and 5: a pending question paper whose coverage
+  is not `none` is never linked, and from the question side such a paper looks for no partner.
 - **Rejected pairs are skipped** by every rule: a rejected candidate is not counted, proposed,
   linked or used as a partial hint ([Rejecting a match](#rejecting-a-match)).
 - **Settling** an answer paper (attach or skip) clears its proposal.
@@ -366,7 +379,8 @@ confirming it also attaches those answers and settles both papers.
 - **Cropping:** answer rectangles come from the **answer job's** `source.pdf` (its edited proposal
   if any). For a same-job pair that is the one `source.pdf`, read once. They are placed by the answer paper's stored
   [`answer_map`](#the-answer-mapping-table), falling back to question number, and added **after** the question paper's own answer
-  pages, with provenance from the answer job's PDF.
+  pages (it has none when the link was made: [answers are all or
+  none](#answers-are-all-or-none)), with provenance from the answer job's PDF.
 - **Unplaced answers** (no question with that number or mapped label, or mapped to `null`) are
   returned in `unmatched`. If none is placed, the answer paper stays pending and linked, and
   `answers_from` is null.

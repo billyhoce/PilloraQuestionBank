@@ -127,7 +127,8 @@ raises a **warning**, never a hard stop: the admin can always go ahead.
 - **A question paper whose own booklet answered only some questions** counts as having answers: it
   gets no Match button. The review page and Confirm warn "Q5–Q7 have no answers"; the admin fixes
   it with the answer-box editor or confirms anyway. Adding the missing answers from a second
-  booklet is not supported.
+  booklet is not supported: automatic matching never links it, pairing by hand refuses it, and the
+  popup greys it out as "Already has answers", like a fully answered bank paper.
 - **Confirm** of a pending paper, or a linked pair, shows the same warning when the confirmed
   paper(s) would end up partly answered.
 

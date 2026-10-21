@@ -9,8 +9,10 @@ with, ranked by how many of the admin's filled fields agree, rather than filtere
   out.
 * **Sources:** pending papers of the other role (answer-only <-> question) in ``review_ready`` jobs
   or in the paper's own job; for an answer-only paper also bank papers. A question paper never
-  matches a bank paper (that would be a duplicate). Bank papers that already have answers on every
-  question are returned with coverage ``all`` so the popup can grey them out.
+  matches a bank paper (that would be a duplicate). Candidates that cannot take the answers are
+  returned, not dropped, with their ``answer_coverage``, so the popup can grey them out: a bank paper
+  with answers on every question (``all``), and a pending question paper with any answers of its
+  own (anything but ``none``; answers are all or none, and pairing refuses it with a 409).
 
 See docs/features/qa-pairing.md ("Match this paper").
 """
