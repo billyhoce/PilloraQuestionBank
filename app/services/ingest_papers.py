@@ -165,9 +165,10 @@ class MatchError(Exception):
         self.message = message
 
 
-def _first_question_preview(job: IngestJob, key: str, store) -> dict | None:
-    """The first question of proposal paper ``key`` as ``{url, page, rect}``: its review page image,
-    the page's sizes and the question's first rectangle (PDF points), or None if it has none."""
+def first_preview(job: IngestJob, key: str, store, rects: str = "question_rects") -> dict | None:
+    """The first question (``rects="answer_rects"``: the first answer) of proposal paper ``key`` as
+    ``{number, url, page, rect}``: its review page image, the page's sizes and the first rectangle
+    (PDF points), or None if it has none."""
     from app.services.ingest_jobs import job_prefix
     from app.services.ingest_review import REVIEW_URL_TTL, pixel_size
 
@@ -176,7 +177,7 @@ def _first_question_preview(job: IngestJob, key: str, store) -> dict | None:
             continue
         pages = {p["page"]: p for p in paper.get("pages", [])}
         for q in paper.get("questions", []):
-            for rect in q.get("question_rects") or []:
+            for rect in q.get(rects) or []:
                 page = pages.get(rect["page"])
                 if page is None or not page.get("image"):
                     continue
@@ -193,39 +194,6 @@ def _first_question_preview(job: IngestJob, key: str, store) -> dict | None:
     return None
 
 
-def _metadata_of(row: IngestPaper) -> dict[str, Any]:
-    return {f: getattr(row, f) for f in METADATA_FIELDS}
-
-
-def pending_question_papers(
-    db: Session, store, filters: dict[str, Any], exclude_job_id=None
-) -> list[dict]:
-    """Pending question papers of ``review_ready`` jobs (other than ``exclude_job_id``) whose
-    metadata equals every given filter (``filters`` holds only the fields to constrain), newest
-    job first, each with what the match panel needs to preview its first question."""
-    q = (
-        select(IngestPaper, IngestJob)
-        .join(IngestJob, IngestJob.id == IngestPaper.job_id)
-        .where(IngestPaper.role == "question", IngestPaper.status == "pending", IngestJob.status == "review_ready")
-    )
-    if exclude_job_id is not None:
-        q = q.where(IngestPaper.job_id != exclude_job_id)
-    for field, value in filters.items():
-        q = q.where(getattr(IngestPaper, field) == value)
-    out = []
-    for row, job in db.execute(q.order_by(IngestJob.created_at.desc(), IngestPaper.id)):
-        out.append({
-            "ingest_paper_id": row.id,
-            "job_id": str(job.id),
-            "filename": job.filename,
-            "paper_key": row.paper_key,
-            "metadata": _metadata_of(row),
-            "matched_ingest_paper_id": row.matched_ingest_paper_id,
-            "preview": _first_question_preview(job, row.paper_key, store),
-        })
-    return out
-
-
 def _clear_link(row: IngestPaper) -> None:
     """Break ``row``'s link, on both sides, and clear both rows' automatic match state."""
     other = row.matched_ingest_paper
@@ -239,23 +207,34 @@ def _clear_link(row: IngestPaper) -> None:
             r.proposed_paper_id = None
 
 
-def link_papers(db: Session, job: IngestJob, key: str, other_id: int) -> IngestPaper:
-    """Link answer-only paper ``key`` of ``job`` to the pending question ``ingest_paper`` ``other_id``
-    (of another review-ready job), by setting ``matched_ingest_paper_id`` on both rows. Replaces any
-    earlier link of either row. Does not commit."""
+PARTNER_ROLE = {"answer_only": "question", "question": "answer_only"}
+
+
+def link_papers(db: Session, job: IngestJob, key: str, other_id: int, metadata: dict | None = None) -> IngestPaper:
+    """Pair paper ``key`` of ``job`` with the pending ``ingest_paper`` ``other_id`` of the other
+    role (answer-only <-> question), of a review-ready job or of ``job`` itself, by setting
+    ``matched_ingest_paper_id`` on both rows. Replaces any earlier link of either row without
+    rejecting it. ``metadata`` (the popup's "Also update this paper's details") is saved on ``key``'s
+    row first, as by ``set_metadata``. Does not commit."""
     row = _row_or_sync(db, job, key)
     if row is None:
         raise MatchError(404, f"This job has no paper {key!r}")
     if row.status != "pending":
         raise MatchError(409, f"Paper {key!r} was already {row.status}")
-    if row.role != "answer_only":
-        raise MatchError(422, f"Paper {key!r} is not an answer-only paper")
+    if row.role not in PARTNER_ROLE:
+        raise MatchError(422, f"Paper {key!r} cannot be paired")
     other = db.get(IngestPaper, other_id)
     if other is None:
-        raise MatchError(404, "That question paper does not exist")
+        raise MatchError(404, "That paper does not exist")
     other_job = db.get(IngestJob, other.job_id)
-    if other.job_id == job.id or other.role != "question" or other.status != "pending" or other_job.status != "review_ready":
-        raise MatchError(422, "That is not a pending question paper of another job")
+    if (
+        other.id == row.id or other.role != PARTNER_ROLE[row.role] or other.status != "pending"
+        or (other.job_id != job.id and other_job.status != "review_ready")
+    ):
+        wanted = "question paper" if row.role == "answer_only" else "answer-only paper"
+        raise MatchError(422, f"That is not a pending {wanted} awaiting review")
+    if metadata is not None:
+        set_metadata(db, job, key, metadata)
     for r in (row, other):
         if r.matched_ingest_paper_id is not None:
             _clear_link(r)

@@ -28,12 +28,12 @@ from app.services.ingest_papers import (
     get_row as get_paper_row,
     link_papers,
     paper_links,
-    pending_question_papers,
     reject_proposed_paper,
     set_metadata as set_paper_metadata,
     sync_job_papers,
     unlink_paper,
 )
+from app.services.match_candidates import find_candidates
 from app.services.ingest_confirm import ReviewActionError, attach_answers, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
     InvalidPdfError,
@@ -695,33 +695,39 @@ def save_paper_metadata(
     return {"saved": True, "metadata_source": row.metadata_source, "proposal": match_info(db, job).get(paper_key)}
 
 
-@router.get("/papers/pending")
-def pending_papers(
+@router.get("/jobs/{job_id}/papers/{paper_key}/candidates")
+def paper_candidates(
+    job_id: uuid.UUID,
+    paper_key: str,
     school_id: Optional[int] = None,
+    new_school_name: Optional[str] = None,
     year: Optional[int] = None,
     level_id: Optional[int] = None,
     subject_id: Optional[int] = None,
     exam_type_id: Optional[int] = None,
     stream_id: Optional[int] = None,
     paper_number: Optional[str] = None,
-    exclude_job_id: Optional[uuid.UUID] = None,
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
     store: ObjectStore = Depends(get_object_store),
 ):
-    """Pending question papers of review-ready jobs (not ``exclude_job_id``), the candidates for
-    matching an answer-only paper before the question paper exists in the bank. Every given
-    metadata field must match exactly. Each has a ``preview`` of its first question."""
-    given = {
-        "school_id": school_id, "year": year, "level_id": level_id, "subject_id": subject_id,
-        "exam_type_id": exam_type_id, "stream_id": stream_id, "paper_number": paper_number,
+    """"Match this paper": the booklets this paper could be paired with, ranked against the given
+    fields (blank = any) as ``{exact, best}``. See ``app.services.match_candidates``."""
+    job = _get_own_job(db, job_id, current_user)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    query = {
+        "school_id": school_id, "new_school_name": new_school_name, "year": year, "level_id": level_id,
+        "subject_id": subject_id, "exam_type_id": exam_type_id, "stream_id": stream_id, "paper_number": paper_number,
     }
-    filters = {k: v for k, v in given.items() if v is not None and v != ""}
-    return {"data": pending_question_papers(db, store, filters, exclude_job_id)}
+    return find_candidates(db, store, row, query)
 
 
 class JobMatchIn(BaseModel):
     ingest_paper_id: int
+    # "Also update this paper's details": saved on this paper in the same transaction.
+    metadata: Optional[PaperMetadataEditIn] = None
 
 
 @router.post("/jobs/{job_id}/papers/{paper_key}/match")
@@ -732,20 +738,23 @@ def match_job_paper(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Link an answer-only paper to a pending question paper of another job (both rows get each
-    other's id in ``matched_ingest_paper_id``). Nothing is attached yet; confirming the question
-    paper settles the pair."""
+    """Pair a pending paper with a pending paper of the other role (answer-only <-> question), of
+    another review-ready job or this one (both rows get each other's id in
+    ``matched_ingest_paper_id``), optionally saving this paper's ``metadata`` first. Nothing is
+    attached yet; confirming the question paper settles the pair. The response is what this paper
+    has now."""
     job = _get_own_job(db, job_id, current_user)
     if job.status != "review_ready":
         raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
     db.refresh(job, with_for_update=True)
     try:
-        link_papers(db, job, paper_key, payload.ingest_paper_id)
+        metadata = payload.metadata.model_dump() if payload.metadata is not None else None
+        link_papers(db, job, paper_key, payload.ingest_paper_id, metadata)
     except MatchError as e:
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)
     db.commit()
-    return {"matches": paper_links(db, job).get(paper_key)}
+    return _match_state(db, job, paper_key)
 
 
 def _match_state(db: Session, job, paper_key: str) -> dict:
