@@ -450,6 +450,9 @@ page.
 
 ### 4.7 Manual matching UI — DONE (#82)
 
+Superseded by [qa-matching-ux.md](./qa-matching-ux.md), which replaces this panel with the "Match
+this paper" popup.
+
 As built: see [ingestion.md](../features/qa-pairing.md#match-panel-manual). The panel shows for answer-only papers only; a pending question paper is linked (`matched_ingest_paper_id` on both rows), not attached, and settling the pair on confirm is left to 4.5.
 
 - On `ReviewPage.jsx`, an answer-only paper (or any unmatched one) gets a **"Match to paper…"** panel:

@@ -1,7 +1,7 @@
 # Fixing and forcing question/answer matches (plan)
 
-**Status: under review.** The "Match this paper" popup (below) is agreed in outline; a few small
-points are still [open](#still-open). Nothing here is built yet. What exists today is in
+**Status: agreed.** The "Match this paper" popup and the answer mapping table (below) are agreed.
+Nothing here is built yet. What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found
@@ -31,7 +31,8 @@ booklet** is a candidate partner for it.
    metadata changes, not just the one wrong pair. A wrong `proposed` match to a confirmed paper
    cannot be dismissed.
 4. Numbering is assumed to agree (Section B restarting at 1, answers numbered `3a`/`3b`).
-5. No undo after confirm.
+5. No undo after confirm. **Not addressed:** a confirmed paper is assumed not to change much, so
+   detaching answers after confirm is [not planned](#not-planned).
 
 ## Agreed: the "Match this paper" popup
 
@@ -43,13 +44,16 @@ booklet** is a candidate partner for it.
   the job opened.
 
 A paper **needs a partner** when it is pending and either an answer-only paper, or a question paper
-whose own booklet had no answers. Its Pairing block shows one of:
+whose own booklet had no answers at all (see [Answers are all or none](#answers-are-all-or-none)).
+Its Pairing block shows one of:
 
 | State | Shown | Actions |
 |---|---|---|
 | No partner (no match found, or several) | "No match found" / "N possible matches" | **Match this paper…** |
-| Linked to a pending paper (auto or by an admin) | Partner's filename, key and details, and "matched automatically" or "matched by an admin" | **Change match…**, **Unmatch** |
-| Answer-only paper with a proposed bank paper | "Answers match <paper>" | **Attach**, **Change match…**, **Not this one** |
+| Linked to a pending paper (auto or by an admin) | Partner's filename, key and details, and "matched automatically" or "matched by an admin" | **Check answers…**, **Change match…**, **Unmatch** |
+| Answer-only paper with a proposed bank paper | "Answers match <paper>" | **Attach…**, **Change match…**, **Not this one** |
+
+**Check answers…** and **Attach…** open the [answer mapping table](#the-answer-mapping-table).
 
 **Unmatch** and **Not this one** remember the rejected pair, so automatic matching never proposes
 that pair again but stays free to find another (this replaces the blanket `unlinked` state).
@@ -78,9 +82,11 @@ from the no-match paper.
 - **Sources:**
   - pending papers in other jobs that are waiting for review;
   - pending papers in the **same** job, which today are excluded;
-  - for an answer-only paper only, papers already in the bank.
+  - for an answer-only paper only, papers already in the bank **that have no answers**.
 
-  A question paper never matches a bank paper, because that pair would be a duplicate.
+  A question paper never matches a bank paper, because that pair would be a duplicate. A bank paper
+  that already has answers is listed greyed out, marked "Already has answers", with no action, so
+  the admin can see why an expected match cannot be used.
 - **Exact matches** are listed first.
 - **When there is no exact match, "Best matches" are listed instead:** the top 10, ranked by how
   many of the filled fields agree **exactly**.
@@ -92,14 +98,55 @@ from the no-match paper.
   - its details in words;
   - a thumbnail of its first question beside the no-match paper's first answer (or the other way
     round);
-  - whether it is already paired with something else.
+  - whether it is already paired with something else;
+  - for a bank paper with answers on only some questions, a warning (see below).
 - **Action:** **Pair**, which links a pending paper, or **Attach**, which attaches to a bank paper.
-  Attach asks append/replace only when a question already has answer pages, as today.
+  Either one moves on to step 3, the mapping table, before anything is saved. Pairing with a pending booklet that is already paired elsewhere is allowed, with the warning
+  "This will unpair it from <file>", as the Link route does today. The old pair is unlinked without
+  recording a rejection, so automatic matching may still propose it later.
+  Attach asks append/replace only for a partly answered bank paper — the one case where a question
+  can already have answer pages.
 
-**3. After pairing.** It works as today: a linked pair settles when the question paper is
-confirmed, and an attach settles the answer paper at once. The question ↔ answer mapping table
-(point B under [Still to review](#still-to-review)) can later be placed between choosing a booklet
-and pairing it.
+### Answers are all or none
+
+A paper has answers on **every** question or on **none**. Anything in between breaks the rule and
+raises a **warning**, never a hard stop: the admin can always go ahead.
+
+- **"Has answers"** means at least one answer page: `question_image.page_type = 'answer'` on a
+  bank paper, an answer box on a pending one.
+- **Pairing or attaching** checks the pair in the mapping table before the admin commits. If some
+  questions would get no answers, or some answers have no question, the table says so ("Q11, Q12
+  would get no answers"; "Answer 13 has no question").
+- **A partly answered bank paper** (from before this rule, or from a manual import) is a normal
+  candidate, with "Only 8 of 12 questions have answers". Attaching to it asks append/replace.
+- **A question paper whose own booklet answered only some questions** counts as having answers: it
+  gets no Match button. The review page and Confirm warn "Q5–Q7 have no answers"; the admin fixes
+  it with the answer-box editor or confirms anyway. Adding the missing answers from a second
+  booklet is not supported.
+- **Confirm** of a pending paper, or a linked pair, shows the same warning when the confirmed
+  paper(s) would end up partly answered.
+
+**3. Mapping table, then save.** The popup shows the
+[answer mapping table](#the-answer-mapping-table) for the chosen booklet; its **Pair** / **Attach**
+button saves the pair and the mapping together. After that it works as today: a linked pair settles
+when the question paper is confirmed, and an attach settles the answer paper at once.
+
+### The answer mapping table
+
+Shown between choosing a booklet and saving, and again from **Check answers…** on a linked pair. It
+covers answers coming from **another** booklet; answers inside the same booklet are still fixed
+with the answer-box editor.
+
+- **Each question is shown beside the answers that will go onto it,** pre-filled by number, with
+  thumbnails of both.
+- **The admin can change any row,** or shift all answers by ±N (for a Section B that restarts
+  at 1).
+- **Warnings** for questions left without answers, and answers left without a question, update as
+  rows change (see [Answers are all or none](#answers-are-all-or-none)).
+- **What the admin confirms is what gets attached.** For a linked pair the mapping is stored and
+  used when the question paper is confirmed; a pair linked automatically uses the by-number mapping
+  until someone edits it.
+- **Changing the match** discards the stored mapping.
 
 ### New schools are created on confirm
 
@@ -130,6 +177,8 @@ and pairing it.
    processed before this change have none, so the popup shows nothing extra for them.
 2. **Migration:**
    - `ingest_paper.new_school_name` (nullable string);
+   - `ingest_paper.answer_map` (nullable JSON, on the answer paper's row: answer label → question
+     label; NULL means by number);
    - table `ingest_match_rejection (ingest_paper_id, rejected_ingest_paper_id | rejected_paper_id)`;
    - drop the use of `match_status = unlinked`.
 3. **`PUT .../papers/{key}/metadata`** accepts `new_school_name`. A name equal to an existing school
@@ -142,19 +191,29 @@ and pairing it.
 5. **`GET .../jobs/{id}/papers/{key}/candidates`** with the field values as query parameters
    returns `{exact, best}`.
    - Each candidate carries its kind (`pending`/`bank`), ids, job, filename, key, details, the
-     fields that agree and those that differ, its current partner, and a preview.
+     fields that agree and those that differ, its current partner, a preview, its question numbers
+     and answer numbers, and its answer coverage (`none` / `partial` / `all`).
+   - Bank papers with coverage `all` are returned flagged, not dropped, so the popup can grey them
+     out.
    - This replaces `GET /papers/pending` and the Match panel's browser-side paper-number filter.
 6. **Match route:**
    - callable from either role;
    - same job allowed;
    - optional `metadata` saved in the same transaction (the tick box);
-   - `DELETE` records a rejection.
+   - optional `mapping` saved as `answer_map`; a new match clears any old one;
+   - `DELETE` records a rejection;
+   - refuses (409) an attach to a bank paper with coverage `all`.
 7. **"Not this one" for a proposed bank paper:** records a rejection and re-runs matching.
+   **Attach** takes an optional `mapping` and uses it instead of matching by number.
+   **`PUT .../papers/{key}/answer-map`** saves an edited mapping on an existing link.
 8. **Linked confirm:**
+   - places answers by the stored `answer_map`, falling back to question number;
    - handles a pair from the same job (one lock, one `source.pdf`);
    - creates the new school and back-fills the id to other pending papers, as above.
-9. **Job list summary:** gains `has_answers` and `new_school_name`, so queue cards know which
-   papers need a partner and can name a new school.
+9. **Job list summary:** gains answer coverage (`none` / `partial` / `all`) and `new_school_name`,
+   so queue cards know which papers need a partner, can flag a partly answered one, and can name a
+   new school.
+10. **Automatic matching** never proposes a bank paper with coverage `all`.
 
 **Frontend**
 
@@ -163,40 +222,25 @@ and pairing it.
 2. **`MatchDialog`:**
    - fields and the tick box;
    - found booklets with exact and best lists, differing fields highlighted, and previews;
-   - Pair or Attach.
-3. **Pairing block on the review page,** for both roles. It replaces `MatchPanel.jsx` and the
+   - bank papers with answers greyed out, and the partly-answered warning;
+   - the mapping table step, then Pair or Attach.
+3. **`AnswerMappingTable`:** rows pre-filled by number, per-row change, shift ±N, and the
+   unanswered/unplaced warnings. Used in the popup and from **Check answers…**.
+4. **Pairing block on the review page,** for both roles. It replaces `MatchPanel.jsx` and the
    question-side banner.
-4. **Queue cards:** a **Match** button on each paper line that needs a partner. A new school is
+5. **Queue cards:** a **Match** button on each paper line that needs a partner. A new school is
    named as "School: Raffles Instn (new)".
-5. **Confirm:** disabled when a paper still has an unresolved school, with the reason shown.
+6. **Confirm:** disabled when a paper still has an unresolved school, with the reason shown; warns,
+   without blocking, when a paper would be confirmed partly answered.
 
-**Order:** backend 1–4 with the combobox, then 5–8 with the popup and Pairing block, then the queue
-button. Each step updates [qa-pairing.md](../features/qa-pairing.md) and
+**Order:** backend 1–4 with the combobox, then 5–8 with the popup, mapping table and Pairing block,
+then the queue button. Each step updates [qa-pairing.md](../features/qa-pairing.md) and
 [ai-labelling.md](../features/ai-labelling.md) and adds tests.
 
-## Still open
+## Not planned
 
-1. **Pairing with a booklet that is already paired elsewhere.** The suggestion is to allow it with
-   a warning ("This will unpair it from <file>"), as the Link route does today.
-2. **A question paper whose own booklet had some answers.** The suggestion is that it gets no Match
-   button, since its answers are already there. Adding answers from a second booklet would wait for
-   point B.
+- **Detaching answers after confirm** (the earlier point E). A confirmed paper is assumed not to
+  change much; a wrong attach is rare enough to fix by hand in Manage Papers.
 
-## Still to review
-
-The rest of the earlier proposal, not yet agreed:
-
-- **B. A question ↔ answer table before anything is attached.**
-  - Each question is shown beside the answers that will go onto it, pre-filled by number.
-  - The admin can change any row, or shift all answers by ±N for a Section B that restarts at 1.
-  - What the admin confirms is what gets attached.
-  - *Backend:* an optional `mapping` on attach/link, stored as `answer_map` on the answer paper's
-    row.
-- **E. Detach after confirm.**
-  - In Manage Papers, answer pages that came from an import are grouped as "Answers from <file>",
-    with **Detach**.
-  - Re-attaching means uploading the answer PDF again, because a settled job's files are deleted.
-
-The earlier points **C** (pair from either side or from the queue) and **D** (rank instead of
-filter) are folded into the popup above. Point **A** (per-pair rejection) is folded into Unmatch and
-Not this one.
+The earlier points **A** (per-pair rejection), **B** (mapping table), **C** (pair from either side or
+from the queue) and **D** (rank instead of filter) are all folded into the sections above.
