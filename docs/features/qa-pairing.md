@@ -42,12 +42,41 @@ it is in [auto-import.md](./auto-import.md).
 - **`paper_number` comparison:** trimmed and case-folded only (`"2A"` = `" 2a "`, but ≠ `"02A"`).
   There is no normalisation; see [Not built](#not-built).
 
+## Answers are all or none
+
+A paper has answers on **every** question or on **none**. Anything in between raises a
+**warning**, never a hard stop: the admin can always go ahead. The one refusal is attaching to a
+bank paper that already has answers everywhere.
+
+- **Answer coverage** (`app/services/answer_coverage.py`) is `none`, `partial` or `all`. A paper
+  with no questions is `none`.
+  - **Pending paper:** a question "has an answer" when it has an answer box (`answer_rects`) in
+    the job's current proposal (the admin's edit, else the worker's). `job_coverage(job)` gives
+    `{key: {answer_coverage, unanswered}}`; an answer-only paper covers its own entries, so it is
+    normally `all`.
+  - **Bank paper:** a question has an answer when it has a `question_page` with
+    `page_type = 'answer'`. `bank_coverage(db, paper_ids)` computes it in one query.
+- **Job list summary:** each paper carries `answer_coverage` and `unanswered` (its question numbers
+  without an answer box), from its own booklet only. The review queue flags a pending question
+  paper whose coverage is `partial` ("Q5–Q7 have no answers").
+- **Automatic matching** never counts a bank paper with coverage `all` as a candidate, exact or
+  partial. A partly answered bank paper is still a normal candidate.
+- **Attach** to a bank paper with coverage `all` is refused (`409`).
+- **A question paper whose own booklet answered only some questions** counts as having answers. Its
+  review page shows "Q5–Q7 have no answers. Add them with the answer-box editor, or confirm anyway."
+  above **Confirm paper**, which stays enabled. The warning follows the admin's box edits.
+- **A linked pair** is judged as it will be confirmed: the question paper's own answer boxes plus the
+  linked answer paper's answer numbers (`matches[key].answer_numbers`, matched by number). It warns
+  when that combination is partial. A question paper with no answers at all is not warned about; it
+  needs a partner instead.
+
 ## Attaching answers to an existing paper
 
 `POST /api/import/jobs/{id}/attach` `{key, paper_id, mode?}`.
 
 - **Refused when:** the paper is not `answer_only` → `422`; the target paper is unknown → `404`;
-  the job is not `review_ready` or the paper is already decided → `409`.
+  the job is not `review_ready`, the paper is already decided, or every question of the target
+  already has answers ([coverage](#answers-are-all-or-none) `all`) → `409`.
 - **Matching:** by question number. `1`, `"1"` and `" 01 "` all mean 1. Duplicate numbers have
   their rectangles merged.
   - Numbers that are not plain integers (`"3a"`), or have no question in the target, are not
@@ -116,6 +145,8 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
 - **`manual`** shows "Several or partial matches — pick one below" in the Match panel.
 - **Auto links** are recomputed from scratch on every re-evaluation, so a metadata change that breaks
   the key drops them.
+- **Fully answered bank papers are skipped** by rules 2, 3 and 6: a confirmed paper whose
+  [coverage](#answers-are-all-or-none) is `all` is never a candidate.
 - **Rejected pairs are skipped** by every rule: a rejected candidate is not counted, proposed,
   linked or used as a partial hint ([Rejecting a match](#rejecting-a-match)).
 - **Settling** an answer paper (attach or skip) clears its proposal.
@@ -132,8 +163,9 @@ For each **pending answer-only** paper. The result is stored on its row (`match_
   target. This runs in a savepoint and never fails the confirm.
 
 **Review response:**
-- `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key}}`, covering manual and auto
-  links.
+- `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key, answer_numbers}}`, covering
+  manual and auto links. `answer_numbers` are the partner's question numbers that have an answer box
+  (for a question paper, the answers its confirm brings in).
 - `proposals`: `{key: {status, note, paper}}`.
 
 ## Rejecting a match

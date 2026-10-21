@@ -8,6 +8,7 @@ import {
   addRect, assignAnswer, deleteRect, getRect, mergeWithPrevious, moveRect, renumber, renumberError, resizeRect, splitBetween,
   splitThrough, toEditPayload,
 } from './proposalReducer'
+import { partlyAnsweredWarning } from './answerCoverage'
 import { startManualImport } from './manualHandoff'
 import MatchPanel from './MatchPanel'
 import MetadataSidebar from './MetadataSidebar'
@@ -359,6 +360,9 @@ export default function ReviewPage() {
     queueMetadataSave(key, m)
   }
   const answerOnly = isAnswerOnly(paper)
+  // Answers are all or none: a question paper that would be confirmed partly answered (its own
+  // answer boxes plus a linked answer paper's, by number) is warned about, never blocked.
+  const unansweredText = paper && !answerOnly ? partlyAnsweredWarning(paper, matches[paper.key]?.answer_numbers ?? []) : null
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
 
   function choosePaper(i) {
@@ -802,6 +806,7 @@ export default function ReviewPage() {
                   canConfirm={paper.questions.length > 0}
                   schoolCombobox
                   extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
+                  warning={unansweredText && `${unansweredText}. Add them with the answer-box editor, or confirm anyway.`}
                 />
               )}
             </div>

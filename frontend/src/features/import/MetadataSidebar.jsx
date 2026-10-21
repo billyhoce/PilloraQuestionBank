@@ -22,9 +22,10 @@ function SelectField({ label, value, onChange, options }) {
 
 // `schoolCombobox` swaps the school dropdown for the type-to-search SchoolCombobox (the review page);
 // `extractedSchool` is the school name read from the cover, shown there while it matches no school.
+// `warning` is shown above the confirm button without disabling it.
 export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error,
   confirmLabel = 'Confirm & Import →', cancelLabel = 'Cancel Import', canConfirm = true,
-  schoolCombobox = false, extractedSchool = null }) {
+  schoolCombobox = false, extractedSchool = null, warning = null }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -99,6 +100,7 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
       {unresolvedSchool && (
         <p className="text-xs text-amber-800">Pick a school: “{unresolvedSchool}” is not in the list.</p>
       )}
+      {warning && <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">{warning}</p>}
       <button
         type="button"
         onClick={onNext}

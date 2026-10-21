@@ -3,6 +3,7 @@ import { Link, useOutletContext } from 'react-router-dom'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
 import AgeBadge from './AgeBadge'
+import { unansweredWarning } from './answerCoverage'
 import { useReferenceData } from './importMetadata'
 import useReviewQueue from './useReviewQueue'
 import { describeMetadata, matchState } from './reviewQueueText'
@@ -16,6 +17,8 @@ function PaperLine({ paper, refs }) {
   const meta = describeMetadata(paper, refs)
   const match = matchState(paper)
   const decided = paper.status !== 'pending'
+  // Answers are all or none: a question paper whose own booklet answered only some questions.
+  const partly = paper.role !== 'answer_only' && paper.answer_coverage === 'partial' ? unansweredWarning(paper.unanswered) : null
   return (
     <li className={`text-xs ${decided ? 'text-gray-400' : 'text-gray-700'}`}>
       <span className={`inline-block rounded px-1.5 py-0.5 mr-1.5 font-medium ${paper.role === 'answer_only' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>
@@ -28,6 +31,7 @@ function PaperLine({ paper, refs }) {
         <>
           {meta.missing.length > 0 && meta.text && <span className="ml-1.5 text-amber-700">(missing {meta.missing.join(', ')})</span>}
           {match && <span className={`ml-1.5 ${TONE[match.tone]}`}>· {match.text}</span>}
+          {partly && <span className="ml-1.5 text-amber-700">· {partly}</span>}
         </>
       )}
     </li>

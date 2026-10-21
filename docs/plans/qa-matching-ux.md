@@ -4,7 +4,9 @@
 Built so far: keeping the extracted names and the review-sidebar school combobox (#86, backend
 step 1 and part of frontend steps 1 and 6); per-pair rejection with Unmatch and "Not this one" (#88,
 the rejection table of step 2, "skip rejected pairs" of step 4, `DELETE` of step 6 and the
-rejection of step 7, surfaced in today's Match panel and question-side banner). What exists today is in
+rejection of step 7, surfaced in today's Match panel and question-side banner); answer coverage and the all-or-none
+warnings (#89: [Answers are all or none](#answers-are-all-or-none), coverage in the job list summary
+of step 9, step 10, the `409` of step 6 and the warning of frontend step 6). What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found

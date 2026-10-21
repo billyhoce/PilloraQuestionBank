@@ -81,6 +81,16 @@ describe('ReviewQueuePage', () => {
     expect(within(card).getByText('New')).toBeInTheDocument()
   })
 
+  it('flags a pending question paper that is only partly answered', async () => {
+    const partly = paper('q3', 'question', { answer_coverage: 'partial', unanswered: [5, 6, 7] })
+    const bare = paper('q4', 'question', { answer_coverage: 'none', unanswered: [1, 2] })
+    api.import.listJobs.mockResolvedValue(listing([{ ...OLD, papers: [partly, bare] }]))
+    renderPage()
+    const [card] = await screen.findAllByTestId('review-card')
+    expect(within(card).getByText(/Q5–Q7 have no answers/)).toBeInTheDocument()
+    expect(within(card).getAllByText(/no answers/)).toHaveLength(1)
+  })
+
   it('says when there is nothing to review', async () => {
     api.import.listJobs.mockResolvedValue(listing([]))
     renderPage()
