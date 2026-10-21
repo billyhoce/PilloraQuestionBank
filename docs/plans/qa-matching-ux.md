@@ -7,7 +7,9 @@ the rejection table of step 2, "skip rejected pairs" of step 4, `DELETE` of step
 rejection of step 7, surfaced in today's Match panel and question-side banner); answer coverage and the all-or-none
 warnings (#89: [Answers are all or none](#answers-are-all-or-none), coverage in the job list summary
 of step 9, step 10, the `409` of step 6 and the warning of frontend step 6); wider automatic
-matching (#90: the rest of backend step 4, and the same-job pair of step 8). What exists today is in
+matching (#90: the rest of backend step 4, and the same-job pair of step 8); the popup and the
+Pairing block without the mapping table (#91: backend step 5, step 6 bar `mapping`, frontend steps
+2 and 4 bar the mapping step and **Check answers…**). What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found

@@ -287,7 +287,7 @@ IngestPaper: {                -- one row per paper an ingest job proposed; the q
   metadata_source ("cover" | "filename" | "admin", nullable),  -- NULL: nothing known
   status ("pending" | "confirmed" | "skipped" | "attached"),   -- default pending
   paper_id (nullable FK -> Paper, ON DELETE SET NULL),         -- the paper confirming it created
-  matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- answer-only <-> pending question paper link (Match panel or auto link); both rows point at each other
+  matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- answer-only <-> pending question paper link (paired by an admin or auto link); both rows point at each other
   match_status ("proposed" | "manual" | "auto", nullable),  -- automatic matching of an answer-only paper to the bank (proposed/manual) or to a pending question paper (auto link); NULL: nothing to do
   proposed_paper_id (nullable FK -> Paper, ON DELETE SET NULL),  -- the one confirmed paper when match_status = proposed
   match_note (string(200), nullable),                          -- why manual, e.g. "2 papers have this key", "partial: year differ"

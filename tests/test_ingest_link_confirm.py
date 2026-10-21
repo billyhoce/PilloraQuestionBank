@@ -164,6 +164,8 @@ def test_review_of_question_paper_shows_the_link(admin_client, db_session, admin
     db_session.commit()
     link = admin_client.get(f"/api/import/jobs/{qj.id}/review").json()["matches"]["q1"]
     assert (link["filename"], link["paper_key"], link["job_id"]) == ("answers.pdf", "a1", str(aj.id))
+    assert link["matched_by"] == "auto"  # the Pairing block says "matched automatically"
+    assert link["details"] == {**meta, "new_school_name": None}
 
 
 def test_confirm_brings_in_the_other_jobs_answers_and_settles_both(

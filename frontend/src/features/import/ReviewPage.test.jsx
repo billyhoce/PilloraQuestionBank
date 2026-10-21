@@ -9,7 +9,7 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
-      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), pendingPapers: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
@@ -83,7 +83,7 @@ beforeEach(() => {
   api.schoolLevels.list.mockResolvedValue([{ id: 9, name: 'Secondary' }])
   api.topics.list.mockResolvedValue([])
   api.papers.list.mockResolvedValue({ total: 0, items: [] })
-  api.import.pendingPapers.mockResolvedValue([])
+  api.import.paperCandidates.mockResolvedValue({ exact: [], best: [] })
 })
 
 describe('ReviewPage', () => {
@@ -323,15 +323,16 @@ describe('ReviewPage', () => {
       expect(await screen.findByRole('button', { name: /Confirm & Save Topics/ })).toBeInTheDocument()
     })
 
-    it('shows the linked answer job as a banner and what a confirm attached', async () => {
+    it('shows the linked answer job in the Pairing block and what a confirm attached', async () => {
       api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { filename: 'answers.pdf', paper_key: 'a1', job_id: 'j2' } } })
       api.import.confirmJobPaper.mockResolvedValue({
         paper_id: 7, job_status: 'review_ready', questions: [],
         answers_from: { job_id: 'j2', filename: 'answers.pdf', paper_key: 'a1', attached: [1, 2] }, unmatched: [9],
       })
       renderPage()
-      expect(await screen.findByText(/Answers available from answers\.pdf \(a1\) — they will be attached when you confirm/)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Unmatch' })).toBeInTheDocument()
+      const block = await screen.findByRole('region', { name: 'Pairing' })
+      expect(block).toHaveTextContent(/Paired with answers\.pdf \(a1\)\. Its answers are attached when you confirm/)
+      expect(within(block).getByRole('button', { name: 'Unmatch' })).toBeInTheDocument()
       const button = await screen.findByRole('button', { name: /Confirm paper/ })
       await waitFor(() => expect(button).toBeEnabled())
       await userEvent.click(button)
@@ -346,7 +347,7 @@ describe('ReviewPage', () => {
         answers_from: { job_id: 'j1', filename: 'x.pdf', paper_key: 'a1', attached: [1] }, unmatched: [],
       })
       renderPage()
-      expect(await screen.findByText(/Answers available from this file \(a1\) — they will be attached when you confirm/)).toBeInTheDocument()
+      expect(await screen.findByText(/Paired with this file \(a1\)/)).toBeInTheDocument()
       const button = await screen.findByRole('button', { name: /Confirm paper/ })
       await waitFor(() => expect(button).toBeEnabled())
       await userEvent.click(button)
@@ -359,7 +360,7 @@ describe('ReviewPage', () => {
       renderPage()
       await userEvent.click(await screen.findByRole('button', { name: 'Unmatch' }))
       expect(api.import.unmatchJobPaper).toHaveBeenCalledWith('j1', 'q1')
-      expect(await screen.findByText(/Answers available from other\.pdf \(a1\)/)).toBeInTheDocument()
+      expect(await screen.findByText(/Paired with other\.pdf \(a1\)/)).toBeInTheDocument()
       expect(screen.queryByText(/answers\.pdf/)).not.toBeInTheDocument()
     })
 
@@ -488,7 +489,7 @@ describe('ReviewPage', () => {
       const linked = { filename: 'answers.pdf', paper_key: 'a1', job_id: 'j2' }
       api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { ...linked, answer_numbers: [2] } } })
       const first = renderPage()
-      await screen.findByText(/Answers available from answers\.pdf/)
+      await screen.findByText(/Paired with answers\.pdf/)
       expect(screen.queryByText(/has no answers/)).not.toBeInTheDocument()
       first.unmount()
       const none = q => ({ ...q, answer_rects: [] })
@@ -498,6 +499,47 @@ describe('ReviewPage', () => {
       })
       renderPage()
       expect(await screen.findByText(/Q2 has no answers/)).toBeInTheDocument()
+    })
+
+    it('offers to match a question paper with no answers, and shows the details a pair saved', async () => {
+      const none = q => ({ ...q, answer_rects: [] })
+      const bare = { ...TWO.proposal.papers[0], questions: TWO.proposal.papers[0].questions.map(none) }
+      api.import.review.mockResolvedValue({ ...TWO, filename_metadata: {}, paper_metadata: { q1: FILLED }, proposal: { ...TWO.proposal, papers: [bare] } })
+      api.import.paperCandidates.mockResolvedValue({
+        exact: [{
+          kind: 'pending', ingest_paper_id: 41, job_id: 'j1', filename: 'scan.pdf', paper_key: 'a9', same_job: true,
+          role: 'answer_only', details: FILLED, agree: [], differ: [], partner: null, preview: null,
+          question_numbers: [], answer_numbers: [1, 2], answer_coverage: 'all',
+        }],
+        best: [],
+      })
+      api.import.matchJobPaper.mockResolvedValue({
+        matches: { ingest_paper_id: 41, job_id: 'j1', filename: 'scan.pdf', paper_key: 'a9', matched_by: 'admin', answer_numbers: [1, 2] },
+        proposal: null,
+      })
+      renderPage()
+      const block = await screen.findByRole('region', { name: 'Pairing' })
+      expect(await within(block).findByText('1 possible match')).toBeInTheDocument()
+      await userEvent.click(within(block).getByRole('button', { name: 'Match this paper…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Match this paper' })
+      expect(await within(dialog).findByText('Same file (a9)')).toBeInTheDocument()
+      const paperNo = within(dialog).getByLabelText('Paper no.')
+      await userEvent.clear(paperNo)
+      await userEvent.type(paperNo, '2')
+      await userEvent.click(await within(dialog).findByRole('button', { name: 'Pair' }))
+      expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'q1', 41, expect.objectContaining({ paper_number: '2' }))
+      expect(await screen.findByText(/Paired with this file \(a9\)/)).toBeInTheDocument()
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.getByPlaceholderText('1')).toHaveValue('2')  // the sidebar's paper no.
+      await new Promise(r => setTimeout(r, 1000))
+      expect(api.import.savePaperMetadata).not.toHaveBeenCalled()  // the match route saved it
+    })
+
+    it('shows no Pairing block on a partly answered question paper', async () => {
+      api.import.review.mockResolvedValue(TWO)
+      renderPage()
+      await screen.findByRole('button', { name: /Confirm paper/ })
+      expect(screen.queryByRole('region', { name: 'Pairing' })).not.toBeInTheDocument()
     })
 
     it('does not warn about a question paper with no answers at all', async () => {
@@ -537,7 +579,7 @@ describe('ReviewPage', () => {
       },
     }
 
-    it('lists answers by question number and offers "Attach to paper..." (needs a paper id) instead of Confirm', async () => {
+    it('lists answers by question number and offers matching and Skip instead of Confirm', async () => {
       api.import.review.mockResolvedValue(ANSWERS)
       renderPage()
       await screen.findByAltText('Page 2')
@@ -545,43 +587,21 @@ describe('ReviewPage', () => {
       expect(within(list).getByText('Answer 1')).toBeInTheDocument()
       expect(within(list).getByText('Answer 2')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /Confirm paper/ })).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Attach to paper…' })).toBeDisabled()
-      await userEvent.type(screen.getByLabelText('Paper id'), '7')
-      expect(screen.getByRole('button', { name: 'Attach to paper…' })).toBeEnabled()
+      expect(await screen.findByText('No match found')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Match this paper…' })).toBeEnabled()
       expect(screen.getByRole('button', { name: 'Skip this paper' })).toBeEnabled()
     })
 
-    it('attaches without a prompt when no target question has answers, and shows unmatched numbers', async () => {
-      api.import.review.mockResolvedValue(ANSWERS)
-      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'question' }] }] })
-      api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [2], modes: { 1: 'replace' }, job_status: 'confirmed' })
-      renderPage()
-      await screen.findByAltText('Page 2')
-      await userEvent.type(screen.getByLabelText('Paper id'), '7')
-      await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
-      expect(await screen.findByText(/Not attached.*: 2\./)).toBeInTheDocument()
-      expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 })
-    })
-
-    it('shows a proposed paper and attaches to it with one click', async () => {
-      const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1' }
+    it('attaches to a proposed paper and moves on once the admin has read the result', async () => {
+      const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1', answer_coverage: 'none' }
       api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'proposed', note: null, paper } } })
-      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'question' }] }] })
-      api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [], modes: {}, job_status: 'confirmed' })
+      api.import.attachJobPaper.mockResolvedValue({ attached: [1, 2], unmatched: [], modes: {}, job_status: 'confirmed' })
       renderPage()
       expect(await screen.findByText(/Answers match Raffles 2024 Sec 3 Math Paper 1/)).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Attach' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Attach…' }))
       await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 9 }))
-    })
-
-    it('asks append or replace on a proposed paper whose questions already have answers', async () => {
-      const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1' }
-      api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'proposed', note: null, paper } } })
-      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'answer' }] }] })
-      renderPage()
-      await userEvent.click(await screen.findByRole('button', { name: 'Attach' }))
-      expect(await screen.findByLabelText('Add to the existing answers')).toBeChecked()
-      expect(api.import.attachJobPaper).not.toHaveBeenCalled()
+      await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+      await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/review'))
     })
 
     it('dismisses a wrong proposed paper with "Not this one" and shows what matching finds next', async () => {
@@ -601,110 +621,22 @@ describe('ReviewPage', () => {
     it('can be linked by "Not this one" falling through to a pending question paper', async () => {
       const paper = { id: 9, school: 'Raffles', year: 2024, level: 'Sec 3', subject: 'Math', paper_number: '1' }
       api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'proposed', note: null, paper } } })
-      api.import.rejectProposedPaper.mockResolvedValue({ matches: { filename: 'questions.pdf', paper_key: 'q1' }, proposal: null })
+      api.import.rejectProposedPaper.mockResolvedValue({ matches: { filename: 'questions.pdf', paper_key: 'q1', job_id: 'j2' }, proposal: null })
       renderPage()
       await userEvent.click(await screen.findByRole('button', { name: 'Not this one' }))
-      expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
+      expect(await screen.findByText(/Paired with questions\.pdf \(q1\)/)).toBeInTheDocument()
       expect(screen.queryByText(/Answers match/)).not.toBeInTheDocument()
     })
 
-    it('shows a link to a question paper of the same booklet as "in this file"', async () => {
-      api.import.review.mockResolvedValue({ ...ANSWERS, matches: { a1: { filename: 'x.pdf', paper_key: 'q1', job_id: 'j1' } } })
+    it('shows a link to a question paper of the same booklet as "this file", and unmatches it', async () => {
+      api.import.review.mockResolvedValue({ ...ANSWERS, matches: { a1: { filename: 'x.pdf', paper_key: 'q1', job_id: 'j1', matched_by: 'auto' } } })
+      api.import.unmatchJobPaper.mockResolvedValue({ matches: null, proposal: null })
       renderPage()
-      expect(await screen.findByText(/Linked to q1 in this file\./)).toBeInTheDocument()
-    })
-
-    it('hints at manual matching when several or only partial papers match', async () => {
-      api.import.review.mockResolvedValue({ ...ANSWERS, proposals: { a1: { status: 'manual', note: 'partial: year differ', paper: null } } })
-      renderPage()
-      expect(await screen.findByText(/Partial: year differ\. Several or partial matches — pick one below/)).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument()
-    })
-
-    it('asks append or replace (default append) when a target question already has answers', async () => {
-      api.import.review.mockResolvedValue(ANSWERS)
-      api.papers.get.mockResolvedValue({ questions: [{ question_number: 1, pages: [{ page_type: 'answer' }] }] })
-      api.import.attachJobPaper.mockResolvedValue({ attached: [1, 2], unmatched: [], modes: {}, job_status: 'confirmed' })
-      renderPage()
-      await screen.findByAltText('Page 2')
-      await userEvent.type(screen.getByLabelText('Paper id'), '7')
-      await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
-      expect(api.import.attachJobPaper).not.toHaveBeenCalled()
-      expect(await screen.findByLabelText('Add to the existing answers')).toBeChecked()
-      await userEvent.click(screen.getByLabelText('Replace the existing answers'))
-      await userEvent.click(screen.getByRole('button', { name: 'Attach answers' }))
-      await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mode: 'replace' }))
-    })
-
-    describe('Match to paper', () => {
-      const META = { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' }
-      const CONFIRMED = { id: 7, year: 2024, paper_number: '1', school_name: 'RI', level_name: 'Sec 3', subject_name: 'Math' }
-      const PENDING = {
-        ingest_paper_id: 31, job_id: 'j2', filename: 'questions.pdf', paper_key: 'q1', metadata: META,
-        preview: {
-          url: 'https://s3/other-p3.webp', number: 1,
-          page: { page: 3, width_pt: 100, height_pt: 200, width_px: 200, height_px: 400 },
-          rect: { page: 3, x0: 10, y0: 20, x1: 60, y1: 120 },
-        },
-      }
-      const withMeta = () => api.import.review.mockResolvedValue({ ...ANSWERS, paper_metadata: { a1: META } })
-
-      it('lists confirmed and pending candidates for the pre-filled metadata filters', async () => {
-        withMeta()
-        api.papers.list.mockResolvedValue({ total: 1, items: [CONFIRMED, { ...CONFIRMED, id: 8, paper_number: '2' }] })
-        api.import.pendingPapers.mockResolvedValue([PENDING])
-        renderPage()
-        const list = await screen.findByRole('region', { name: 'Candidates' })
-        expect(await within(list).findByText('Paper 7')).toBeInTheDocument()
-        expect(within(list).queryByText('Paper 8')).not.toBeInTheDocument() // other paper number
-        expect(within(list).getByText('Pending: questions.pdf')).toBeInTheDocument()
-        expect(api.papers.list).toHaveBeenLastCalledWith(expect.objectContaining({
-          subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: '2024',
-        }))
-        expect(api.import.pendingPapers).toHaveBeenLastCalledWith(expect.objectContaining({ subject_id: 1, year: '2024', paper_number: '1', exclude_job_id: 'j1' }))
-      })
-
-      it('previews the candidate first question beside this paper first answer, and attaches', async () => {
-        withMeta()
-        api.papers.list.mockResolvedValue({ total: 1, items: [CONFIRMED] })
-        api.papers.get.mockResolvedValue({
-          questions: [{ question_number: 1, pages: [{ page_type: 'question', page_order: 1, url: 'https://s3/q1.webp' }] }],
-        })
-        api.import.attachJobPaper.mockResolvedValue({ attached: [1], unmatched: [], modes: {}, job_status: 'review_ready' })
-        renderPage()
-        await userEvent.click(await screen.findByText('Paper 7'))
-        const preview = await screen.findByRole('region', { name: 'Preview' })
-        expect(await within(preview).findByAltText('Candidate first question')).toHaveAttribute('src', 'https://s3/q1.webp')
-        expect(within(preview).getByAltText("This paper's first answer")).toHaveAttribute('src', 'https://s3/p2.webp')
-        expect(screen.getByLabelText('Paper id')).toHaveValue(7)
-        await userEvent.click(screen.getByRole('button', { name: 'Attach to paper…' }))
-        await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 }))
-        expect(await screen.findByText(/Attached answers for question 1 to paper 7/)).toBeInTheDocument()
-      })
-
-      it('previews a pending question paper from its review page image and links instead of attaching', async () => {
-        withMeta()
-        api.import.pendingPapers.mockResolvedValue([PENDING])
-        api.import.matchJobPaper.mockResolvedValue({ matches: { filename: 'questions.pdf', paper_key: 'q1', ingest_paper_id: 31, job_id: 'j2' } })
-        api.import.unmatchJobPaper.mockResolvedValue({ matches: null, proposal: null })
-        renderPage()
-        await userEvent.click(await screen.findByText('Pending: questions.pdf'))
-        const preview = await screen.findByRole('region', { name: 'Preview' })
-        expect(within(preview).getByAltText('Candidate first question')).toHaveAttribute('src', 'https://s3/other-p3.webp')
-        expect(screen.queryByRole('button', { name: 'Attach to paper…' })).not.toBeInTheDocument()
-        await userEvent.click(screen.getByRole('button', { name: 'Link to this paper' }))
-        expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31)
-        expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
-        await userEvent.click(screen.getByRole('button', { name: 'Unmatch' }))
-        expect(api.import.unmatchJobPaper).toHaveBeenCalledWith('j1', 'a1')
-        await waitFor(() => expect(screen.queryByText(/Linked to questions\.pdf/)).not.toBeInTheDocument())
-      })
-
-      it('shows an existing link on load', async () => {
-        api.import.review.mockResolvedValue({ ...ANSWERS, matches: { a1: { filename: 'questions.pdf', paper_key: 'q1' } } })
-        renderPage()
-        expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
-      })
+      expect(await screen.findByText(/Paired with this file \(q1\)/)).toBeInTheDocument()
+      expect(screen.getByText('matched automatically')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Unmatch' }))
+      expect(api.import.unmatchJobPaper).toHaveBeenCalledWith('j1', 'a1')
+      expect(await screen.findByText('No match found')).toBeInTheDocument()
     })
   })
 })

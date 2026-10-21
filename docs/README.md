@@ -20,7 +20,7 @@ question by reading one file instead of three.
 | [features/reference-data.md](./features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
 | [features/ingestion.md](./features/ingestion.md) | Manual import (wizard, PDF→image, confirm/delete), Manage Papers editor, provenance |
 | [features/auto-import.md](./features/auto-import.md) | Auto import: drop PDFs/folders, upload queue, processing board, review queue, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
-| [features/qa-pairing.md](./features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Match panel, automatic matching, linked confirm |
+| [features/qa-pairing.md](./features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Pairing block and "Match this paper" popup, automatic matching, linked confirm |
 | [features/ai-labelling.md](./features/ai-labelling.md) | Claude part-split + topic/marks labelling, paper metadata extraction, parts write path, review UI, costs |
 | [features/browse.md](./features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
 | [features/paper-generation.md](./features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |

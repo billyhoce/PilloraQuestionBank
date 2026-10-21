@@ -50,6 +50,7 @@ def test_link_sets_both_sides_review_shows_it_and_unlink_clears(
     resp = admin_client.post(url, json={"ingest_paper_id": qrow.id})
     assert resp.status_code == 200
     assert resp.json()["matches"]["filename"] == "q.pdf"
+    assert resp.json()["matches"]["matched_by"] == "admin"
     arow = row(db_session, ajob, akey)
     assert arow.matched_ingest_paper_id == row(db_session, qjob, qkey).id
     assert row(db_session, qjob, qkey).matched_ingest_paper_id == arow.id

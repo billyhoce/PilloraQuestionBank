@@ -10,7 +10,7 @@ it is in [auto-import.md](./auto-import.md).
 | `role` | Comes from | Questions | Review page |
 |---|---|---|---|
 | `question` | A question section, with or without its answer section | `question_rects` (+ `answer_rects`) | Metadata sidebar, Confirm / Skip |
-| `answer_only` | An answer section with no question section | Built from the numbered answer rectangles: `question_rects: []`, `answer_rects` filled | "Answer N (k rectangles)" list, Match panel, Skip |
+| `answer_only` | An answer section with no question section | Built from the numbered answer rectangles: `question_rects: []`, `answer_rects` filled | "Answer N (k rectangles)" list, [Pairing block](#the-pairing-block-and-match-this-paper), Skip |
 
 - A proposal without `role` (an old job) is treated as `question`.
 - A question section with no answer section adds a warning, both on the paper and at the top level,
@@ -107,8 +107,9 @@ bank paper that already has answers everywhere.
   - `replace`: the question's existing answer pages are removed.
   - `append`: new answer pages go after the existing ones.
   - Omitted: `replace` if the question has no answer pages, else `append`.
-- **UI:** the UI fetches the target paper. It asks append or replace (default **append**) only when
-  a receiving question already has answer pages; otherwise it sends no `mode`.
+- **UI:** **Attach** in the popup, or **Attach…** on a proposed paper. It asks append or replace
+  (default **append**) only when the bank paper is partly answered (coverage `partial`); otherwise
+  it sends no `mode`.
 - **New answer pages:** cropped like confirm, with provenance, and written with collision-safe
   `page_order`.
 - **One transaction:** the page rows, `review_outcome[key] = attached` (`paper_id` is added to
@@ -119,36 +120,94 @@ bank paper that already has answers everywhere.
 - **Response:** `{attached, unmatched, modes, job_settled, job_status}`. `attached` counts as
   decided for settling the job.
 
-## Match panel (manual)
+## The Pairing block and "Match this paper"
 
-On the review page of an answer-only paper (`MatchPanel.jsx`).
+A paper **needs a partner** when it is pending and either answer-only, or a question paper whose
+own booklet had no answers at all ([coverage](#answers-are-all-or-none) `none`; a partly answered
+one is warned about instead). A paper with no questions can only be skipped.
 
-- **Filters:** subject, stream, level, school, exam type, year and paper number. Pre-filled from
-  the paper's metadata; the search re-runs on every change.
-- **Candidates:**
-  - Confirmed papers, from `GET /api/papers`. That route has no paper-number filter, so the panel
-    filters its first 50 results by paper number in the browser.
-  - Pending question papers of other `review_ready` jobs, from `GET /api/import/papers/pending`:
-    exact match on the given filters, `exclude_job_id`, newest job first. Each comes with a preview
-    of its first question rectangle.
-- **Preview:** the candidate's first question beside this paper's first answer.
-- **Confirmed candidate → Attach** (above). A paper id can also be typed.
-- **Pending candidate → Link:**
-  - `POST .../papers/{key}/match {ingest_paper_id}` sets `matched_ingest_paper_id` on both rows and
-    releases any earlier link of either row.
-  - `422` unless this paper is answer-only and the target is a pending question paper of another
-    review-ready job. `409` unless this job is `review_ready`.
-  - `DELETE` on the same path is **Unmatch** ([below](#rejecting-a-match)).
-- **Link display:**
-  - Answer side: "Linked to <filename> <key>" with Unmatch.
-  - Question side: "Answers available from <filename> (<key>) — they will be attached when you
-    confirm", with Unmatch.
-  - A partner in the same booklet (an [automatic](#automatic-matching) same-job link) is named
-    "this file" instead of its filename ("Linked to q1 in this file"), here and in the confirm
-    result ("Attached answers for questions 1, 2 from this file (a1)").
-  - Linking by hand is still across jobs only; a same-booklet pair comes from automatic matching.
-- Linking two papers by hand releases any earlier link of either one without rejecting it, so
-  automatic matching may still propose that old pair later.
+### The Pairing block
+
+On the review page (`PairingBlock.jsx`), above the metadata sidebar of a question paper and in
+place of it on an answer-only paper, on every paper that needs a partner or has one:
+
+| State | Shown | Actions |
+|---|---|---|
+| No partner | "No match found" / "N possible matches" (exact candidates for the paper's current details) | **Match this paper…** |
+| Linked to a pending paper | "Paired with <filename> (<key>)" ("this file" for the same booklet), the partner's details, and "matched automatically" or "matched by an admin" | **Change match…**, **Unmatch** |
+| Answer-only paper with a proposed bank paper | "Answers match <paper>" | **Attach…**, **Change match…**, **Not this one** |
+
+- **Attach…** attaches by question number at once; it asks append or replace (default append) only
+  when the proposed paper is partly answered (`proposal.paper.answer_coverage` `partial`).
+- **Change match…** opens the popup. **Unmatch** and **Not this one**: [Rejecting a
+  match](#rejecting-a-match).
+- An attach shows what was attached and which numbers were not, then **Continue** moves on.
+
+### The popup
+
+`MatchDialog.jsx`, opened by **Match this paper…** or **Change match…**.
+
+- **Fields:** subject, stream, level, school, exam type, year, paper number, pre-filled from the
+  paper. Each reference field is a type-to-search picker of existing entries; school is the
+  [school combobox](#new-schools) (an unresolved extracted school is shown in amber and counts as
+  blank). Clearing a field means "any".
+- **Search** (`GET .../papers/{key}/candidates`, below) re-runs as the fields change (debounced).
+  **Exact matches** are listed; when there are none, **Best matches**, with each differing field
+  highlighted ("paper no. 2A ≠ 2").
+- **Each row:** where the booklet is ("In the bank (paper 7)", "Pending in <file> (<key>)", "Same
+  file (<key>)"), its details in words, its first question beside this paper's first answer (or the
+  other way round for a question paper), "This will unpair it from <file>" when it is paired
+  already, and for a bank paper "Only 8 of 12 questions have answers" (partly answered) or, greyed
+  out with no action, "Already has answers".
+- **Pair** (a pending booklet) links the two papers; **Attach** (a bank paper) attaches by question
+  number, asking append or replace only for a partly answered paper.
+- **Also update this paper's details** (ticked by default) saves the fields on the paper with the
+  pair, in the same transaction. Untick it when you only cleared fields to widen the search. It is
+  shown only while a pending booklet is listed: an answer paper's own details are not kept after an
+  attach.
+- Before saving, any pending proposal edit is flushed (the server crops the saved proposal).
+
+### Candidates
+
+`GET /api/import/jobs/{id}/papers/{key}/candidates` with the field values as query parameters
+(`school_id` or `new_school_name`, `year`, `level_id`, `subject_id`, `exam_type_id`, `stream_id`,
+`paper_number`), in `app/services/match_candidates.py`. Returns `{exact, best}`. Unknown key →
+`404`.
+
+- **Blank means "any":** only the given fields are compared, each **exactly** (`paper_number`
+  trimmed and case-folded; schools [as in matching](#new-schools)). There is no fuzzy matching.
+- **Exact:** every given field agrees (at most 50). **Best**, only when nothing is exact: the top 10
+  by number of agreeing fields; a booklet agreeing on none is left out.
+- **Sources:**
+  - pending papers of the other role (an answer-only paper finds question papers and vice versa) in
+    `review_ready` jobs or in the paper's own job (its own job first, then newest), not the paper
+    itself nor its current partner. Rejected pairs are listed: the admin may still pair them by hand;
+  - for an answer-only paper only, bank papers. A question paper never matches a bank paper (that
+    would be a duplicate). Bank papers with coverage `all` are returned, not dropped, so the popup
+    can grey them out.
+- **Each candidate:** `kind` (`pending`/`bank`), `ingest_paper_id` or `paper_id`, `job_id`,
+  `filename`, `paper_key`, `same_job`, `role`, `details` (the seven fields and `new_school_name`),
+  `agree` and `differ` (field names), `partner` (`{ingest_paper_id, job_id, filename, paper_key}`
+  or null), `preview` (a pending paper: `{number, url, page, rect}` of its first question, or first
+  answer for an answer-only paper; a bank paper: `{number, url}` of its first question image),
+  `question_numbers`, `answer_numbers`, `answer_coverage`.
+
+### Pairing by hand
+
+`POST /api/import/jobs/{id}/papers/{key}/match {ingest_paper_id, metadata?}`.
+
+- **Either role:** an answer-only paper pairs with a pending question paper and a question paper
+  with a pending answer-only paper, of another `review_ready` job **or the same job**. Anything else
+  (same role, itself, a decided paper, a job no longer under review) → `422`; unknown key or target
+  → `404`; this job not `review_ready` or this paper decided → `409`.
+- Sets `matched_ingest_paper_id` on both rows (no automatic status: "matched by an admin") and
+  releases any earlier link of either one **without** rejecting it, so automatic matching may still
+  propose that old pair later.
+- **`metadata`** (the seven fields and `new_school_name`, as `PUT .../metadata` takes them) is saved
+  on this paper first, in the same transaction; a refused pair saves nothing.
+- **Response:** `{matches, proposal}`, as Unmatch's.
+- Answers are placed **by question number** when the question paper is confirmed
+  ([Confirming a linked pair](#confirming-a-linked-pair)).
 
 ## Automatic matching
 
@@ -166,14 +225,14 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
 | # | Situation | Result |
 |---|---|---|
 | 1 | Linked to a pending question paper (admin link, or an auto link that still holds) | Untouched; any proposal is hidden |
-| 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The panel shows "Answers match <paper>" with **Attach** (one click; asks append/replace only if needed) and **Not this one** |
+| 2 | All seven fields known, exactly one confirmed paper with that key | `proposed`. The Pairing block shows "Answers match <paper>" with **Attach…**, **Change match…** and **Not this one** |
 | 3 | All seven known, several confirmed papers share the key | `manual` ("N papers have this key") |
 | 4 | All seven known, no confirmed match, exactly one pending `question` paper with the same key, not linked to anything, in another `review_ready` job **or the same job** | **Auto link** on both rows (`match_status = auto`, "auto-linked") |
 | 5 | Same as 4, but several pending question papers | `manual` ("N pending question papers have this key") |
 | 6 | Otherwise, if papers share `school_id` + `year` + `subject_id` (all three known; never for a [new school](#new-schools)) | `manual` ("partial: … differ" / "partial: unknown …") |
 | 7 | Otherwise | NULL (nothing to do) |
 
-- **`manual`** shows "Several or partial matches — pick one below" in the Match panel.
+- **`manual`** leaves the paper unpaired; the Pairing block offers **Match this paper…**.
 - **Auto links** are recomputed from scratch on every re-evaluation, so a metadata change that breaks
   the key drops them.
 - **Fully answered bank papers are skipped** by rules 2, 3 and 6: a confirmed paper whose
@@ -195,10 +254,12 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
   target. This runs in a savepoint and never fails the confirm.
 
 **Review response:**
-- `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key, answer_numbers}}`, covering
-  manual and auto links. `answer_numbers` are the partner's question numbers that have an answer box
+- `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key, details, matched_by,
+  answer_numbers}}`, covering manual and auto links. `details` are the partner's seven fields and
+  `new_school_name`; `matched_by` is `auto` or `admin`. `answer_numbers` are the partner's question numbers that have an answer box
   (for a question paper, the answers its confirm brings in).
-- `proposals`: `{key: {status, note, paper}}`.
+- `proposals`: `{key: {status, note, paper}}`; `paper` carries the proposed paper's
+  `answer_coverage`.
 
 ## Rejecting a match
 
