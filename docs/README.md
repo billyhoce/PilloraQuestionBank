@@ -1,54 +1,56 @@
 # Documentation
 
-Docs are organised **by feature**, not by layer: each file under [`features/`](./features) covers one
-capability end-to-end — its API, its UI, and any AI or PDF work it involves — so you can answer a
-question by reading one file instead of three.
+Single source of truth for how the system behaves. One file per capability under `features/`,
+each opening with a `Code:` line that names its implementation paths. Local setup is in the root
+[README.md](../README.md).
 
-## Start here
+## System
 
-| Doc | What's inside |
+| Doc | Covers |
 |---|---|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | Stacks, backend/frontend code layout, object-store integration, routes, navigation, cross-cutting conventions |
-| [DATA_MODEL.md](./DATA_MODEL.md) | Database schema (reference + core tables), image storage conventions, image dimension standards |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Components, system diagram, code map, page routes, cross-cutting conventions |
+| [DATA_MODEL.md](./DATA_MODEL.md) | Entities and relationships, S3 key layout, image conventions |
+| [CONTEXT.md](./CONTEXT.md) | Domain glossary (job, task, stage, section, proposal, link, …) |
 
 ## Features
 
-| Doc | What's inside |
+```mermaid
+flowchart LR
+  PDF[Exam PDF] --> AI[Auto import] --> PIPE[Ingestion pipeline] --> REV[Review + pairing] --> BANK[(Question bank)]
+  PDF --> MAN[Manual import] --> BANK
+  BANK --> BR[Browse] --> GEN[Paper generation] --> OUT[PDF]
+```
+
+| Doc | Covers |
 |---|---|
-| [features/auth.md](./features/auth.md) | Registration, password login, Google OAuth 2.0, JWT sessions, security posture, auth UI |
-| [features/users-and-premium.md](./features/users-and-premium.md) | The three tiers, user management, the `is_premium` flag, how the paywall is enforced |
-| [features/reference-data.md](./features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
-| [features/ingestion.md](./features/ingestion.md) | Manual import (wizard, PDF→image, confirm/delete), Manage Papers editor, provenance |
-| [features/auto-import.md](./features/auto-import.md) | Auto import: drop PDFs/folders, upload queue, processing board, review queue, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
-| [features/qa-pairing.md](./features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Pairing block and "Match this paper" popup, automatic matching, linked confirm |
-| [features/ai-labelling.md](./features/ai-labelling.md) | Claude part-split + topic/marks labelling, paper metadata extraction, parts write path, review UI, costs |
-| [features/browse.md](./features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
-| [features/paper-generation.md](./features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
-| [features/generation-config.md](./features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
-| [features/site-config.md](./features/site-config.md) | Public About page + its WYSIWYG editor and sanitizer, and the image-copy deterrent toggle |
-| [../ingestion/README.md](../ingestion/README.md) | The PDF ingester package (booklet segmentation, splitting, question-rectangle location, answer tables + OCR); verified by diffing `ingestion/samples/` output, not by unit tests |
-| [features/pdf-rendering.md](./features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
-
-## Plans
-
-| Doc | What's inside |
-|---|---|
-| [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Implemented (except #81 duplicate-paper protection): kept for its decisions and rationale; behaviour lives in the feature docs |
-| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Agreed, mostly built (see its status line):** follow-up to Phase 4 of the plan above. The "Match this paper" popup (editable fields with a school combobox that can name a new school, found booklets with exact and best matches), the question ↔ answer mapping table, answers all-or-none per paper, and unmatching that remembers the rejected pair |
-
-## Decisions
-
-| Doc | What's inside |
-|---|---|
-| [adr/0001-stage-pipeline.md](./adr/0001-stage-pipeline.md) | The ingestion stage pipeline |
-| [adr/0002-qa-booklet-pairing.md](./adr/0002-qa-booklet-pairing.md) | Question/answer booklet pairing |
+| [features/auth.md](./features/auth.md) | Register, password and Google sign-in, sessions, page access |
+| [features/users-and-premium.md](./features/users-and-premium.md) | Roles, per-school-level premium, paywall, user management — canonical **who can do what** |
+| [features/reference-data.md](./features/reference-data.md) | Subjects, streams, levels, schools, exam types, topics, tags — admin CRUD |
+| [features/auto-import.md](./features/auto-import.md) | Upload → ingest job → worker → review queue → confirm / skip / attach; retention, logs, cost |
+| [features/ingestion-pipeline.md](./features/ingestion-pipeline.md) | The `ingestion/` library: booklet PDF → proposal, stage by stage |
+| [features/qa-pairing.md](./features/qa-pairing.md) | Answer-only papers, matching question ↔ answer booklets, attach, linked confirm |
+| [features/manual-import.md](./features/manual-import.md) | Manual import wizard |
+| [features/manage-papers.md](./features/manage-papers.md) | Editing and deleting stored papers, provenance |
+| [features/ai-labelling.md](./features/ai-labelling.md) | Claude part split, topics, marks, paper metadata extraction |
+| [features/browse.md](./features/browse.md) | Filtering and search of questions |
+| [features/paper-generation.md](./features/paper-generation.md) | Selecting questions and generating PDFs; role rules |
+| [features/generation-config.md](./features/generation-config.md) | Admin presets and cover titles that constrain non-admin generation |
+| [features/pdf-rendering.md](./features/pdf-rendering.md) | PDF layout rules, page chrome, cover page, rich text |
+| [features/site-config.md](./features/site-config.md) | About page editing, image-copy deterrent |
 
 ## Operations
 
-| Doc | What's inside |
+| Doc | Covers |
 |---|---|
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Hosting plan, CI/CD, VM provisioning, env vars, Google OAuth setup, backups |
-| [PDF_GENERATION_TESTING.md](./PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification loop |
+| [TESTING.md](./TESTING.md) | Test suites, PDF visual verification, ingestion sample diffs |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Hosting, CI/CD, env vars, OAuth setup, backups, rollback, observability |
 
-Local dev setup, testing commands, and the git workflow are in the root
-[README.md](../README.md).
+## Decisions
+
+| ADR | Decision |
+|---|---|
+| [adr/0001-stage-pipeline.md](./adr/0001-stage-pipeline.md) | Ingest a booklet as a job of file-based stages in a task store |
+| [adr/0002-qa-booklet-pairing.md](./adr/0002-qa-booklet-pairing.md) | Pair question and answer booklets by metadata; attach answers to a confirmed paper |
+| [adr/0003-ingest-queue-storage-retention.md](./adr/0003-ingest-queue-storage-retention.md) | Postgres queue, direct-to-S3 upload, keep jobs until settled |
+
+`agents/` configures the engineering skills (issue tracker, triage labels, domain docs).

@@ -1,439 +1,379 @@
-# Auto-import
+# Auto import
 
-**Scope:** the Auto import (`/admin/import/auto`) and Review queue (`/admin/import/review`) pages.
-A dropped booklet PDF becomes an **ingest job**. The worker runs the `ingestion/` pipeline over it
-and leaves a **proposal**. The admin reviews it and confirms, skips or attaches each proposed paper.
+Admins drop whole booklet PDFs; each becomes an **ingest job** that the worker splits into proposed
+papers and questions. The admin checks each proposal on a review page and confirms, skips or
+attaches every proposed paper.
 
-Related docs:
-- Question/answer pairing (answer-only papers, attach, matching): [qa-pairing.md](./qa-pairing.md).
-- Manual import and Manage Papers: [ingestion.md](./ingestion.md).
-- Tables: [DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs).
-- Pipeline internals: [ingestion/README.md](../../ingestion/README.md),
-  [ADR 0001](../adr/0001-stage-pipeline.md).
-- Vocabulary (job, task, stage, section, proposal, …): [CONTEXT.md](../../CONTEXT.md).
+**Code:** `app/routes/ingest.py`, `app/services/ingest_jobs.py`, `app/services/ingest_review.py`,
+`app/services/ingest_confirm.py`, `app/services/ingest_papers.py`, `app/services/ingest_events.py`,
+`app/worker/` (`main.py`, `store.py`, `edges.py`, `sweep.py`, `reconcile.py`), `app/ai/job_cost.py`,
+`app/storage/`, `frontend/src/features/import/` (`AutoImport.jsx`, `UploadQueue.jsx`,
+`PdfDropZone.jsx`, `JobHistory.jsx`, `JobDetail.jsx`, `ReviewQueuePage.jsx`, `ReviewPage.jsx`,
+`proposalReducer.js`, `MetadataSidebar.jsx`, `SchoolCombobox.jsx`)
+**Related:** [ingestion-pipeline.md](./ingestion-pipeline.md) (what the worker does to a booklet,
+stage by stage), [qa-pairing.md](./qa-pairing.md) (answer-only papers, attach, matching),
+[manual-import.md](./manual-import.md), [manage-papers.md](./manage-papers.md),
+[ai-labelling.md](./ai-labelling.md), [DATA_MODEL.md](../DATA_MODEL.md),
+[CONTEXT.md](../CONTEXT.md) (job, task, stage, section, proposal),
+[ADR 0003](../adr/0003-ingest-queue-storage-retention.md) (why a Postgres queue, direct upload,
+keep-until-settled)
 
-## Lifecycle
+## Flow
 
-1. Browser → `POST /uploads` → job `awaiting_upload` plus a presigned S3 POST.
-2. Browser uploads the PDF straight to S3 (the API never holds the file).
-3. Browser → `POST /jobs/{id}/uploaded` → job `queued` (`register` task inserted).
-4. Worker: `register` → `segment` → `split` → per-section stages → `report` → job `review_ready`,
-   with the proposal on the row.
-5. Admin reviews and edits on the review page, then decides each paper: confirm, skip or attach.
-6. Every paper decided → job `confirmed` (settled), and its S3 prefix is deleted.
+```mermaid
+flowchart LR
+  A[Drop PDFs] --> B[Browser uploads to S3]
+  B --> C[Job queued]
+  C --> D[Worker runs pipeline]
+  D --> E[Review queue]
+  E --> F[Review page]
+  F -->|each paper| G{Confirm / Skip / Attach}
+  G --> H[Job settled, S3 files deleted]
+```
 
-## Routes
+1. The admin drops PDFs or folders on `/admin/import/auto`. Each PDF becomes its own job.
+2. The browser uploads the file straight to S3; the API never holds it. The API then checks the
+   object and queues the job.
+3. The worker runs the [ingestion pipeline](./ingestion-pipeline.md) over the booklet and stores a
+   **proposal**: the papers found, each with its pages and question/answer rectangles.
+4. The job appears in the review queue (`/admin/import/review`).
+5. On the review page the admin corrects rectangles and metadata, then decides each paper.
+6. When every paper is decided the job is **settled** (`confirmed`) and its S3 files are deleted.
 
-All admin-only (`403` otherwise). Any admin can see and act on any admin's job.
+## Rules
 
-| Route | Behaviour |
-|---|---|
-| `POST /api/import/uploads` `{filename, size}` | Size outside 1 B–100 MB → `422`. Creates the job (`awaiting_upload`, `source_key = ingest/{id}/source.pdf`, no task). Returns `201 {job_id, url, fields}`: a presigned POST pinned to that key, `Content-Type: application/pdf`, 1 B–100 MB, 15-minute expiry. |
-| `POST /api/import/jobs/{id}/uploaded` | HEADs the object. Missing → `409`. Size out of range or type not PDF → `422` (job stays `awaiting_upload`). Otherwise the job becomes `queued` and the `register` task is inserted. Calling it twice, or on a job not `awaiting_upload`, → `409`. The bytes are not inspected. |
-| `GET /api/import/jobs` | All jobs, newest first, each with its progress and `papers` (below). Filters (combinable): `status` (one or comma-separated; unknown → `422`), `job_id`, `paper_id` (the job that created the paper, via `paper.source_job_id` or `confirmed_paper_ids`), `unmatched_answers=true`. Also returns `worker_alive` and `heartbeat_age_s`. |
-| `GET /api/import/jobs/{id}` | The job, its `report` (including `cost`), its tasks (status, attempts, duration, warnings, reason, error, traceback) and worker liveness. Unknown id → `404`. |
-| `POST /api/import/jobs/{id}/retry` | Failed and blocked tasks, plus everything downstream, go back to the queue with attempts reset. Returns `reopened` (a count). `409` for a job that is `awaiting_upload`, `cancelled`, `confirmed` or `expired`, or that has any paper already decided. |
-| `DELETE /api/import/jobs/{id}` | Cancel: status `cancelled` is committed first, then the job's S3 prefix is deleted. `204`. A `confirmed`, `cancelled` or `expired` job → `409`. |
-| `GET /api/import/jobs/{id}/review` | The proposal under review (`proposal_edited` if present, else `proposal`), with presigned page URLs and pixel sizes. Also `filename`, `edited`, `page_count`, `paper_metadata` (each paper's ids, plus `extracted`: the raw names read), `filename_metadata` (old jobs), each paper's `key`/`outcome`, `matches`, `proposals`. No proposal yet → `409`. |
-| `PUT /api/import/jobs/{id}/proposal` | Saves the admin's edits as `proposal_edited` (see [Editing](#editing)). |
-| `PUT /api/import/jobs/{id}/papers/{key}/metadata` | Stores sidebar metadata on the paper's `ingest_paper` row and re-runs matching. See [qa-pairing.md](./qa-pairing.md). |
-| `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` | Cuts that range of the job's PDF into Manual-flow pages, using the job's stored metadata (no Claude call). Bad range → `422`. |
-| `POST /api/import/jobs/{id}/confirm` | Confirm one paper. See [Confirm and skip](#confirm-and-skip). |
-| `POST /api/import/jobs/{id}/skip` `{paper_label}` | Skip one paper. |
-| `POST /api/import/jobs/{id}/attach`, `GET /api/import/jobs/{id}/papers/{key}/candidates`, `POST`/`DELETE /api/import/jobs/{id}/papers/{key}/match`, `GET`/`PUT /api/import/jobs/{id}/papers/{key}/answer-map`, `DELETE /api/import/jobs/{id}/papers/{key}/proposed-paper` | Pairing, the answer mapping table, Unmatch and "Not this one". See [qa-pairing.md](./qa-pairing.md). |
+- All import pages and actions are admin-only. Any admin can see and act on any admin's job.
+- Upload size: 1 byte to **100 MB**, content type PDF. The browser's upload permission is valid for
+  15 minutes.
+- The PDF's content is only checked by the worker. A rejected booklet fails its job with one of:
+  "The file is not a readable PDF", "The PDF is password protected", "The PDF has no pages".
+- Pending jobs **never expire**. A job stays until every paper is decided or the job is cancelled.
+- There is no duplicate detection: the same booklet uploaded twice makes two jobs, and the same
+  paper can be confirmed twice.
+- A settled job's S3 files are always gone; its database rows (job, tasks, papers, events) are kept
+  forever.
 
-There is no multipart job-creation route; the old `POST /api/import/jobs` was removed.
+## Job statuses
 
-**Progress** (on every job in the list and detail):
-- `stage`: the running task's stage, else the most recently finished one, else `null`.
-- `tasks_done` / `tasks_total`: tasks `done` or `skipped` out of all tasks. The total grows as
-  sections fan out.
-- `warnings_count`.
-- `needs_review`: any task flagged.
+```mermaid
+stateDiagram-v2
+  [*] --> awaiting_upload: PDF dropped
+  awaiting_upload --> queued: upload verified
+  awaiting_upload --> cancelled: Stop, upload error, or abandoned over 1 h
+  queued --> running: worker starts a task
+  running --> review_ready: proposal stored
+  running --> failed: Read PDF / Find papers / Split failed, or no proposal
+  queued --> failed: stuck over 6 h
+  running --> failed: stuck over 6 h
+  failed --> running: Retry
+  review_ready --> running: Retry (no paper decided yet)
+  review_ready --> confirmed: every paper decided
+  queued --> cancelled: Cancel
+  running --> cancelled: Cancel
+  review_ready --> cancelled: Cancel
+  failed --> cancelled: Cancel
+  confirmed --> [*]
+  cancelled --> [*]
+```
 
-**Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
-`{key, role, status, school_id, new_school_name, year, level_id, subject_id, exam_type_id, stream_id,
-paper_number, linked, match_status, extracted_school, answer_coverage, unanswered}`, where `new_school_name` is a school
-typed during review that confirm will create ([qa-pairing.md](./qa-pairing.md#new-schools)), `linked` means it is linked to another pending paper
-(of another job or the same one), `extracted_school` is the school name read from its cover
-(`report.paper_metadata[key].extracted.school`, else null), and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
-without an answer box) describe its own booklet's answers
-([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)). Empty until `report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
+| Status | UI label | Meaning |
+|---|---|---|
+| `awaiting_upload` | Uploading | Created; the browser has not finished the upload. |
+| `queued` | Queued | Uploaded; no task has started. |
+| `running` | Running | Some tasks finished or running, others still to run. |
+| `review_ready` | Ready for review | Proposal stored. Reached even when some sections failed: they are listed on the review page as not extracted. |
+| `failed` | Failed | A booklet-level stage (Read PDF, Find papers, Split) failed, or the run ended with no proposal. The error names the stage, e.g. "register failed: The PDF is password protected". |
+| `confirmed` | Confirmed | Settled: every paper confirmed, skipped or attached (even if all were skipped). |
+| `cancelled` | Cancelled | Settled: cancelled by an admin, or an upload abandoned for over an hour. |
+| `expired` | Expired | Historical rows only; nothing sets it. |
 
-**Worker liveness:** `worker_alive` is true when the heartbeat is at most 90 s old. If the worker
-has never started: `false` / `null`. Both values are computed server-side.
+- The worker derives `queued` / `running` / `review_ready` / `failed` from the job's tasks after
+  every task. The API alone sets `awaiting_upload`, `confirmed` and `cancelled`, and the worker never
+  touches a job in those states.
+- Task statuses (job detail): `pending`, `ready`, `running`, `done`, `skipped`, `failed`,
+  `blocked`. A task may also be flagged **needs review**.
 
-## Statuses
+### Retry
 
-| Job status | Meaning |
-|---|---|
-| `awaiting_upload` | Created; the browser has not finished uploading. Can be cancelled, not retried. |
-| `queued` | Uploaded; no task has started. |
-| `running` | Some tasks are finished or running, others still to run. |
-| `review_ready` | `report` is done and the proposal is stored. Set even if some sections failed (they show in the proposal as failed). |
-| `failed` | Nothing left to run and nothing to review: a job-level stage (`register`, `segment`, `split`) failed or was blocked, or there is no proposal. `error` names the stage. |
-| `confirmed` | Every paper is confirmed, skipped or attached (settled). |
-| `cancelled` | Cancelled by the admin, or by the reconciler for an abandoned upload (settled). |
-| `expired` | Historical only; nothing sets it any more. |
+- **Retry** returns the job's failed and blocked tasks, plus everything downstream of them, to the
+  queue with their attempt counts reset. Tasks whose inputs are unchanged are not re-run.
+- Allowed on `queued`, `running`, `review_ready` and `failed` jobs.
+- Refused on `awaiting_upload`, `confirmed`, `cancelled`, `expired`, and on any job with a paper
+  already decided (a new proposal would orphan that decision).
+- A rejected PDF (see Rules) fails the same way again on Retry.
+- Saved review edits survive a Retry: the review page keeps showing the edited proposal, not the
+  regenerated one.
 
-- **Task statuses:** `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
-- The worker derives `queued` / `running` / `review_ready` / `failed` from the tasks after every
-  task completion.
-- The API sets `awaiting_upload`, `confirmed` and `cancelled`. The worker never touches a job in
-  those states.
+### Cancel
 
-## PDF validation
-
-- Done in the worker, before `register` runs. The upload route never opens the file.
-- Rejected inputs fail the job (`error = "register failed: <reason>"`, shown in the job list). The
-  failure is not retried automatically:
-  - "The file is not a readable PDF"
-  - "The PDF is password protected"
-  - "The PDF has no pages"
-- After `register`: `page_count` and `sha256` are set on the job (both `NULL` until then).
-
-## Auto import page
-
-`/admin/import/auto` (`AutoImport.jsx`).
-
-- **Drop zone** (`PdfDropZone.jsx`): drop PDFs or whole folders (walked recursively through
-  `webkitGetAsEntry`), or use **Choose files** / **Choose folder** (`webkitdirectory`). Non-PDFs and
-  macOS `._*` files are ignored and counted; folder contents queue in path order. The zone never
-  locks: more files can be added while earlier ones upload. A status line says what was added,
-  skipped as a duplicate (same name, size and modified time already queued) or ignored.
-- **Upload queue** (`UploadQueue.jsx`, `UploadQueueProvider` mounted above the routes in `App.jsx`):
-  - each PDF is its own entry; at most **3** transfer at once, the rest wait their turn
-  - entries: waiting (**Remove**), uploading with a progress bar (XHR; **Stop** aborts the transfer
-    and the API client cancels the half-made job), failed with its error (**Retry upload** /
-    **Remove**). If the S3 POST or `uploaded` fails, the job is cancelled.
-  - uploads keep going while the admin moves to other pages; the navbar's Import link and the
-    Auto import tab show how many are in flight, and leaving the site mid-upload asks first
-    (`beforeunload`)
-  - a finished upload leaves the queue and the job list refreshes
-- **Processing board**: the upload queue's entries, then every job still in the pipeline
-  (`awaiting_upload`, `queued`, `running`) or stopped in it (`failed`). Each row shows:
-  - the filename (opens the job detail), page count, warnings, age badge
-  - a **step tracker** — Upload → Read PDF (`register`) → Find papers (`segment`) → Split →
-    Extract questions (`locate`/`render`/`grid`/`ocr`/`questions`) → Assemble (`report`) — built
-    from the job's `stage` (`pipelinePhases.js`): green behind, blue in hand, red where it failed
-  - a caption ("Extract questions · 5/9 tasks", "Waiting for the worker", "Failed at Read PDF") and,
-    while running, a `done/total` bar
-  - the failure reason, "Worker offline" on an active job when the heartbeat is stale, Retry
-    (failed jobs) and Cancel
-  - an `awaiting_upload` job not in this browser's queue reads "Upload not finished"
-- **Counts** above the board (uploading, queued, running, failed) and a link to the review queue
-  with the number of jobs ready.
-- **Finished while you were here**: jobs seen in the pipeline that became `review_ready` while the
-  page was open, each with a Review link (dismissable).
-- **Polling:** every 3 s while anything is uploading, queued or running; otherwise every 15 s (so
-  another admin's uploads still appear). Ticks are skipped while the tab is hidden and caught up
-  when it is shown (`usePoll.js`).
-- **"Worker offline"** banner when a job is active and `worker_alive` is false.
-- **All jobs** (`JobHistory.jsx`): every job, settled ones included, with status, failure reason,
-  created time, age badge, Review / Retry / Cancel.
-  - **Age badge** on unsettled jobs: "waiting N days" (or "waiting today"), from `created_at`.
-    Highlighted amber after more than 14 days.
-  - **Filters:** **Awaiting review** = `review_ready` + `failed`; **Unmatched answers**: jobs with a
-    pending answer-only paper linked to no question paper; **Search box**: a UUID searches by job
-    id, digits by paper id. All combine; a filtered list is fetched again on every poll.
-- **Job detail (`JobDetail.jsx`):**
-  - the job id with a Copy button
-  - every task: section, status, duration, warnings, reason or error
-  - a collapsed "Traceback" for a failed task
-  - refreshes with the poll
-
-## Review queue
-
-`/admin/import/review` (`ReviewQueuePage.jsx`): the jobs waiting for a decision.
-
-- `review_ready` jobs, **oldest first**, polled every 10 s by the import layout
-  (`useReviewQueue.js`, shared with the tab badge and the review page) so a job the worker finishes
-  appears without a reload. Jobs that arrive after the page loaded are tagged **New**.
-- **Each card:** filename (and a Review button), age badge, pages, papers and how many are still to
-  decide, warnings, "Pages flagged for a closer look" when a task needs review, and one line per
-  paper from the job list's `papers`:
-  - Questions / Answers and its key
-  - its metadata in words (school · year · level · subject · exam type · paper no.), with the
-    missing fields named, or "No details read from the cover"; a school typed as new reads
-    "Raffles Instn (new)"
-  - for an answer-only paper: linked / matching paper found / needs matching / not matched; for a
-    question paper: "Answers linked from another upload"
-  - for a pending question paper only partly answered by its own booklet: "Q5–Q7 have no answers"
-  - on a paper that needs a partner (pending, not linked, and answer-only or with no answers of its
-    own), a **Match** button that opens the "Match this paper" popup; pairing or attaching there
-    refreshes the queue ([qa-pairing.md](./qa-pairing.md#from-the-review-queue))
-  - a decided paper is greyed with its outcome
-- **Only jobs with unmatched answers** narrows the list in the browser.
-
-## Review page
-
-`/admin/import/jobs/:jobId/review`, opened from the review queue (and from `review_ready` rows of
-All jobs). The header links back to the queue and to the **next job** in it (the oldest other one).
-
-- **One paper at a time:** tabs when there are several, each tab showing its outcome.
-- **Page strip:** a flagged page has an amber border, with its reason as a tooltip.
-- **Page image overlay:**
-  - question rectangles in blue
-  - answer rectangles in green
-  - `orphan_answers` in grey, dashed
-- **Question list:** each question with its flags. Clicking one selects it and jumps to its page.
-- **Unrouted sections** are listed with their reason and page range. **Handle manually** cuts that
-  range (`manual-pages`) into the Manual wizard and switches to it. This is how a booklet whose
-  questions could not be located is finished.
-- **Right column:**
-  - question paper: the metadata sidebar, pre-filled from the paper's own `paper_metadata[key]`
-    (old jobs: `filename_metadata`), plus **Confirm paper** and **Skip this paper**.
-  - **School** is a combobox (`SchoolCombobox.jsx`): type to search the existing schools. When the
-    cover named a school that matched none (`paper_metadata[key].extracted.school` with no
-    `school_id`), it is shown in amber as "*Raffles Instn* — not in the list", and the closest
-    existing names (character-bigram likeness) are listed first. It counts as blank: **Confirm** is
-    disabled, with "Pick a school: “Raffles Instn” is not in the list." shown, until a school is
-    picked or typed as new. A job without `extracted` (from before it existed) shows nothing extra.
-    The Manual import sidebar keeps its plain dropdown.
-  - The combobox's last option is **Use “<typed text>” as a new school** (not offered when the text
-    is an existing school's name, in any case: that school is listed first instead). The school is
-    then shown as "New school — created when you confirm", sent as `new_school_name`, and only
-    created by **Confirm** ([qa-pairing.md](./qa-pairing.md#new-schools)).
-  - A question paper that would be confirmed **partly answered** shows "Q5–Q7 have no answers. Add
-    them with the answer-box editor, or confirm anyway." above **Confirm paper**, which stays
-    enabled ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)).
-  - A paper that needs a partner (answer-only, or a question paper with no answers at all) or has
-    one: the Pairing block, with **Match this paper…**
-    ([qa-pairing.md](./qa-pairing.md#the-pairing-block-and-match-this-paper)). An answer-only
-    paper has no metadata sidebar, only the Pairing block and **Skip this paper**.
-- **Metadata edits** are kept per paper and saved (debounced 800 ms) to
-  `PUT .../papers/{key}/metadata`. This is best effort, since confirm sends the final values.
-- After the last decision the page moves on to the next job in the review queue, or back to the
-  queue when it is empty. **Handle manually** opens `/admin/import/manual`.
-
-### Editing
-
-- **Rectangles** (pure edits in `proposalReducer.js`):
-  - Click to select; drag the four edge handles to resize, or drag the box itself to move it.
-    Clamped to the page, minimum 4 pt.
-  - The **Selected box** bar names the box, offers **Delete box**, and for an answer box a
-    **Belongs to** menu: move it to another question, or to "No question" (an orphan answer, not
-    imported). An orphan answer can be given to a question the same way.
-  - Delete/Backspace removes it (unless focus is in an input); Esc deselects.
-- **Drawing boxes:** **Draw question box** / **Draw answer box** (an answer-only paper has only the
-  latter), then drag on the page. One box per press; Esc cancels. Where it goes is shown before
-  drawing:
-  - with a question selected: added to that question's question / answer boxes
-  - otherwise a question box becomes a new question numbered `max+1`; an answer box becomes an
-    orphan answer (in an answer-only paper, a new answer numbered `max+1`)
-- **Questions:**
-  - Number field: a duplicate or non-positive number is refused, with the reason.
-  - **Merge with previous**: keeps the previous question's number and concatenates rectangles and
-    flags.
-  - **Split before the selected rectangle**, or **split the selected rectangle in half**. The first
-    part keeps the number and all answer rectangles; the second part gets `max+1` and no answers.
-- **Deleting a question's last question rectangle** deletes the question, and its answer rectangles
-  become orphan answers.
-- **Saving:** edits save to `PUT .../proposal`, debounced 800 ms and also on leaving the page. The
-  header shows Saving… / Saved / Not saved (with the server's message). There is no "reset to
-  original".
-- **The server accepts only** each paper's `questions` and `orphan_answers`, merged onto the
-  original. Pages, labels, `unrouted` and warnings cannot be changed. `409` unless `review_ready`.
-- **Validation** (`422`, nothing stored):
-  - every rectangle has exactly `page, x0, y0, x1, y1`
-  - its page belongs to the paper, with `x0 < x1`, `y0 < y1`, inside the page
-  - question numbers are unique positive integers within a paper
-  - each question has at least one question rectangle (except in an `answer_only` paper)
-
-## Confirm and skip
-
-**Paper key** (`paper_label`):
-- the paper's question label (`q1`)
-- else its answer label (`a1`) for an answer-only paper
-- else `paper{n}`
-
-**`POST .../confirm`** `{paper_label, subject_id, stream_id, level_id, school_id, exam_type_id,
-year, paper_number, is_premium}` → `201`. Instead of `school_id` it may carry `new_school_name`: the
-school is found by case-insensitive name or created, in the confirm's transaction
-([qa-pairing.md](./qa-pairing.md#new-schools)).
-
-- **Refused when:**
-
-  | Condition | Status |
-  |---|---|
-  | Job not `review_ready`, or paper already decided | `409` |
-  | Unknown key | `404` |
-  | Stream and level from different school levels | `422` |
-  | Neither `school_id` nor `new_school_name` | `422` |
-  | Paper has no questions (skip it instead) | `422` |
-  | `answer_only` paper (attach or skip it instead) | `422` |
-
-- **Images:**
-  - Each rectangle of the edited (else original) proposal is cropped from `source.pdf` at 300 dpi,
-    standardised (width capped at 1760 px), WebP-encoded and uploaded to `tmp/`, one at a time.
-  - `question_rects` become question pages and `answer_rects` answer pages, in order.
-  - **Orphan answers are not imported** (the UI says so).
-- **One transaction:**
-  - the paper, its questions and pages
-  - `paper.source_job_id`
-  - the job's `review_outcome[key] = confirmed` and `confirmed_paper_ids`
-  - the `ingest_paper` row (status, `paper_id`, final metadata)
-  - the `paper_confirmed` event
-- **S3 order:**
-  - Crops are copied to canonical keys before the commit.
-  - Temp crops are deleted after it. A failed delete is logged and skipped.
-  - If anything fails, nothing is committed and the canonical copies are removed.
-- **Never duplicates:** the job row is locked while deciding, so a double click gets a `409`. The
-  paper and the outcome commit together.
-- **Provenance:** recorded on the new rows (see [ingestion.md](./ingestion.md#provenance)).
-- **Linked answer paper:** if the paper is linked to a pending answer-only paper (of another job or the same one), its
-  answers come in too ([qa-pairing.md](./qa-pairing.md#confirming-a-linked-pair)).
-- **Response:** `/confirm`'s (`paper_id`, `questions`) plus `job_status`, `answers_from` and
-  `unmatched`. The page then opens the topic review (`TopicReview`) on the new paper.
-
-**`POST .../skip`** `{paper_label}`:
-- Records `skipped` (outcome, `ingest_paper` row and event in one transaction). Same `404`/`409`
-  rules as confirm.
-- Skipping a linked question paper releases the link.
-
-**Settling:**
-- When every paper has an outcome (`confirmed`, `skipped` or `attached`), the job becomes
-  `confirmed`, even if every paper was skipped.
-- After the commit, its whole S3 prefix is deleted.
-- A job whose proposal has no papers can only be cancelled.
+- Allowed on any job not yet settled, including `review_ready` jobs with some papers already
+  confirmed (those papers stay in the bank).
+- The status flips to `cancelled` first, then the job's S3 files are deleted. A task already running
+  finishes, but its results are dropped and nothing new is uploaded.
 
 ## The worker
 
-A separate container from the same image. One process runs one task at a time.
+A second container from the same image (`python -m app.worker`), capped at 1 CPU / 6 GB.
+Internals of each stage: [ingestion-pipeline.md](./ingestion-pipeline.md).
 
-**Claiming tasks:**
-- The oldest job first, then stage order: `SELECT … FOR UPDATE SKIP LOCKED`, then an update
-  guarded by `status = 'ready'`.
-- Tasks of a job that is not `queued`/`running` are never claimed.
-- The API inserts only `register`. `register`'s hook adds `segment`, `split` and `report`, and
-  `split` fans out the section tasks.
+- **One task at a time** per worker process. Tasks are claimed **oldest job first**, so booklets are
+  processed in upload order: a later booklet waits until the earlier one has nothing left to run.
+  Several workers could share the queue safely, but production runs one.
+- Only tasks of `queued` / `running` jobs are claimed. An idle worker checks for work every 2 s.
+- **Heartbeat:** the worker records it is alive every 30 s. The API reports the worker **offline**
+  when that heartbeat is more than **90 s** old (or was never written). The UI then shows "Worker
+  offline" on active jobs.
+- **Leases:** a claimed task is leased for 10 minutes, renewed by the heartbeat. A task whose lease
+  expires (worker crashed or was killed) goes back to the queue; after **3** expired attempts it
+  fails and is flagged needs review. A stage that *reports* a failure is never retried automatically.
+- **Shutdown:** SIGTERM/SIGINT finish the current task, then exit.
+- **On start:** hands back expired tasks, re-derives every unfinished job's status, and re-runs any
+  finished task whose working files were lost (e.g. after a redeploy).
+- **Around the stages** the worker also:
+  - after Read PDF: records the page count and file hash, and queues the booklet-level tasks
+  - after Find papers: reads each paper's metadata from its cover with Claude
+    ([ai-labelling.md](./ai-labelling.md)); a failed call falls back to the filename, then to blank
+    metadata, and never fails the task
+  - after Assemble: uploads the review page images, stores the proposal, run summary (timings,
+    warnings, needs-review) and a small debug bundle on the job, creates one record per proposed
+    paper and runs answer matching ([qa-pairing.md](./qa-pairing.md)); skipped if the job was
+    cancelled meanwhile
+- **Scratch folder** (local disk, per job) is a cache. It is deleted once Assemble is done; review,
+  confirm and "Handle manually" read only S3 and the database. A `failed` job keeps its folder so
+  Retry re-runs only what failed.
 
-**Recording a task:** status, duration, warnings, `needs_review`, reason or error, and the
-traceback. The outcome and any fan-out tasks are recorded in one transaction. This is refused if the
-task's lease was lost.
+## Auto import page
 
-**Leases and liveness:**
-- A claim leases the task for 10 min. Every 30 s the lease and the `worker_heartbeat` row are
-  refreshed.
-- Expired leases go back to `ready`, or `failed` after 3 attempts.
-- An idle worker polls every 2 s.
+`/admin/import/auto`. The import area has three tabs — Auto import, Review queue, Manual import —
+showing live counts of uploads in flight and jobs ready for review. `/admin/import` opens Auto
+import, or Manual import when one is in progress in this tab.
 
-**Shutdown:** SIGTERM/SIGINT finish the current task, then exit.
+**Drop zone**
+- Drop PDFs or whole folders (walked recursively), or use **Choose files** / **Choose folder**.
+- Non-PDFs and macOS `._*` files are ignored and counted. Folder contents queue in path order.
+- Never locks: more files can be added while earlier ones upload. A status line says how many were
+  added, skipped as duplicates (same name, size and modified time already queued) or ignored.
 
-**Hooks around stages** (`app/worker/edges.py`; `ingestion/` knows nothing of S3 or the DB):
+**Upload queue**
+- Each PDF is an entry; at most **3** upload at once, the rest wait.
+- Waiting entries: **Remove** (or **Remove N waiting uploads** for all). Uploading: progress bar and
+  **Stop** (aborts and cancels the half-made job). Failed: the error, **Retry upload** (a fresh job)
+  and **Remove**. Any upload error cancels its job.
+- Uploads continue while the admin moves to other pages; leaving the site mid-upload asks first;
+  signing out stops them. A finished upload leaves the queue and appears as a job.
 
-| When | Hook does |
-|---|---|
-| Before `register` | Downloads `source.pdf` into scratch if missing; validates the PDF (above). |
-| After `register` | Stores `page_count` and `sha256`; adds the job-level tasks. |
-| After `segment` | Extracts each paper's metadata from its cover into `report.paper_metadata[key]` ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)). A failure never fails the task. |
-| After `report` | Uploads review images to `{prefix}pages/`. Stores the proposal, the run summary (timings, warnings, `needs_review`) and the debug bundle (`segments.json` + `ingest.json` → `ingest_job.debug`). Upserts `ingest_paper` rows and runs matching, all in one transaction. A job cancelled meanwhile gets no upload. |
-| After `report` is recorded done | Deletes the job's scratch folder, unless the job is `failed`. |
+**Processing board**
+- The upload queue's entries, then every job in `awaiting_upload`, `queued`, `running` or `failed`.
+- Counts above it (uploading, queued, running, failed) and a link to the review queue with the
+  number of jobs ready.
+- Each job row shows:
+  - filename (click to open the job detail), page count, warnings, age badge
+  - a step tracker — Upload → Read PDF → Find papers → Split → Extract questions → Assemble — green
+    behind, blue in progress, red where it failed
+  - a caption ("Extract questions · 5/9 tasks", "Waiting for the worker", "Failed at Read PDF"),
+    a progress bar while running, and the failure reason
+  - "Worker offline" on an active job when the heartbeat is stale; a banner says the same
+  - **Retry** (failed jobs) and **Cancel** (asks first)
+  - "Upload not finished" for an `awaiting_upload` job started in another tab or session
+- **Finished while you were here:** jobs that reached `review_ready` while the page was open, each
+  with a Review link; dismissable.
+- Polls every 3 s while anything uploads or runs, otherwise every 15 s (so other admins' jobs
+  appear). Polling pauses while the tab is hidden and catches up when shown.
 
-**Scratch** (`$INGEST_SCRATCH_DIR/{job_id}/`, default `/tmp/ingest`) is a cache:
-- It is deleted once `report` is recorded done. Review, confirm and `manual-pages` read only S3 and
-  the DB.
-- A `failed` job keeps it, so Retry re-runs only the failed tasks.
-- Lost scratch (a redeploy): the source is re-downloaded and missing artefacts are re-run on start.
-  `review_ready` jobs are never revalidated.
+**All jobs**
+- Every job, settled ones included, newest first: filename, status, failure reason, created time,
+  age badge, and **Review** (`review_ready`), **Retry**, **Cancel** where allowed.
+- **Age badge** on unsettled jobs: "waiting N days" / "waiting today" since upload; amber after
+  **14 days**.
+- Filters, combinable: **Awaiting review** (`review_ready` + `failed`), **Unmatched answers** (a
+  pending answer-only paper linked to no question paper), and a search box taking a job id (UUID) or
+  a numeric paper id (finds the job that created that paper).
+- **Job detail:** the job id with **Copy**, and every task with stage, section, status (and needs
+  review), duration, warnings, reason or error, plus a collapsible traceback for a failed task.
+  Refreshes with the poll.
 
-**Memory:** pages are rasterised one at a time, and review images are read from disk only as they
-upload. The container is capped at 1 CPU / 6 GB.
+## Review queue
 
-**Env:**
+`/admin/import/review`: every `review_ready` job, **oldest first**. Polled every 10 s, so jobs
+appear without a reload; ones that arrive while the page is open are tagged **New**. Failed jobs are
+not here; they stay on the Auto import board.
 
-| Variable | Purpose |
-|---|---|
-| `INGEST_SCRATCH_DIR` | Scratch root (default `/tmp/ingest`). |
-| `INGEST_OCR_COMMAND` | Tesseract command. Unset means OCR is off. |
-| `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` | Segment-stage models. |
-| `INGEST_RECONCILE_DELETE` | Lets the reconciler act (below). |
-| `INGEST_FIXTURES_DIR` | Development only: `<filename>.segments.json` plans used instead of the API. |
-| `WORKER_VERSION` | Recorded on the heartbeat. |
+Each card shows:
+- filename and **Review**, age badge, page count, papers and how many are still to decide, warnings,
+  and "Pages flagged for a closer look" when a task needs review
+- one line per proposed paper:
+  - Questions / Answers and its key (`q1`, `a1`)
+  - its metadata in words (school · year · level · subject · exam type · paper no.), naming the
+    missing fields, or "No details read from the cover"; a school typed as new reads "Name (new)"
+  - pairing state (answer-only: linked / matching paper found / needs matching / not matched;
+    question paper: "Answers linked from another upload") and, for a question paper its own booklet
+    only partly answers, "Q5–Q7 have no answers"
+  - **Match** on a pending paper that needs a partner, opening the "Match this paper" popup
+    ([qa-pairing.md](./qa-pairing.md))
+  - decided papers greyed with their outcome
+- **Only jobs with unmatched answers** narrows the list.
+
+## Review page
+
+`/admin/import/jobs/:jobId/review`, from the review queue or All jobs. The header links back to the
+queue and on to the **next job** (the oldest other one waiting). It opens on the first undecided
+paper.
+
+- **Paper tabs** when the booklet holds several papers (`q1 / a1`, or "Answers a1" for an
+  answer-only paper), each showing its outcome once decided.
+- **Page strip:** thumbnails; a page flagged by the pipeline has an amber border and its reason as a
+  tooltip and banner.
+- **Page view:** question rectangles in blue, answer rectangles in green, unmatched answers (orphans)
+  in grey dashed.
+- **Question list:** each question with its number, flags, and "(no answer)" when it has no answer
+  box. Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
+  boxes are counted with "They are not imported."
+- **Sections not extracted** (failed or unroutable sections) are listed with reason and page range.
+  **Handle manually** cuts that page range out of the booklet into the
+  [Manual import](./manual-import.md) wizard, with metadata pre-filled from the job (no new Claude
+  call), and switches to it. This is how a booklet whose questions could not be located is finished.
+- A decided paper is read-only.
+
+### Editing
+
+Corrections to the proposal's rectangles and question numbers. Pages, paper labels, the list of
+sections not extracted and warnings cannot be changed.
+
+- **Select** a box by clicking it; drag it to move, drag an edge handle to resize. Boxes stay on the
+  page and at least 4 pt in each direction.
+- The **Selected box** bar names the box, offers **Delete box**, and for an answer box a **Belongs
+  to** menu: move it to another question, or to "No question" (an orphan, not imported). An orphan
+  can be given to a question the same way. Delete/Backspace deletes; Esc deselects.
+- **Draw question box** / **Draw answer box** (answer-only papers have only the latter), then drag on
+  the page. One box per press; Esc cancels. Where it goes is shown first:
+  - with a question selected: added to that question
+  - otherwise a question box starts a new question numbered max + 1; an answer box becomes an orphan
+    (in an answer-only paper, a new answer numbered max + 1)
+- **Number field:** a duplicate, blank or non-positive number is refused with the reason.
+- **Merge with previous:** joins the question into the one above, keeping that one's number.
+- **Split before the selected rectangle**, or **split the selected rectangle in half**: the first
+  part keeps the number and all answer boxes; the second gets max + 1 and no answers.
+- Deleting a question's last question box deletes the question; its answer boxes become orphans.
+- **Saving:** edits save automatically 800 ms after the last change and on leaving the page. The
+  header shows Saving… / Saved / Not saved (with the reason) and "edited". The generated proposal is
+  kept underneath, but there is no "reset to original".
+- Edits are accepted only while the job is `review_ready`, and are refused whole if any rule breaks:
+  a box off its paper's pages or outside the page, a box with no area, a repeated or non-positive
+  question number, or a question with no question box (except in an answer-only paper).
+
+### Metadata sidebar
+
+Shown for question papers (an answer-only paper gets only the Pairing block and **Skip this
+paper**).
+
+- Subject, stream, level, school, exam type, year, paper number and **Premium** (ticked by
+  default), pre-filled from the metadata read from that paper's cover.
+- **School** is a type-to-search box:
+  - when the cover named a school that matches none, it is shown in amber as "*Name* — not in the
+    list", the closest existing names (by spelling likeness) are listed first, and **Confirm** stays
+    disabled with "Pick a school: “Name” is not in the list."
+  - its last option is **Use “typed text” as a new school** (not offered when the text equals an
+    existing school's name, in any case). The school is created only when the paper is confirmed
+    ([qa-pairing.md](./qa-pairing.md)).
+- A question paper that would be confirmed partly answered shows "Q5–Q7 have no answers. Add them
+  with the answer-box editor, or confirm anyway." Confirm stays enabled.
+- A paper that needs or has a partner shows the Pairing block (**Match this paper…**, Unmatch,
+  "Not this one"): [qa-pairing.md](./qa-pairing.md).
+- Sidebar edits save in the background (800 ms debounce) while the paper is pending, and re-run
+  matching. Best effort: Confirm sends the final values anyway.
+
+## Deciding each paper
+
+Every proposed paper ends with one outcome: **confirmed**, **skipped** or **attached**. A paper is
+identified by its key: its question label (`q1`), else its answer label (`a1`), else `paper{n}`.
+
+**Confirm** (question papers)
+- Needs every metadata field and a school (picked or typed as new). Refused when the job is not
+  `review_ready`, the paper is already decided, the stream and level belong to different school
+  levels, the paper has no questions (skip it instead), or it is answer-only (attach or skip it).
+- Each rectangle of the saved proposal is cropped from the booklet at 300 dpi and standardised like
+  any page image ([DATA_MODEL.md](../DATA_MODEL.md)). Question boxes become question pages and answer
+  boxes answer pages, in order. **Orphan answers are not imported.**
+- The paper, its questions and pages, its provenance ([manage-papers.md](./manage-papers.md#provenance))
+  and the paper's outcome commit together; if anything fails nothing is kept. Images reach permanent
+  storage before the commit; temporary crops are removed after it.
+- A double click cannot create two papers: the second gets an "already confirmed" error.
+- A question paper linked to a pending answer-only paper (from this booklet or another) brings that
+  paper's answers in too, and records it `attached`
+  ([qa-pairing.md](./qa-pairing.md)). The page then says which answers were attached and which
+  matched no question.
+- Then the [topic review](./ai-labelling.md) step opens on the new paper. **Skip topics (set them
+  later in Manage Papers)** keeps the paper.
+
+**Skip**
+- Asks first; the paper is not imported. Same job/paper rules as Confirm.
+- Skipping a linked paper releases the link; its partner is matched afresh.
+
+**Attach** (answer-only papers): adds the answers to a paper already in the bank. See
+[qa-pairing.md](./qa-pairing.md).
+
+**Settling**
+- The decision that leaves no paper pending sets the job to `confirmed` and deletes its S3 files.
+  Confirming a linked question paper can settle the answer paper's job too.
+- After the last decision the page moves to the next job in the queue, or back to the queue.
+- A job whose proposal has no papers can only be cancelled.
 
 ## Storage and retention
 
 | Where | Holds | Removed |
 |---|---|---|
-| `ingest/{job_id}/source.pdf`, `ingest/{job_id}/pages/pNN.webp` | Upload, review images | When the job settles. There is **no** bucket lifecycle rule on `ingest/`. |
-| `tmp/ingest/{job_id}/…` | Legacy jobs from before the move | When the job settles. |
-| `tmp/{uuid}/…` | Confirm crops, Manual-import pages, page-edit uploads | After commit; the bucket rule expires `tmp/` after 2 days. |
-| Scratch folder | Pipeline artefacts | After `report`, or by the sweep. |
-| `ingest_job.debug` | `segments.json` + `ingest.json` (a few KB) | Never. |
-| `ingest_job`, `ingest_task`, `ingest_paper`, `ingest_event` rows | State and audit | Never. |
+| S3 `ingest/{job_id}/` | Uploaded booklet, review page images | When the job settles or is cancelled. No bucket lifecycle rule. |
+| S3 `tmp/ingest/{job_id}/` | Same, for jobs from before the `ingest/` layout | Same. |
+| S3 `tmp/…` | Confirm crops, Manual import pages, Manage Papers uploads | After their commit; the bucket expires `tmp/` after 2 days. |
+| Worker scratch folder | Pipeline working files | After Assemble, or by the daily sweep. |
+| Job record | Proposal, edits, report, cost, debug bundle | Never. |
+| Task, paper and event records | State and audit | Never. |
 
-- **Pending jobs never expire.** They stay until confirmed, skipped, attached or cancelled.
-- **Invariant:** a settled job has an empty prefix.
-- **Prefix derivation:** always from the stored `source_key`, never rebuilt from the id, so legacy
-  `tmp/ingest/` jobs keep working.
+- A job's S3 location is always taken from its stored source key, never rebuilt from its id, so
+  older jobs under `tmp/ingest/` keep working.
 
-**Daily sweep** (claimed atomically via `worker_heartbeat.last_sweep_at`, so it runs at most once a
-day across workers and restarts):
-1. Removes the scratch folders of jobs `cancelled` or `confirmed` more than a day ago (regardless of
-   the delete flag).
+**Daily sweep** (runs at most once a day across workers and restarts):
+1. Deletes scratch folders of jobs cancelled or confirmed more than a day ago.
 2. Runs the reconciler.
 
 ### Reconciler
 
-**Report-only unless `INGEST_RECONCILE_DELETE=true`.** That flag gates every action: deleting,
-marking jobs failed, and cancelling uploads.
+Compares the database with S3 and the scratch disk. **Report-only** until
+`INGEST_RECONCILE_DELETE=true` ([DEPLOYMENT.md](../DEPLOYMENT.md)); that flag gates every action.
 
-| Check | Rule | Grace | Action when enabled |
+| Check | Finds | Grace | Action when enabled |
 |---|---|---|---|
-| `orphan_job_prefix` | `ingest/{id}/` or `tmp/ingest/{id}/` whose job is missing or settled | 1 day after settle | delete |
-| `stale_temp` | Object under `tmp/` (except `tmp/ingest/`) | 24 h | delete |
+| `orphan_job_prefix` | Job files whose job is missing or settled | 1 day after settling | delete |
+| `stale_temp` | Anything under `tmp/` (except `tmp/ingest/`) | 24 h | delete |
 | `orphan_scratch` | Scratch folder whose job is missing or not `queued`/`running`/`failed` | 1 day | delete |
-| `orphan_paper_image` | Key under `papers/` that no `question_page.image_key` references | 7 days | delete |
-| `stuck_job` | `queued`/`running` job with no live lease and no activity | 6 h | mark `failed` (reason `stuck`), its ready/running tasks too, so Retry works |
-| `abandoned_upload` | `awaiting_upload` job | 1 h | cancel and delete the partial object |
-| `missing_source` | Pending job whose source object is gone | — | report only, always |
+| `orphan_paper_image` | Image under `papers/` no question page uses | 7 days | delete |
+| `stuck_job` | `queued`/`running` job with no live lease and no activity | 6 h | mark it and its ready/running tasks `failed` ("stuck: …") so Retry works |
+| `abandoned_upload` | `awaiting_upload` job | 1 h | cancel it, delete any partial upload |
+| `missing_source` | Pending job whose booklet is gone from S3 | — | report only, always |
 
-- **Each finding** `{kind, key_or_path, job_id?, age, action}` is a WARNING log line plus an
-  `ingest_event` (`kind = reconcile`). `job_id` is NULL when there is no job row.
-- **`action` values:**
-  - dry run: `would_delete`, `would_mark_failed`, `would_cancel`
-  - enabled: `deleted` (or `delete_failed`), `marked_failed`, `cancelled`
-  - always: `report_only`
-- **A failing check** is logged and never stops the others.
-- **Flip the flag** after a week or two of sensible reports in production.
+- Each finding is a WARNING log line and an event (`reconcile`), with its action: `would_delete`,
+  `would_mark_failed`, `would_cancel` (dry run); `deleted`, `delete_failed`, `marked_failed`,
+  `cancelled` (enabled); `report_only`.
+- A failing check is logged and never stops the others.
 
 ## Observability
 
-- **Logs:**
-  - JSON on stdout. Every line logged while working on a job carries `job_id` (plus `section`,
-    `stage`, `task_attempt` inside a task).
-  - API lines carry `request_id` (echoed as `X-Request-ID`).
-  - `docker logs <container> | grep <job-uuid>` finds a job across both containers. See
-    [ARCHITECTURE.md](../ARCHITECTURE.md#cross-cutting-conventions) and
-    [DEPLOYMENT.md](../DEPLOYMENT.md#logs).
-- **Lifecycle log lines** (INFO, one each, with `job_id`):
-  - `ingest_job/created` (filename, size, user), then `ingest_job/registered` (sha256, page count)
-  - `ingest_task/claimed`, `ingest_task/finished` (status, duration)
-  - `ingest_job/proposal_stored`, `proposal_saved`
-  - `paper_confirmed`, `paper_skipped`, `paper_attached`, `retry`, `cancelled`
-- **Stage failures** are logged at ERROR with the exception.
-- **Tracebacks:** the last 4 KB of a raised stage's traceback is stored on the task and shown in
-  the job detail. It is cleared on re-claim or retry. A failure a stage *reports* (rather than
-  raises) has no traceback.
-- **Event history (`ingest_event`):** one row per transition, written in the transaction of the
-  change. Kinds:
-  - `created`, `task_claimed`
-  - `task_finished` (status, error, warnings, duration, traceback; also for lease-expiry failures)
-  - `retry`, `cancelled`, `proposal_edited`
-  - `paper_confirmed`, `paper_skipped`, `paper_attached`, `paper_deleted`
-  - `reconcile`, and historical `expired`
-  - Task rows are overwritten on re-claim; every attempt stays in the history.
-- **Claude cost:**
-  - Every Claude call for a job (segmentation, per-paper metadata) logs its Anthropic request id
-    (`anthropic_request_id`), model, tokens and `cost_usd`.
-  - It also adds to `report.cost` (`calls`, `input_tokens`, `output_tokens`, `cache_write`,
-    `cache_hit`, `cost_usd`), under a row lock so concurrent calls are never lost.
-  - Prices: `app/logger.py`.
+Nothing below is shown in the UI except task details in the job detail; read it from the logs or the
+database.
 
-## Testing seams
-
-- `get_object_store` → `fake_object_store` fixture.
-- `get_metadata_extractor` → `fake_metadata_extractor` fixture.
-- `get_pipeline_runner` → a factory with canned stages (`tests/test_worker.py`).
-- `WORKER_TEST_DATABASE_URL` runs the worker tests on a real Postgres (SKIP LOCKED is
-  Postgres-only).
+- **Logs:** JSON lines on stdout from both containers. Every line logged while working on a job
+  carries its `job_id` (plus section, stage and attempt inside a task); API lines carry a request id.
+  Grepping the logs for a job's UUID finds its whole history ([DEPLOYMENT.md](../DEPLOYMENT.md)).
+- **Lifecycle lines** (INFO, one each): job created, registered (hash, page count), paper metadata
+  read, task claimed / finished (status, duration), proposal stored, scratch released, proposal
+  saved, paper confirmed / skipped / attached / deleted, retry, cancelled. Stage failures log at
+  ERROR.
+- **Tracebacks:** the last 4 KB of a crashed stage's traceback is kept on its task (shown in the job
+  detail) until the task is re-run. A failure a stage reports, rather than crashes on, has none.
+- **Event history:** one event row per transition, written with the change itself: created, task
+  claimed, task finished (including lease-expiry failures), retry, cancelled, proposal edited, paper
+  confirmed / skipped / attached / deleted, reconcile (and historical `expired`). Task rows are
+  overwritten on re-run; the events keep every attempt.
+- **Claude cost:** every Claude call made for a job (segmentation, per-paper metadata) logs its
+  request id, model, tokens and USD cost, and adds to a running per-job total (calls, tokens, cache
+  writes/hits, cost) kept on the job record. Concurrent calls never lose each other's update.

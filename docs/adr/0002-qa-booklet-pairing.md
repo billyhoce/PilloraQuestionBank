@@ -14,7 +14,7 @@ as two jobs. The pipeline handles one booklet at a time, so the two jobs know no
   although a booklet can hold several papers.
 - The `paper` table has no unique constraint, so the same paper can be imported twice.
 
-The full plan is in `docs/plans/ingest-hardening-and-qa-pairing.md` (Phase 4).
+Later refinements are under [Follow-up decisions](#follow-up-decisions).
 
 ## Decision
 
@@ -69,3 +69,32 @@ rather than forcing them into one job.
 - **Always `replace` (or always `append`) on attach.** Replace loses answers already attached;
   append duplicates them. Hence replace only when there is nothing to lose, otherwise ask.
 - **Match on school, year and paper number alone.** Ambiguous across subjects, levels and streams.
+
+## Follow-up decisions
+
+Taken while building the pairing UI (#82–#93); current behaviour is in
+[features/qa-pairing.md](../features/qa-pairing.md).
+
+- **Unambiguous pending pairs are linked, not just proposed.** A link writes nothing to the bank
+  until the question paper is confirmed, so it is cheap to undo; a bank paper is only ever proposed.
+- **Pair from either side, and within one booklet.** A question paper with no answers can search
+  too, and two papers of one booklet the pipeline failed to pair can be linked. A question paper never
+  pairs with a bank paper: that pair is a duplicate.
+- **Reject one pair, not the paper.** A blanket "unlinked" state blocked all automatic matching
+  for both papers until their details changed, and a wrong bank proposal could not be dismissed.
+  Unmatch / "Not this one" record only that pair. Re-pairing by hand releases the old link without
+  rejecting it.
+- **Rank, don't filter.** The manual search lists exact matches, else the best by number of agreeing
+  fields with differences highlighted, so near misses stay visible. Comparison is exact; fuzzy
+  matching lives only in the school combobox's suggestions.
+- **Answers are all or none, enforced by warnings.** A paper's answers come from one source: a
+  question paper with any answers of its own cannot take another booklet's, and a fully answered bank
+  paper is not a target. Everything else warns and lets the admin go ahead. Attach asks append or
+  replace only for a partly answered bank paper, the one case with something to lose.
+- **An answer mapping table between booklets.** Numbering does not always agree (Section B restarting
+  at 1, answers numbered `3a`). The mapping belongs to one pair and is discarded when the pair
+  changes. Answers inside one booklet are fixed with the answer-box editor instead.
+- **New schools are created on confirm.** A skipped job or a typo then leaves nothing in the
+  reference list. Only school accepts new values; the other fields still need the Reference page.
+- **No detaching answers after confirm.** A wrong attach is rare enough to fix by hand in Manage
+  Papers.

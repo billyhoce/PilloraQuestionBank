@@ -1,236 +1,127 @@
 # AI Labelling
 
-**Scope:** All Anthropic Claude API usage in `app/` — the per-part split + topic/marks labeller and
-the paper metadata extractor — plus the parts write path and the review UI that consume them. The
-booklet segmentation call lives in the `ingestion/` package
-([ingester/README.md](../../ingestion/ingester/README.md)). The `QuestionPart` schema is in
-[DATA_MODEL.md](../DATA_MODEL.md#questions-have-parts); the import steps around this one are in
-[ingestion.md](./ingestion.md) and [auto-import.md](./auto-import.md).
+Claude (Haiku 4.5) suggests, per question, the split into printed parts with each part's topics and
+marks, and per paper, its metadata (school, year, subject, level, stream, exam type, paper number).
+Admins review and correct every suggestion before it is saved.
 
-## Part splitting & topic auto-labeling
+**Code:** `app/ai/`, `app/routes/ingest.py`, `app/services/question_parts.py`,
+`app/services/ingest_jobs.py`, `app/worker/edges.py`, `app/pdf/image_processing.py`,
+`frontend/src/features/import/TopicReview.jsx`, `frontend/src/components/PartsEditor.jsx`,
+`frontend/src/features/import/topicUtils.js`, `frontend/src/features/papers/`
+**Related:** [DATA_MODEL.md](../DATA_MODEL.md), [auto-import.md](./auto-import.md),
+[manual-import.md](./manual-import.md), [manage-papers.md](./manage-papers.md),
+[ingestion-pipeline.md](./ingestion-pipeline.md) (booklet segmentation, the other Claude call)
 
-One call does both jobs: it splits a question into its printed parts and labels each part with the
-topics it tests and the marks it is worth. **Images are never split** — a question is one set of page
-images covering all its parts, so the split exists only in the labelling.
+## Parts, topics and marks
 
-### Trigger
-`POST /api/import/ai-topics`, **one question per request**, admin-only. The browser drives the
-fan-out — the import review screen fires one request per question in the paper, staggered by a
-client-side rate-limited queue. The same endpoint backs "Re-run AI" in Manage Papers.
+A question is one set of page images; its **parts** — (a), (b), (a)(i) … — exist only as labelling.
+Each part has a label, its own marks and its own topics/subtopics. A question's marks total is
+**derived** as the sum of its parts' marks, and is empty when no part carries marks.
 
-The route fetches the question's topic/subtopic list scoped to the paper's `subject_id` +
-`stream_id`, downscales the question's page images for the call (`downscale_for_ai`, capped at 768 px
-long side), and calls Claude. It returns
-`{"parts": [{label, marks, selections: [{topic_id, subtopic_id}]}]}` — the suggested split *and*
-labelling — for review. **It persists nothing.**
-
-Upstream failures map to distinct statuses so the UI can say something useful: **429** rate limited,
-**503** API unavailable, **502** the response was truncated mid-tool-call. All three are retryable
-per question.
-
-### Model
-**Claude Haiku 4.5** (`claude-haiku-4-5-20251001`). Vision input required; only the question-type
-page images are sent — marks are printed on the question paper, not the answer key.
-
-### Prompt strategy
-The system block lists the valid topics/subtopics for the question's (subject, stream) as
-**positional codes** — `"1.1"`, `"2"` — not database ids. `_build_options` renders the list and keeps
-a `code_map` from code back to `(topic_id, subtopic_id)`, so Claude never sees or invents a DB id,
-and any code it returns that isn't in the map is dropped.
-
-Topics that have subtopics show only their subtopic lines (the subtopic is what gets picked); topics
-without subtopics show one bare line.
-
-The prompt's load-bearing rules beyond topic selection:
-
-- Split the question into parts exactly as the paper labels them, in printed order.
-- **`(a)(i)` and `(a)(ii)` are two separate parts** — a question with `(a)(i)`, `(a)(ii)` and `(b)`
-  has exactly three parts. Without this stated explicitly the model groups the roman numerals under
-  one `(a)`.
-- A question with no lettered parts has exactly one part, with an empty label.
-- Never invent a part that isn't printed.
-- **Do not sum marks.** Report the marks printed for each part; if a single total is printed for the
-  whole question and can't be attributed, put it on the first part and use `null` for the rest —
-  that keeps the question's derived total correct so it stays selectable for marks-target
-  generation.
-
-### Response schema
-Forced tool use (`tool_choice: {type: "tool", name: "label_parts"}`) rather than free-text JSON, so
-the shape is guaranteed:
-
-```json
-{
-  "parts": [
-    { "label": "(a)(i)",  "selected_codes": ["1.1"], "marks": 2 },
-    { "label": "(a)(ii)", "selected_codes": ["1.2"], "marks": 3 },
-    { "label": "(b)",     "selected_codes": ["9"],   "marks": 5 }
-  ]
-}
+```mermaid
+flowchart LR
+  A[Paper confirmed] --> B[Browser queues one AI call per question]
+  B --> C[Claude: parts + topics + marks]
+  C --> D[Admin edits in Parts editor]
+  D --> E[Save whole paper]
+  E --> F[(Parts replaced wholesale)]
 ```
 
-`max_tokens` is 1500 — a multi-part question emits one object per part.
+### When it runs
 
-**A truncated response is an error, not a result.** If `stop_reason` comes back `max_tokens` the tool
-input is partial — some parts missing, or none parsed at all — and a question cut off after two of
-its four parts would otherwise be saved as a two-part question with nothing to indicate the loss.
-`label_question` raises `TruncatedResponseError`, which the route turns into the **502** above.
+- **After a paper is confirmed** (manual or auto import), the review step labels every question of
+  the paper. An answer-only paper is never confirmed as a paper, so it never reaches this step (its
+  answers attach to a question paper — see [qa-pairing.md](./qa-pairing.md)).
+- **Manage Papers:** "Re-run AI" on a single question; and when an admin changes a paper's subject or
+  stream (after a confirm warning that this clears all topic labels), every question is re-labelled.
+  A question whose re-label fails keeps its existing parts on screen.
+- Admin-only, **one question per call**. The browser fans out the calls, starting at most one every
+  1.3 s. Nothing is saved by the call itself — it only returns a suggestion.
 
-The backend maps codes back to ids. Selections are de-duplicated **within** a part, not across parts:
-two parts of one question may legitimately test the same subtopic. An empty `parts` array on an
-*untruncated* response falls back to a single blank part, preserving the every-question-has-a-part
-invariant.
+### What the model sees and returns
 
-### Prompt caching
-The valid-topics list is identical for every question in a given (subject, stream) — and a single
-paper is always one (subject, stream) — so the same cached system block is reused across every
-question in the paper. The block is marked `cache_control: { type: "ephemeral" }`; cache hits are
-dramatically cheaper than fresh tokens.
+- Only the question's **question-type pages** (marks are printed on the question paper, not the
+  answer key), downscaled to a 768 px long side for the call; stored images are untouched.
+- The list of valid topics/subtopics for the paper's **subject + stream**, as short numbered codes
+  (`1.1`, `2`). Topics with subtopics offer only their subtopics; topics without offer the bare topic.
+  Codes not in the list are discarded, so the model can never invent a topic.
+- Rules the prompt enforces:
+  - Split exactly as printed, in order; never invent a part.
+  - `(a)(i)` and `(a)(ii)` are **separate parts** — (a)(i), (a)(ii), (b) is three parts.
+  - A question with no lettered parts is **one part with an empty label**.
+  - **Report marks per part; never sum.** A single total printed for the whole question that can't
+    be attributed goes on the first part (others empty), so the question's total stays correct and
+    it remains selectable for marks-target generation.
+- Output is forced into a fixed structure: per part a label, marks (or none) and topic codes.
+- Selections are de-duplicated **within** a part only; two parts may test the same subtopic.
+- An empty answer becomes one blank part — every question has at least one part.
+- The topic list is prompt-cached: all questions of one paper share one subject + stream, so the
+  cached list is reused across the paper.
+
+### Failures (retryable per question)
+
+| Situation | Admin sees |
+|---|---|
+| Response cut off by the output limit (some parts would be missing) | "AI response was cut off — retry". A truncated split is **never** returned as a result. |
+| Anthropic rate limit | "rate limited — retry in a moment" |
+| Anthropic unavailable / API error | "temporarily unavailable — retry" |
+
+## Review and save
+
+- The review step shows each question's images beside a **Parts editor** pre-filled with the AI
+  suggestion, with per-question status (Labeling… / Suggested / error) and a **Re-run AI** / **Retry**
+  button. **Confirm & Save Topics** is disabled while any question is still labelling.
+- The Parts editor (shared by the import review step and the Manage Papers question editor), per part:
+  label, marks, topic/subtopic chips with a picker. Admins can **add and delete parts**; deleting the
+  last part leaves one blank part. There is no question-level marks field — a live **Total** shows
+  the sum (or "—" when no part has marks).
+- Leaving the step:
+  - Manual import: **Cancel import** deletes the just-confirmed paper and its pages.
+  - Auto-import review: **Skip topics** keeps the paper; topics can be set later in Manage Papers.
+
+### Save rules
+
+- Saving replaces the paper's questions' parts **wholesale**, in on-screen order. The same write
+  path backs the import save and the Manage Papers question editor, so their rules are identical.
+- Every question must belong to the paper; every topic must belong to the paper's subject + stream;
+  every subtopic must sit under its topic.
+- All questions are validated **before any is written** — one bad question rejects the save and
+  leaves the whole paper's existing labelling intact.
+- A question sent with no parts gets one blank part.
+- Part labels are capped at **32 characters**; longer is rejected, never truncated.
 
 ## Paper metadata extraction
 
-**Trigger:** two callers share one extractor (`extract_paper_metadata` in
-`app/ai/filename_extractor.py`).
+Suggests a paper's school, year, subject, level, stream, exam type and paper number, to pre-fill the
+metadata form.
 
-- **Auto-import (ingest worker):** the `segment` task's `after_segment` hook runs it **once per
-  paper** of the booklet (per question/answer segment pair, as the proposal pairs them), and stores
-  each result in `ingest_job.report["paper_metadata"][paper_key]`, where the key is the paper's
-  question label (`q1`), or its answer label (`a1`) for an answer-only paper — the same key as the
-  proposal's paper (both come from `ingester.segments.pair_segments`). The paper's **cover pages**
-  (the segment's `cover_pages`) are cut out of the booklet and sent as a PDF `document` block;
-  with none, the first page of the section (the answer section for an answer-only paper). The job's
-  filename goes along as a hint. The review page pre-fills each paper from its own entry. Jobs from
-  before this have one `report["filename_metadata"]` (a filename-only guess for the whole booklet)
-  and the review page falls back to it for a paper with no entry.
-- **Manual import (PDF upload):** filename only, no cover; the frontend pre-fills the sidebar.
+- **Auto import:** after the booklet is segmented, runs **once per paper** in the booklet (each
+  question/answer pairing, including answer-only papers). Sends that paper's **cover page(s)** as a
+  PDF — or the section's first page when it has no cover — plus the uploaded filename as a hint.
+  The review page pre-fills each paper from its own result; older jobs carry a single filename-only
+  guess for the whole booklet, used as the fallback.
+- **Manual import:** filename only, no cover.
+- The model must pick names from the existing reference lists (schools, subjects, levels, streams,
+  exam types). Each name is then matched to a reference record by **exact, case-insensitive name**;
+  an unmatched field is left blank for the admin.
+- **School exception:** a school not in the list is returned **as printed** (e.g. "Raffles Instn").
+- The **raw names read** (school, subject, level, stream, exam type) are kept beside the matches, so
+  the review page can show a school that matched nothing
+  ([auto-import.md](./auto-import.md)).
+- Any field may be empty when neither cover nor filename says.
+- **Never fails the job:** a failed call with a cover is retried on the filename alone; a failure
+  there stores empty metadata for that paper.
 
-**Model:** **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`), forced tool call, `max_tokens` 512.
-Cost and request ids are recorded through `record_usage` (into the job's `report["cost"]`).
+## Cost
 
-**Prompt:** the cover (when given) plus the filename; ask for school name, year, subject, level,
-**stream**, exam type and paper number. `resolve_metadata` then maps each name to an existing
-reference-table ID (`school_id`, `subject_id`, `level_id`, `stream_id`, `exam_type_id`) by **exact,
-case-insensitive name match** — unmatched fields are left blank for the user to fill.
+Haiku 4.5: $1 / $5 per million input / output tokens; cache writes 1.25× input, cache reads 0.1×.
 
-- **Names come from the lists,** except the school: when the cover names a school that is not in the
-  list, the model gives the name **as printed** (e.g. "Raffles Instn").
-- **The raw names are kept.** The result also carries `extracted`: the school, subject, level,
-  stream and exam type exactly as read (each `null` when none was), resolved or not. It is stored
-  with the ids in `report["paper_metadata"][key]` and returned by the review endpoint, so the review
-  page can show a school that matched nothing ([auto-import.md](./auto-import.md#review-page)).
-  Jobs from before this have no `extracted`, and a failed extraction stores none.
+| Call | Input | Volume / year | Cost / year |
+|---|---|---|---|
+| Part split + topic/marks labelling | question image(s) + cached topic list | ~9,600 questions | ~$10 (≈ $0.001 / question) |
+| Paper metadata | cover page(s) + filename | ~640 papers | < $1 per 100 papers |
 
-```json
-{
-  "school": "Raffles Institution",
-  "year": 2024,
-  "subject": "Mathematics",
-  "level": "Sec 3",
-  "stream": "Express",
-  "exam_type": "EOY",
-  "paper_number": "1"
-}
-```
-
-Any field can be `null` if the cover and filename don't say. The stored result is the ids plus
-`extracted`:
-
-```json
-{
-  "school_id": null, "subject_id": 2, "level_id": 3, "stream_id": 5, "exam_type_id": 4,
-  "year": 2024, "paper_number": "1",
-  "extracted": { "school": "Raffles Instn", "subject": "Mathematics", "level": "Sec 3",
-                 "stream": "Express", "exam_type": "EOY" }
-}
-```
-
- **Failures never fail the job:** a
-failed call with a cover is retried on the filename alone, and a failure there stores empty
-metadata for that paper (the worker also guards the call, so an injected extractor that raises
-yields `{}`).
-
-## Persisting the review
-
-### `POST /api/import/save-topics`
-
-- Accepts `{paper_id, questions: [{question_id, parts: [{label, marks, topic_assignments}]}]}` — the
-  parts the admin confirmed, in printed order.
-- Validates all question ids belong to the paper, and — across *every* question, before writing any
-  of them — that each topic is in scope for the paper's subject/stream and each subtopic sits under
-  its topic. A 422 therefore leaves the whole paper's existing labelling intact.
-- Replaces each question's `QuestionPart` rows wholesale via `set_question_parts`; deleting the old
-  parts cascades to their `QuestionTopic`/`QuestionSubtopic` rows. `part_order` comes from list
-  order. A question sent with no parts gets one blank part.
-- `label` is capped at 32 characters by `PartIn`, matching `question_part.label` — an over-long label
-  is a 422, never a silently truncated row.
-
-### The shared parts write path
-
-`app/services/question_parts.py` is the **single** implementation of "replace a question's parts,
-topics, subtopics and marks". `POST /api/import/save-topics`, `POST /api/papers/{id}/questions` and
-`PUT /api/questions/{id}` all go through it, so validation ordering and dedupe semantics can't drift
-between them:
-
-- `scoped_topic_ids(db, subject_id, stream_id)` — the topics a question on that paper may use.
-- `validate_parts(db, parts, valid_topic_ids)` — pure validation, writes nothing, so a caller can
-  check several questions before touching the DB.
-- `set_question_parts(db, question_id, parts, valid_topic_ids)` — validates, then deletes and
-  re-inserts.
-
-## Review UI
-
-### The review step (`TopicReview.jsx`)
-
-After confirm, the browser fires `POST /api/import/ai-topics` once per question through a
-rate-limited queue (`REQUEST_INTERVAL_MS`, staggering request *starts*) and shows per-question
-progress with a Re-run/Retry button.
-
-An `answer_only` proposal paper (answers uploaded apart from the questions) is never confirmed as a paper, so
-it never reaches this step; its answers are attached to the question paper instead (see
-[qa-pairing.md](./qa-pairing.md)).
-
-For each question it renders the question image(s) beside a `<PartsEditor />` pre-filled with the
-AI's suggested split. The admin can edit any part's label, marks and topics, **add or delete parts**,
-then save the whole paper with `POST /api/import/save-topics`. Marks are entered per part — there is
-no question-level marks field; the editor shows the running total instead.
-
-### `<PartsEditor />` (`src/components/PartsEditor.jsx`)
-
-The single place a question's parts are edited, used by **both** the import review step and the admin
-question editor (`QuestionEditor.jsx`) — the two previously carried near-identical topic-chip +
-combobox blocks.
-
-Per part it renders a label input, a marks input, the selected topic chips with remove buttons, and
-its own `<TopicCombobox />`; below the list sit "+ Add part" and a live total. Because each part
-passes its own `selected` array to the combobox, the same subtopic can be picked on two different
-parts while still being de-duplicated within one. Deleting the last part leaves one blank part —
-every question has at least one.
-
-Its working shape is `{label, marks, selected: [{topic_id, subtopic_id}]}`.
-`src/features/import/topicUtils.js` converts to and from the API: `partsFromApi` (tolerating both the
-detail and editor payload shapes, and always returning at least one part), `partsToPayload`, and
-`partsTotalMarks` (which returns `null` when no part carries marks, matching the backend's `SUM`).
-
-## Cost estimates
-
-Claude Haiku 4.5 is $1.00 / $5.00 per million input / output tokens; cache writes bill at 1.25×
-input and cache reads at 0.1×.
-
-| Call | Model | Input | Volume / year | Cost / year |
-|---|---|---|---|---|
-| Part splitting + topic labeling | Haiku 4.5 (vision) | ~1 image + cached topic list | ~9,600 questions | ~$10 |
-| Paper metadata extraction | Haiku 4.5 (text + cover PDF) | cover page(s) + filename | ~640 papers | small (<$1 per 100 papers) |
-
-Per-question labeling is roughly $0.001 with image input — order of magnitude, verify against the
-logs. Every call logs one structured `<func>/tokens` line (model, token counts, `cost_usd`,
-`anthropic_request_id`) to stdout. For ingest jobs the segmentation and per-paper metadata calls are
-also summed into the job's `report.cost` (see [auto-import.md](./auto-import.md#observability)); the
-question labeller's calls are logged only. Prices live in `app/logger.py`.
-
-## SDK setup
-
-- **Library:** `anthropic` (Python).
-- **Env var:** `ANTHROPIC_API_KEY` (see [DEPLOYMENT.md](../DEPLOYMENT.md#configuration-reference)).
-- **Model IDs:** both calls use `claude-haiku-4-5-20251001`.
-- **Where it lives:** `app/ai/` — one client per use case (`topic_labeler.py`,
-  `filename_extractor.py`).
-- Always enable prompt caching on the topic list block when batching across one paper's questions.
+- Every call logs model, token counts, cost and Anthropic request id.
+- For ingest jobs the segmentation and per-paper metadata calls are also summed into the job's cost
+  ([auto-import.md](./auto-import.md)); question-labelling calls are logged only.
+- API key and model configuration: [DEPLOYMENT.md](../DEPLOYMENT.md).
