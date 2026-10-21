@@ -14,7 +14,7 @@ attaches every proposed paper.
 stage by stage), [qa-pairing.md](./qa-pairing.md) (answer-only papers, attach, matching),
 [manual-import.md](./manual-import.md), [manage-papers.md](./manage-papers.md),
 [ai-labelling.md](./ai-labelling.md), [DATA_MODEL.md](../DATA_MODEL.md),
-[CONTEXT.md](../CONTEXT.md) (job, task, stage, section, proposal),
+[GLOSSARY.md](../GLOSSARY.md) (job, task, stage, section, proposal),
 [ADR 0003](../adr/0003-ingest-queue-storage-retention.md) (why a Postgres queue, direct upload,
 keep-until-settled)
 
@@ -101,8 +101,8 @@ stateDiagram-v2
 - Refused on `awaiting_upload`, `confirmed`, `cancelled`, `expired`, and on any job with a paper
   already decided (a new proposal would orphan that decision).
 - A rejected PDF (see Rules) fails the same way again on Retry.
-- Saved review edits survive a Retry: the review page keeps showing the edited proposal, not the
-  regenerated one.
+- Saved review edits are discarded when a Retry produces a different proposal (they were drawn on
+  the old one); if the regenerated proposal is identical, the edits are kept.
 
 ### Cancel
 

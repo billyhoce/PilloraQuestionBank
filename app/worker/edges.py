@@ -217,6 +217,8 @@ class Edges:
             prefix = job_prefix(job.source_key) + PAGES_DIR + "/"
             for image in sorted(pages.glob("*.webp")) if pages.is_dir() else ():
                 self._objects.put(prefix + image.name, image.read_bytes(), "image/webp")
+            if proposal != job.proposal:
+                job.proposal_edited = None  # edits of the old proposal (before a Retry) would hide this one
             job.proposal = proposal
             job.debug = self._debug_bundle(ctx)
             job.report = {

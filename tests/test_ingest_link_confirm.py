@@ -264,6 +264,29 @@ def test_skipping_a_linked_question_paper_releases_the_answer_paper(
     assert a.matched_ingest_paper_id is None and a.match_status is None
 
 
+def test_attaching_a_linked_answer_paper_elsewhere_releases_the_question_paper(
+    admin_client, db_session, admin_user, fake_object_store, mock_s3, meta, env  # noqa: F811
+):
+    setup, cmeta = env
+    bank = setup()  # another paper ("Change match…" → Attach), keyed apart so it is not proposed
+    bank_id = admin_client.post(
+        f"/api/import/jobs/{bank.id}/confirm", json={**cmeta, "year": 2020, "paper_label": "q1"}
+    ).json()["paper_id"]
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "answers.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    assert prow(db_session, qj, "q1").matched_ingest_paper_id == prow(db_session, aj, "a1").id
+
+    resp = admin_client.post(f"/api/import/jobs/{aj.id}/attach", json={"key": "a1", "paper_id": bank_id})
+    assert resp.status_code == 200, resp.text
+    qq = prow(db_session, qj, "q1")
+    assert qq.matched_ingest_paper_id is None and qq.match_status is None
+    resp = admin_client.post(f"/api/import/jobs/{qj.id}/confirm", json={**cmeta, "paper_label": "q1"})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["answers_from"] is None  # no longer expects the answers that went elsewhere
+
+
 # --- the same booklet (#90): a question paper and an answer-only paper the pipeline did not pair ---
 
 def booklet(db, admin, store, meta, *, answers_meta=None, status="running", filename="booklet.pdf"):

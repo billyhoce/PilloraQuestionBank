@@ -40,6 +40,7 @@ class Fake:
         self.seen: list[tuple[str, str]] = []
         self.on_report = None
         self.plan = PLAN
+        self.proposal = PROPOSAL
 
     def _status(self, ctx):
         with self.factory() as db:
@@ -67,7 +68,7 @@ class Fake:
             self.seen.append(("report", self._status(ctx)))
             (ctx.job_dir / "pages").mkdir(exist_ok=True)
             (ctx.job_dir / "pages" / "p01.webp").write_bytes(b"webp")
-            (ctx.job_dir / "proposal.json").write_text(json.dumps(PROPOSAL))
+            (ctx.job_dir / "proposal.json").write_text(json.dumps(self.proposal))
             (ctx.job_dir / "segments.json").write_text(json.dumps({"sections": ["q1"]}))
             (ctx.job_dir / "ingest.json").write_text(json.dumps({"papers": 1}))
             if self.on_report:
@@ -271,6 +272,30 @@ def test_killed_mid_task_resumes_with_only_unfinished_tasks(setup):
     drain(restarted)
     assert [s for s, _ in fake.seen] == ["segment", "report"]  # register was not run again
     assert job_row(factory, job).status == "review_ready"
+
+
+@pytest.mark.parametrize("regenerated, edit_kept", [(PROPOSAL, True), ({**PROPOSAL, "warnings": ["new"]}, False)])
+def test_retry_drops_saved_edits_only_when_the_proposal_changes(setup, regenerated, edit_kept):
+    from app.services.ingest_jobs import retry_job
+
+    factory, job, _, _, fake, make_worker, _ = setup
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    edited = {**PROPOSAL, "papers": [{"label": "q1", "questions": [{"number": 1}]}]}
+    with factory() as db:
+        db.get(IngestJob, job).proposal_edited = edited
+        report = db.scalars(select(IngestTask).where(IngestTask.job_id == job, IngestTask.stage == "report")).one()
+        report.status, report.fingerprint = "failed", None  # None: its inputs changed, so it re-runs
+        db.commit()
+
+    fake.proposal = regenerated
+    with factory() as db:
+        assert retry_job(db.get(IngestJob, job), db) == 1
+    drain(worker)
+    row = job_row(factory, job)
+    assert row.status == "review_ready" and row.proposal == regenerated
+    assert row.proposal_edited == (edited if edit_kept else None)
 
 
 def test_sigterm_finishes_the_current_task_then_exits(setup):
