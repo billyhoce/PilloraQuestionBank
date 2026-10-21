@@ -18,7 +18,7 @@ stages of the registry (:func:`wrap_registry`) and by resolving each job's scrat
   stored in ``ingest_job.report["paper_metadata"][paper_key]``, the key the proposal uses for that
   paper. A failed call falls back to the filename alone, then to empty metadata: it never fails the task;
 * ``report`` -- after the stage, the review images ``pages/pNN.webp`` are uploaded to
-  ``tmp/ingest/{job_id}/pages/`` and the proposal and the run summary are stored on the job row.
+  the job prefix's ``pages/`` (``ingest/{job_id}/pages/``) and the proposal and the run summary are stored on the job row.
   The images are uploaded here rather than at ``render`` because the job-level ``pages/`` folder
   (booklet page numbering, what the proposal's ``image`` paths name) is assembled by ``report``;
   ``render`` only writes each section's own ``review/`` folder. The job's ``segments.json`` and
@@ -143,7 +143,7 @@ class Edges:
         return failed(reason, needs_review=False)
 
     def after_register(self, ctx: StageContext, outcome: Outcome) -> Outcome:
-        # POST /api/import/jobs creates only the ``register`` task (the API does not know the
+        # POST /api/import/jobs/{id}/uploaded creates only the ``register`` task (the API does not know the
         # pipeline); the rest of the job-scope chain is created here, as ``Runner.submit`` does
         # locally. Idempotent, and inside register's own task: a crash reruns both.
         self._store.add_tasks([TaskSpec(ctx.job_id, name) for name in self._job_stages])

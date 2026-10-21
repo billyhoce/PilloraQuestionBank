@@ -345,7 +345,7 @@ class SqlStore:
 
     # --- bookkeeping ------------------------------------------------------
     def add_job(self, job_id: str, source: str) -> Job:
-        raise NotImplementedError("jobs are created by POST /api/import/jobs, not the worker")
+        raise NotImplementedError("jobs are created by POST /api/import/uploads, not the worker")
 
     def get_job(self, job_id: str) -> Job | None:
         with self._session() as db:

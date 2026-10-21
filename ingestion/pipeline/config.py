@@ -1,4 +1,4 @@
-"""Tunable knobs for the stage runner. See pipeline/README.md."""
+"""Tunable knobs for the stage runner. See docs/features/ingestion-pipeline.md."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Split an exam-paper booklet PDF into its question and answer papers.
 
-See ingester/README.md.
+See docs/features/ingestion-pipeline.md.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Checking a model's answer against the document. See ingester/README.md."""
+"""Checking a model's answer against the document. See docs/features/ingestion-pipeline.md."""
 
 from __future__ import annotations
 

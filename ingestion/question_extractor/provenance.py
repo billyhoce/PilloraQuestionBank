@@ -17,7 +17,7 @@ the mapping is applied only where the manifest records a page number.
 The map is taken on trust but checked against the document it claims to
 describe. A map that does not cover the document is a mistake in the *caller*,
 not in the paper, but it is reported the same way everything else wrong with a
-run is (see CLAUDE.md, "Warn, never raise"): one warning naming what disagrees,
+run is (see the root CLAUDE.md, "Warn, never raise"): one warning naming what disagrees,
 collected into the manifest. An unmapped page then falls back to its own local
 number, which is the only defensible guess, so a bad map degrades to today's
 behaviour for the pages it missed rather than losing them.

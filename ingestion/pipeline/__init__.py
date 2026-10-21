@@ -1,4 +1,4 @@
-"""Run a booklet as a job of small, file-based stages. See pipeline/README.md."""
+"""Run a booklet as a job of small, file-based stages. See docs/features/ingestion-pipeline.md."""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 Every call adds to the caller's session and never commits: the event lands in the same
 transaction as the state change it describes. Kinds: ``created``, ``task_claimed``,
 ``task_finished`` (``status`` done/skipped/failed), ``retry``, ``cancelled``,
-``proposal_edited``, ``paper_confirmed``, ``paper_skipped``, ``paper_deleted``, ``reconcile`` (a
+``proposal_edited``, ``paper_confirmed``, ``paper_skipped``, ``paper_attached``, ``paper_deleted``, ``reconcile`` (a
 reconciler finding; ``job_id`` is NULL when the finding has no job). (``expired`` appears only on historical rows.)
 """
 
