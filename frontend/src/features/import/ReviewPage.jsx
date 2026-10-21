@@ -360,7 +360,8 @@ export default function ReviewPage() {
   }
   const answerOnly = isAnswerOnly(paper)
   // Answers are all or none: a question paper that would be confirmed partly answered (its own
-  // answer boxes plus a linked answer paper's, by number) is warned about, never blocked.
+  // answer boxes plus a linked answer paper's, as the pair's mapping places them) is warned
+  // about, never blocked.
   const unansweredText = paper && !answerOnly ? partlyAnsweredWarning(paper, matches[paper.key]?.answer_numbers ?? []) : null
   const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
 

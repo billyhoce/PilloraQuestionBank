@@ -528,6 +528,11 @@ class IngestPaper(Base):
     # A school the admin typed that is not in the reference list (``school_id`` is then NULL); the
     # school is only created when a question paper carrying it is confirmed (#87).
     new_school_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # On an answer-only paper linked to a pending question paper: which answers go onto which
+    # questions, ``{answer label: question label | null}`` (null: not placed). An answer missing
+    # from it, or a NULL map, goes onto the question with its number. Cleared whenever the link
+    # changes (#92).
+    answer_map: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
     # Where the metadata came from: ``cover``, ``filename`` or ``admin`` (NULL: nothing known).
     metadata_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")

@@ -177,8 +177,10 @@ def _break_link(row: IngestPaper) -> None:
     if other is not None and other.matched_ingest_paper_id == row.id:
         other.matched_ingest_paper_id = None
     for r in (row, other):
-        if r is not None and r.match_status == "auto":
-            r.match_status = r.match_note = None
+        if r is not None:
+            r.answer_map = None  # a mapping belongs to one pair (#92)
+            if r.match_status == "auto":
+                r.match_status = r.match_note = None
 
 
 def _set(row: IngestPaper, status, paper_id=None, note=None) -> None:
@@ -187,13 +189,17 @@ def _set(row: IngestPaper, status, paper_id=None, note=None) -> None:
 
 def match_row(db: Session, row: IngestPaper) -> None:
     """(Re)compute the automatic match of ``row`` (see the module doc). A settled paper's proposal is
-    cleared; an admin's link is left alone; an auto link is dropped and re-made if it still holds."""
-    partner = None
+    cleared; an admin's link is left alone; an auto link is dropped and re-made if it still holds,
+    keeping the pair's answer mapping when it is re-made with the same partner (#92)."""
+    partner = kept_map = None
     if row.status == "pending" and row.matched_ingest_paper_id is not None and row.match_status == "auto":
         partner = row.matched_ingest_paper
+        kept_map = (row if row.role == "answer_only" else partner).answer_map
         _break_link(row)
     _match(db, row)
-    if partner is not None and partner.status == "pending" and partner.matched_ingest_paper_id is None:
+    if partner is not None and row.matched_ingest_paper_id == partner.id:
+        (row if row.role == "answer_only" else partner).answer_map = kept_map
+    elif partner is not None and partner.status == "pending" and partner.matched_ingest_paper_id is None:
         _match(db, partner)  # freed: it may fit another paper
 
 

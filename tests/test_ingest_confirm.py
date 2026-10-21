@@ -289,9 +289,11 @@ def attach_env(db_session, env, admin_client, mock_s3):
     resp = admin_client.post(f"/api/import/jobs/{base.id}/confirm", json={**meta, "paper_label": "q1"})
     paper_id = resp.json()["paper_id"]
 
-    def attach(*questions, mode=None, paper=paper_id, label="a1"):
+    def attach(*questions, mode=None, paper=paper_id, label="a1", mapping=None):
         job = setup(prop=proposal(answers_only(*questions, label=label)))
         body = {"key": label, "paper_id": paper, **({"mode": mode} if mode else {})}
+        if mapping is not None:
+            body["mapping"] = mapping
         return job, admin_client.post(f"/api/import/jobs/{job.id}/attach", json=body)
 
     return attach, paper_id

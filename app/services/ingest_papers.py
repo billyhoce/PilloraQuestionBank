@@ -165,24 +165,26 @@ class MatchError(Exception):
         self.message = message
 
 
-def first_preview(job: IngestJob, key: str, store, rects: str = "question_rects") -> dict | None:
-    """The first question (``rects="answer_rects"``: the first answer) of proposal paper ``key`` as
-    ``{number, url, page, rect}``: its review page image, the page's sizes and the first rectangle
-    (PDF points), or None if it has none."""
+def question_previews(job: IngestJob, key: str, store, rects: str = "question_rects") -> list[tuple[dict, dict | None]]:
+    """Every question of proposal paper ``key`` with a preview of its first rectangle of ``rects``
+    (``question_rects`` or ``answer_rects``): ``{number, url, page, rect}``, the review page image,
+    the page's sizes and the rectangle (PDF points), or None when it has none with an image."""
     from app.services.ingest_jobs import job_prefix
     from app.services.ingest_review import REVIEW_URL_TTL, pixel_size
 
+    out = []
     for k, paper in _proposal_papers(job):
         if k != key:
             continue
         pages = {p["page"]: p for p in paper.get("pages", [])}
         for q in paper.get("questions", []):
+            preview = None
             for rect in q.get(rects) or []:
                 page = pages.get(rect["page"])
                 if page is None or not page.get("image"):
                     continue
                 width_px, height_px = pixel_size(page["width_pt"], page["height_pt"])
-                return {
+                preview = {
                     "number": q.get("number"),
                     "url": store.presign(job_prefix(job.source_key) + page["image"], REVIEW_URL_TTL),
                     "page": {
@@ -191,11 +193,20 @@ def first_preview(job: IngestJob, key: str, store, rects: str = "question_rects"
                     },
                     "rect": {n: rect[n] for n in ("page", "x0", "y0", "x1", "y1")},
                 }
-    return None
+                break
+            out.append((q, preview))
+    return out
+
+
+def first_preview(job: IngestJob, key: str, store, rects: str = "question_rects") -> dict | None:
+    """The first question (``rects="answer_rects"``: the first answer) of proposal paper ``key``
+    that has a preview (see ``question_previews``), or None if it has none."""
+    return next((p for _, p in question_previews(job, key, store, rects) if p is not None), None)
 
 
 def _clear_link(row: IngestPaper) -> None:
-    """Break ``row``'s link, on both sides, and clear both rows' automatic match state."""
+    """Break ``row``'s link, on both sides, and clear both rows' automatic match state and answer
+    mapping (a mapping belongs to one pair, #92)."""
     other = row.matched_ingest_paper
     row.matched_ingest_paper_id = None
     if other is not None and other.matched_ingest_paper_id == row.id:
@@ -205,17 +216,21 @@ def _clear_link(row: IngestPaper) -> None:
             r.match_status = None
             r.match_note = None
             r.proposed_paper_id = None
+            r.answer_map = None
 
 
 PARTNER_ROLE = {"answer_only": "question", "question": "answer_only"}
 
 
-def link_papers(db: Session, job: IngestJob, key: str, other_id: int, metadata: dict | None = None) -> IngestPaper:
+def link_papers(
+    db: Session, job: IngestJob, key: str, other_id: int, metadata: dict | None = None, mapping: dict | None = None
+) -> IngestPaper:
     """Pair paper ``key`` of ``job`` with the pending ``ingest_paper`` ``other_id`` of the other
     role (answer-only <-> question), of a review-ready job or of ``job`` itself, by setting
     ``matched_ingest_paper_id`` on both rows. Replaces any earlier link of either row without
     rejecting it. ``metadata`` (the popup's "Also update this paper's details") is saved on ``key``'s
-    row first, as by ``set_metadata``. Does not commit."""
+    row first, as by ``set_metadata``; ``mapping`` (the answer mapping table, #92) is stored as the
+    answer paper's ``answer_map``, and none means by number. Does not commit."""
     row = _row_or_sync(db, job, key)
     if row is None:
         raise MatchError(404, f"This job has no paper {key!r}")
@@ -242,8 +257,33 @@ def link_papers(db: Session, job: IngestJob, key: str, other_id: int, metadata: 
     other.matched_ingest_paper_id = row.id
     for r in (row, other):  # an admin's link: no automatic status
         r.match_status = r.match_note = r.proposed_paper_id = None
+        r.answer_map = None
+    answer_row(row).answer_map = mapping
     db.flush()
     return row
+
+
+def answer_row(row: IngestPaper) -> IngestPaper | None:
+    """The answer-only paper of ``row``'s pair: ``row`` itself, or its linked partner."""
+    if row.role == "answer_only":
+        return row
+    return row.matched_ingest_paper
+
+
+def set_answer_map(db: Session, job: IngestJob, key: str, mapping: dict | None) -> None:
+    """Save an edited answer mapping ("Check answers…", #92) on linked paper ``key``'s pair (on the
+    answer paper's row, whichever side ``key`` is). ``409`` unless it is pending and linked. Does not
+    commit."""
+    row = _row_or_sync(db, job, key)
+    if row is None:
+        raise MatchError(404, f"This job has no paper {key!r}")
+    if row.status != "pending":
+        raise MatchError(409, f"Paper {key!r} was already {row.status}")
+    answers = answer_row(row) if row.matched_ingest_paper_id is not None else None
+    if answers is None:
+        raise MatchError(409, f"Paper {key!r} is not paired with a pending paper")
+    answers.answer_map = mapping
+    db.flush()
 
 
 def unlink_paper(db: Session, job: IngestJob, key: str) -> None:
@@ -286,9 +326,12 @@ def reject_proposed_paper(db: Session, job: IngestJob, key: str) -> None:
 def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
     """The job's linked papers by paper key: the partner's ingest paper id, job id, filename, key and
     ``details`` (its seven fields and ``new_school_name``), ``matched_by`` (``auto`` or ``admin``),
-    and ``answer_numbers``, the partner's question numbers that have an answer box (for a question
-    paper, the answers its confirm brings in; the review warns about the rest, #89)."""
+    ``answer_numbers`` and ``answer_map``. ``answer_numbers`` are the partner's question numbers that
+    have an answer box; for a question paper they are where its confirm puts the linked answers, by
+    the pair's mapping (#92) — the review warns about the rest (#89). ``answer_map`` is the pair's
+    stored mapping, or null (by number)."""
     from app.services.answer_coverage import paper_answer_numbers
+    from app.services.ingest_confirm import answer_label
 
     out = {}
     rows = db.scalars(
@@ -305,5 +348,13 @@ def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
             "details": {**{f: getattr(other, f) for f in METADATA_FIELDS}, "new_school_name": other.new_school_name},
             "matched_by": "auto" if row.match_status == "auto" else "admin",
             "answer_numbers": paper_answer_numbers(other_job, other.paper_key) if other_job else [],
+            "answer_map": answer_row(row).answer_map,
         }
+        mapping = out[row.paper_key]["answer_map"]
+        if row.role == "question" and mapping:  # where the answers land, not what they are numbered
+            out[row.paper_key]["answer_numbers"] = [
+                mapping[answer_label(n)] if answer_label(n) in mapping else n
+                for n in out[row.paper_key]["answer_numbers"]
+                if mapping.get(answer_label(n), n) is not None
+            ]
     return out

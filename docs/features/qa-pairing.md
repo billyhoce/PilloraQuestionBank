@@ -87,29 +87,31 @@ bank paper that already has answers everywhere.
   review page shows "Q5–Q7 have no answers. Add them with the answer-box editor, or confirm anyway."
   above **Confirm paper**, which stays enabled. The warning follows the admin's box edits.
 - **A linked pair** is judged as it will be confirmed: the question paper's own answer boxes plus the
-  linked answer paper's answer numbers (`matches[key].answer_numbers`, matched by number). It warns
-  when that combination is partial. A question paper with no answers at all is not warned about; it
+  questions the linked answers land on (`matches[key].answer_numbers`, placed by the pair's
+  [mapping](#the-answer-mapping-table)). It warns when that combination is partial. A question paper with no answers at all is not warned about; it
   needs a partner instead.
 
 ## Attaching answers to an existing paper
 
-`POST /api/import/jobs/{id}/attach` `{key, paper_id, mode?}`.
+`POST /api/import/jobs/{id}/attach` `{key, paper_id, mode?, mapping?}`.
 
 - **Refused when:** the paper is not `answer_only` → `422`; the target paper is unknown → `404`;
   the job is not `review_ready`, the paper is already decided, or every question of the target
   already has answers ([coverage](#answers-are-all-or-none) `all`) → `409`.
-- **Matching:** by question number. `1`, `"1"` and `" 01 "` all mean 1. Duplicate numbers have
-  their rectangles merged.
-  - Numbers that are not plain integers (`"3a"`), or have no question in the target, are not
+- **Placing:** by `mapping` (the [answer mapping table](#the-answer-mapping-table)'s
+  `{answer label: question label | null}`) where it names an answer, else by question number.
+  `1`, `"1"` and `" 01 "` all mean 1. Several answers on one question have their rectangles merged.
+  - Answers that land on no question of the target (a number that is not a plain integer, like
+    `"3a"`, with no mapping; a number or mapped label the target lacks; or mapped to `null`) are not
     attached. They are returned in `unmatched` and recorded on the row and the event.
-  - Nothing matching at all → `422`, and nothing changes.
+  - Nothing placed at all → `422`, and nothing changes.
 - **Mode, per question:**
   - `replace`: the question's existing answer pages are removed.
   - `append`: new answer pages go after the existing ones.
   - Omitted: `replace` if the question has no answer pages, else `append`.
-- **UI:** **Attach** in the popup, or **Attach…** on a proposed paper. It asks append or replace
-  (default **append**) only when the bank paper is partly answered (coverage `partial`); otherwise
-  it sends no `mode`.
+- **UI:** **Attach** in the popup, or **Attach…** on a proposed paper; both go through the mapping
+  table, which sends its `mapping`. The table asks append or replace (default **append**) only when
+  the bank paper is partly answered (coverage `partial`); otherwise it sends no `mode`.
 - **New answer pages:** cropped like confirm, with provenance, and written with collision-safe
   `page_order`.
 - **One transaction:** the page rows, `review_outcome[key] = attached` (`paper_id` is added to
@@ -134,11 +136,14 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
 | State | Shown | Actions |
 |---|---|---|
 | No partner | "No match found" / "N possible matches" (exact candidates for the paper's current details) | **Match this paper…** |
-| Linked to a pending paper | "Paired with <filename> (<key>)" ("this file" for the same booklet), the partner's details, and "matched automatically" or "matched by an admin" | **Change match…**, **Unmatch** |
+| Linked to a pending paper | "Paired with <filename> (<key>)" ("this file" for the same booklet), the partner's details, and "matched automatically" or "matched by an admin" | **Check answers…**, **Change match…**, **Unmatch** |
 | Answer-only paper with a proposed bank paper | "Answers match <paper>" | **Attach…**, **Change match…**, **Not this one** |
 
-- **Attach…** attaches by question number at once; it asks append or replace (default append) only
-  when the proposed paper is partly answered (`proposal.paper.answer_coverage` `partial`).
+- **Check answers…** opens the [answer mapping table](#the-answer-mapping-table) for the pair; its
+  **Save** stores the edited mapping (`PUT .../answer-map`).
+- **Attach…** opens the mapping table for the proposed paper; its **Attach answers** attaches with
+  that mapping. It asks append or replace (default append) only when the proposed paper is partly
+  answered (`proposal.paper.answer_coverage` `partial`).
 - **Change match…** opens the popup. **Unmatch** and **Not this one**: [Rejecting a
   match](#rejecting-a-match).
 - An attach shows what was attached and which numbers were not, then **Continue** moves on.
@@ -159,8 +164,11 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
   other way round for a question paper), "This will unpair it from <file>" when it is paired
   already, and for a bank paper "Only 8 of 12 questions have answers" (partly answered) or, greyed
   out with no action, "Already has answers".
-- **Pair** (a pending booklet) links the two papers; **Attach** (a bank paper) attaches by question
-  number, asking append or replace only for a partly answered paper.
+- **Pair** (a pending booklet) or **Attach** (a bank paper) moves on to the
+  [answer mapping table](#the-answer-mapping-table) for that booklet; nothing is saved yet. Its
+  **Pair** button links the two papers and stores the mapping; its **Attach answers** button attaches
+  with the mapping, asking append or replace only for a partly answered paper. **Back** returns to
+  the list.
 - **Also update this paper's details** (ticked by default) saves the fields on the paper with the
   pair, in the same transaction. Untick it when you only cleared fields to widen the search. It is
   shown only while a pending booklet is listed: an answer paper's own details are not kept after an
@@ -194,7 +202,7 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
 
 ### Pairing by hand
 
-`POST /api/import/jobs/{id}/papers/{key}/match {ingest_paper_id, metadata?}`.
+`POST /api/import/jobs/{id}/papers/{key}/match {ingest_paper_id, metadata?, mapping?}`.
 
 - **Either role:** an answer-only paper pairs with a pending question paper and a question paper
   with a pending answer-only paper, of another `review_ready` job **or the same job**. Anything else
@@ -205,9 +213,55 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
   propose that old pair later.
 - **`metadata`** (the seven fields and `new_school_name`, as `PUT .../metadata` takes them) is saved
   on this paper first, in the same transaction; a refused pair saves nothing.
+- **`mapping`** is stored as the answer paper's `answer_map`, whichever side the pair was made
+  from; omitted, the pair goes by number. Any mapping of an earlier link of either paper is
+  discarded.
 - **Response:** `{matches, proposal}`, as Unmatch's.
-- Answers are placed **by question number** when the question paper is confirmed
+- Answers are placed by the mapping, else by question number, when the question paper is confirmed
   ([Confirming a linked pair](#confirming-a-linked-pair)).
+
+## The answer mapping table
+
+Which answers go onto which questions when an answer-only paper is paired or attached
+(`AnswerMappingTable.jsx`, `app/services/answer_mapping.py`). It is shown between choosing a
+booklet in the popup and saving, from **Check answers…** on a linked pair, and from **Attach…** on a
+proposed bank paper. It covers answers coming from **another** booklet; answers inside one booklet
+are fixed with the answer-box editor ([auto-import.md](./auto-import.md#editing)).
+
+- **A mapping** is `{answer label: question label | null}`. An answer's label is its number as
+  written, trimmed (`"1"`, `"3a"`); `null` leaves it off. An answer the mapping does not name goes
+  onto the question with its number.
+- **The table:** each question, with a thumbnail, beside the answers that will go onto it, each with
+  a thumbnail and a picker to move it to another question or to **Not placed**. Answers placed
+  nowhere are listed last. Rows start by number, or from the pair's stored mapping.
+  - **Shift all answers by N** re-places every answer by number + N (a Section B that restarts at
+    1), discarding row edits.
+  - **Warnings**, updated as rows change and never blocking: "Q11–Q12 would get no answers" (a
+    question with no answers placed and none of its own) and "Answer 13 has no question".
+- **Where it is kept:** on the answer paper's `ingest_paper.answer_map`
+  ([DATA_MODEL.md](../DATA_MODEL.md#auto-import-jobs)). NULL means by number, which is what an
+  automatic link uses until someone edits it.
+- **Changing the match discards it:** a new pair, Unmatch, skipping either paper, or an automatic
+  link that is dropped (a metadata edit that breaks the key) all clear it. An automatic link that is
+  re-made with the same partner on a re-match keeps it.
+- **Used** by the linked confirm ([Confirming a linked pair](#confirming-a-linked-pair)) and by
+  attach (sent as its `mapping`; an attach's mapping is not stored).
+
+**Endpoints:**
+
+- `GET /api/import/jobs/{id}/papers/{key}/answer-map` with `ingest_paper_id` (a pending booklet),
+  `paper_id` (a bank paper; an answer-only paper only, else `422`) or neither (the paper's current
+  link; none → `409`). Either role may ask. Returns `{questions, answers, mapping}`:
+  - `questions`: `{label, answered, preview}` in order; `answered` means it has answers of its own
+    (answer boxes on a pending paper, answer pages on a bank paper);
+  - `answers`: `{label, preview}`, the answer paper's entries with answer boxes;
+  - `preview`: as a candidate's (a page crop for a pending paper, the question image for a bank
+    paper), or null;
+  - `mapping`: the pair's stored mapping if the partner is the current link, else null.
+  Unknown key or partner → `404`; a partner of the same role → `422`.
+- `PUT /api/import/jobs/{id}/papers/{key}/answer-map {mapping}` saves an edited mapping on a linked
+  pair, from either side (`null` goes back to by number). `409` unless the job is `review_ready` and
+  the paper pending and linked; unknown key → `404`. Returns `{matches, proposal}`.
 
 ## Automatic matching
 
@@ -234,7 +288,8 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
 
 - **`manual`** leaves the paper unpaired; the Pairing block offers **Match this paper…**.
 - **Auto links** are recomputed from scratch on every re-evaluation, so a metadata change that breaks
-  the key drops them.
+  the key drops them (and their [mapping](#the-answer-mapping-table); one re-made with the same
+  partner keeps it).
 - **Fully answered bank papers are skipped** by rules 2, 3 and 6: a confirmed paper whose
   [coverage](#answers-are-all-or-none) is `all` is never a candidate.
 - **Rejected pairs are skipped** by every rule: a rejected candidate is not counted, proposed,
@@ -256,8 +311,10 @@ paper (rules 4–5 only: a question paper never matches a bank paper). The resul
 **Review response:**
 - `matches`: `{key: {ingest_paper_id, job_id, filename, paper_key, details, matched_by,
   answer_numbers}}`, covering manual and auto links. `details` are the partner's seven fields and
-  `new_school_name`; `matched_by` is `auto` or `admin`. `answer_numbers` are the partner's question numbers that have an answer box
-  (for a question paper, the answers its confirm brings in).
+  `new_school_name`; `matched_by` is `auto` or `admin`. `answer_numbers` are the partner's question numbers that have an answer box;
+  for a question paper they are the questions its confirm puts the linked answers on, by the pair's
+  mapping. `answer_map` is the pair's stored [mapping](#the-answer-mapping-table), or null (by
+  number).
 - `proposals`: `{key: {status, note, paper}}`; `paper` carries the proposed paper's
   `answer_coverage`.
 
@@ -291,10 +348,12 @@ confirming it also attaches those answers and settles both papers.
 
   Otherwise the confirm proceeds without it and logs a warning.
 - **Cropping:** answer rectangles come from the **answer job's** `source.pdf` (its edited proposal
-  if any). For a same-job pair that is the one `source.pdf`, read once. They are mapped by question number and added **after** the question paper's own answer
+  if any). For a same-job pair that is the one `source.pdf`, read once. They are placed by the answer paper's stored
+  [`answer_map`](#the-answer-mapping-table), falling back to question number, and added **after** the question paper's own answer
   pages, with provenance from the answer job's PDF.
-- **Unmatched numbers** are returned in `unmatched`. If none match, the answer paper stays pending
-  and linked, and `answers_from` is null.
+- **Unplaced answers** (no question with that number or mapped label, or mapped to `null`) are
+  returned in `unmatched`. If none is placed, the answer paper stays pending and linked, and
+  `answers_from` is null.
 - **One transaction:**
   - question paper `confirmed`, answer paper `attached` (with `paper_id`), in both jobs' outcomes and
     `ingest_paper` rows

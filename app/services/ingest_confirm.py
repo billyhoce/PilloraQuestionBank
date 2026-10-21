@@ -190,7 +190,8 @@ def _answers_usable(db: Any, job: IngestJob, key: str, partner, partner_job) -> 
 
 def _linked_answer_payload(partner_job, partner, payload: dict, pdf_bytes: bytes):
     """Crop the linked answer paper's answer rects (from ``pdf_bytes``, ITS job's source.pdf) and add
-    them to the question ``payload`` as answer pages, after the question's own answer pages. Returns
+    them to the question ``payload`` as answer pages, after the question's own answer pages, placed by
+    the answer paper's stored ``answer_map``, else by number (#92). Returns
     ``(attached_numbers, unmatched_numbers, temp_keys)``."""
     paper_data = _find_paper(partner_job, partner.paper_key)
     by_number = {}
@@ -198,16 +199,7 @@ def _linked_answer_payload(partner_job, partner, payload: dict, pdf_bytes: bytes
         n = _question_number(pq["question_number"])
         if n is not None:
             by_number.setdefault(n, pq)
-    rects_by_number: dict[int, list[dict]] = {}
-    unmatched: list[Any] = []
-    for q in paper_data.get("questions", []):
-        if not q.get("answer_rects"):
-            continue
-        number = _question_number(q["number"])
-        if number is None or number not in by_number:
-            unmatched.append(q["number"])
-        else:
-            rects_by_number.setdefault(number, []).extend(q["answer_rects"])
+    rects_by_number, unmatched = place_answers(paper_data.get("questions", []), set(by_number), partner.answer_map)
     if not rects_by_number:
         return [], unmatched, []
     numbers = sorted(rects_by_number)
@@ -386,16 +378,45 @@ def _question_number(value: Any) -> int | None:
         return None
 
 
+def answer_label(value: Any) -> str:
+    """An answer's key in an ``answer_map``: its number as written, trimmed (``"3a"``, ``"1"``)."""
+    return str(value).strip()
+
+
+def place_answers(questions: list[dict], targets: set[int], mapping: dict | None) -> tuple[dict[int, list[dict]], list]:
+    """Where proposal answers ``questions`` go among the question numbers ``targets``: each answer
+    with answer boxes goes onto ``mapping[label]`` when the mapping names it (``None``: left off),
+    else onto the question with its own number (#92). Several answers on one question have their
+    rectangles merged. Returns ``({question number: answer rects}, [answer numbers placed nowhere])``."""
+    rects_by_number: dict[int, list[dict]] = {}
+    unmatched: list[Any] = []
+    for q in questions:
+        if not q.get("answer_rects"):
+            continue
+        label = answer_label(q["number"])
+        if mapping is not None and label in mapping:
+            number = None if mapping[label] is None else _question_number(mapping[label])
+        else:
+            number = _question_number(q["number"])
+        if number is None or number not in targets:
+            unmatched.append(q["number"])
+        else:
+            rects_by_number.setdefault(number, []).extend(q["answer_rects"])
+    return rects_by_number, unmatched
+
+
 def attach_answers(
-    job: IngestJob, key: str, paper_id: int, mode: str | None, admin: Any, db: Any, store: ObjectStore
+    job: IngestJob, key: str, paper_id: int, mode: str | None, admin: Any, db: Any, store: ObjectStore,
+    mapping: dict | None = None,
 ) -> dict:
     """Attach the answer rectangles of answer-only proposal paper ``key`` to the existing paper
-    ``paper_id``, matching proposal questions to the paper's questions by number.
+    ``paper_id``, placing each answer by ``mapping`` (the answer mapping table's
+    ``{answer label: question label | null}``, #92), else onto the question with its number.
 
     ``mode`` is ``append`` (new answer pages after the existing ones) or ``replace`` (they replace
     the question's existing answer pages); ``None`` applies the default per question: replace when
-    it has no answer pages yet, else append. Answer numbers with no matching question are not
-    attached but returned in ``unmatched``. The crops are copied to their canonical keys before the
+    it has no answer pages yet, else append. Answers that land on no question of the paper (or that
+    the mapping leaves off) are not attached but returned in ``unmatched``. The crops are copied to their canonical keys before the
     commit and the temp keys deleted after it (as in confirm); the page rows, the job's outcome, the
     ``ingest_paper`` row and the event commit together, and a failure rolls everything back.
 
@@ -417,17 +438,7 @@ def attach_answers(
     if bank_coverage(db, [paper_id])[paper_id] == ALL:  # answers are all or none (#89)
         raise ReviewActionError(409, f"Paper {paper_id} already has answers on every question")
     by_number = {q.question_number: q for q in target.questions}
-
-    rects_by_number: dict[int, list[dict]] = {}  # matched question number -> its answer rects
-    unmatched: list[Any] = []
-    for q in paper_data.get("questions", []):
-        if not q.get("answer_rects"):
-            continue
-        number = _question_number(q["number"])
-        if number is None or number not in by_number:
-            unmatched.append(q["number"])
-        else:
-            rects_by_number.setdefault(number, []).extend(q["answer_rects"])
+    rects_by_number, unmatched = place_answers(paper_data.get("questions", []), set(by_number), mapping)
     if not rects_by_number:
         shown = ", ".join(str(n) for n in unmatched) or "none"
         raise ReviewActionError(

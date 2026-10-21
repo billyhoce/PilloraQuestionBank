@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
+import Modal from '../../components/Modal'
 import Spinner from '../../components/Spinner'
+import AnswerMappingTable from './AnswerMappingTable'
 import MatchDialog, { AttachModeChoice } from './MatchDialog'
 import { candidateQuery, detailsText, firstRect, pairingState } from './pairing'
 
@@ -34,10 +36,12 @@ function AttachResult({ result, onContinue }) {
  * The review page's Pairing block, on a paper that needs a partner (an answer-only paper, or a
  * question paper whose booklet had no answers) or that has one. Three states (see pairingState):
  * no partner ("No match found" / "N possible matches", Match this paper…), linked to a pending
- * paper (Change match…, Unmatch) and, for an answer-only paper, a proposed bank paper (Attach…,
- * Change match…, Not this one). Answers go on by question number.
- *   onMatched(state, fields?) - the paper's new { matches, proposal } after a pair, Unmatch or
- *                    "Not this one"; `fields` are the details a pair saved on the paper, if any
+ * paper (Check answers…, Change match…, Unmatch) and, for an answer-only paper, a proposed bank
+ * paper (Attach…, Change match…, Not this one). Check answers… and Attach… open the answer mapping
+ * table, which places the answers (pre-filled by number).
+ *   onMatched(state, fields?) - the paper's new { matches, proposal } after a pair, a saved
+ *                    mapping, Unmatch or "Not this one"; `fields` are the details a pair saved on
+ *                    the paper, if any
  *   onAttached(jobStatus)    - after an attach, once the admin has read the result
  *   beforeSave     - optional async () => void, awaited before anything is saved
  */
@@ -47,7 +51,7 @@ export default function PairingBlock({
   const state = pairingState({ link, proposal })
   const [count, setCount] = useState(null) // exact matches for the paper's details, while unpaired
   const [dialog, setDialog] = useState(false)
-  const [choosing, setChoosing] = useState(null) // the append/replace answer for a proposed paper
+  const [mapping, setMapping] = useState(null) // the mapping table: { mode } for an attach, {} for Check answers…
   const [result, setResult] = useState(null) // an attach's result
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -79,11 +83,18 @@ export default function PairingBlock({
 
   const rematch = call => run(async () => onMatched(await call(jobId, paper.key)))
 
-  const attachProposed = mode => run(async () => {
+  const attachProposed = (mode, answerMap) => run(async () => {
     await beforeSave?.()
     const id = proposal.paper.id
-    const r = await api.import.attachJobPaper(jobId, { key: paper.key, paper_id: id, ...(mode && { mode }) })
+    const r = await api.import.attachJobPaper(jobId, { key: paper.key, paper_id: id, ...(mode && { mode }), mapping: answerMap })
+    setMapping(null)
     setResult({ ...r, paper_id: id })
+  })
+
+  const saveMapping = answerMap => run(async () => {
+    const s = await api.import.saveAnswerMap(jobId, paper.key, answerMap)
+    setMapping(null)
+    onMatched(s)
   })
 
   const box = 'w-52 mb-2 text-xs border rounded px-2 py-1.5 space-y-1'
@@ -101,7 +112,8 @@ export default function PairingBlock({
           </p>
           {link.details && <p className="text-gray-700">{detailsText(link.details, refs)}</p>}
           <p className="text-gray-500">{link.matched_by === 'auto' ? 'matched automatically' : 'matched by an admin'}</p>
-          <p className="flex gap-3">
+          <p className="flex flex-wrap gap-x-3">
+            <button type="button" className={linkBtn} disabled={disabled} onClick={() => setMapping({})}>Check answers…</button>
             <button type="button" className={linkBtn} disabled={disabled} onClick={() => setDialog(true)}>Change match…</button>
             <button type="button" className={linkBtn} disabled={disabled} onClick={() => rematch(api.import.unmatchJobPaper)}>Unmatch</button>
           </p>
@@ -110,21 +122,15 @@ export default function PairingBlock({
       {state === 'proposed' && (
         <>
           <p>Answers match {describePaper(proposal.paper)}.</p>
-          {choosing ? (
-            <>
-              <AttachModeChoice mode={choosing} onMode={setChoosing} />
-              <button type="button" className={linkBtn} disabled={disabled} onClick={() => attachProposed(choosing)}>Attach answers</button>
-            </>
-          ) : (
-            <p className="flex flex-wrap gap-x-3">
-              <button type="button" className={linkBtn} disabled={disabled}
-                onClick={() => (proposal.paper.answer_coverage === 'partial' ? setChoosing('append') : attachProposed(null))}>
-                Attach…
-              </button>
-              <button type="button" className={linkBtn} disabled={disabled} onClick={() => setDialog(true)}>Change match…</button>
-              <button type="button" className={linkBtn} disabled={disabled} onClick={() => rematch(api.import.rejectProposedPaper)}>Not this one</button>
-            </p>
-          )}
+          <p className="flex flex-wrap gap-x-3">
+            <button type="button" className={linkBtn} disabled={disabled}
+              // append or replace is asked only of a partly answered paper (default append)
+              onClick={() => setMapping({ mode: proposal.paper.answer_coverage === 'partial' ? 'append' : null })}>
+              Attach…
+            </button>
+            <button type="button" className={linkBtn} disabled={disabled} onClick={() => setDialog(true)}>Change match…</button>
+            <button type="button" className={linkBtn} disabled={disabled} onClick={() => rematch(api.import.rejectProposedPaper)}>Not this one</button>
+          </p>
         </>
       )}
       {state === 'none' && (
@@ -137,8 +143,22 @@ export default function PairingBlock({
           <button type="button" className={linkBtn} disabled={disabled} onClick={() => setDialog(true)}>Match this paper…</button>
         </>
       )}
-      {saving && <Spinner size="sm" />}
-      {error && <ErrorBanner message={error} />}
+      {saving && !mapping && <Spinner size="sm" />}
+      {error && !mapping && <ErrorBanner message={error} />}
+      {mapping && (
+        <Modal isOpen onClose={() => setMapping(null)} title={state === 'linked' ? 'Check answers' : 'Attach answers'} wide>
+          {error && <ErrorBanner message={error} />}
+          <AnswerMappingTable
+            jobId={jobId} paperKey={paper.key}
+            target={state === 'linked' ? null : { paper_id: proposal.paper.id }}
+            saveLabel={state === 'linked' ? 'Save' : 'Attach answers'} cancelLabel="Cancel" saving={saving}
+            onSave={answerMap => (state === 'linked' ? saveMapping(answerMap) : attachProposed(mapping.mode, answerMap))}
+            onCancel={() => { setMapping(null); setError(null) }}
+          >
+            {mapping.mode && <AttachModeChoice mode={mapping.mode} onMode={m => setMapping({ mode: m })} />}
+          </AnswerMappingTable>
+        </Modal>
+      )}
       {dialog && (
         <MatchDialog
           jobId={jobId} paperKey={paper.key} role={paper.role ?? 'question'} metadata={metadata}
