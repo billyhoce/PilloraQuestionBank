@@ -54,8 +54,8 @@ There is no multipart job-creation route; the old `POST /api/import/jobs` was re
 **Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
 `{key, role, status, school_id, new_school_name, year, level_id, subject_id, exam_type_id, stream_id,
 paper_number, linked, match_status, answer_coverage, unanswered}`, where `new_school_name` is a school
-typed during review that confirm will create ([qa-pairing.md](./qa-pairing.md#new-schools)), `linked` means it is linked to a paper
-of another job, and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
+typed during review that confirm will create ([qa-pairing.md](./qa-pairing.md#new-schools)), `linked` means it is linked to another pending paper
+(of another job or the same one), and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
 without an answer box) describe its own booklet's answers
 ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)). Empty until `report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
 
@@ -274,7 +274,7 @@ school is found by case-insensitive name or created, in the confirm's transactio
 - **Never duplicates:** the job row is locked while deciding, so a double click gets a `409`. The
   paper and the outcome commit together.
 - **Provenance:** recorded on the new rows (see [ingestion.md](./ingestion.md#provenance)).
-- **Linked answer paper:** if the paper is linked to a pending answer-only paper of another job, its
+- **Linked answer paper:** if the paper is linked to a pending answer-only paper (of another job or the same one), its
   answers come in too ([qa-pairing.md](./qa-pairing.md#confirming-a-linked-pair)).
 - **Response:** `/confirm`'s (`paper_id`, `questions`) plus `job_status`, `answers_from` and
   `unmatched`. The page then opens the topic review (`TopicReview`) on the new paper.

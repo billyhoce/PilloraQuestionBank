@@ -6,7 +6,8 @@ step 1 and part of frontend steps 1 and 6); per-pair rejection with Unmatch and 
 the rejection table of step 2, "skip rejected pairs" of step 4, `DELETE` of step 6 and the
 rejection of step 7, surfaced in today's Match panel and question-side banner); answer coverage and the all-or-none
 warnings (#89: [Answers are all or none](#answers-are-all-or-none), coverage in the job list summary
-of step 9, step 10, the `409` of step 6 and the warning of frontend step 6). What exists today is in
+of step 9, step 10, the `409` of step 6 and the warning of frontend step 6); wider automatic
+matching (#90: the rest of backend step 4, and the same-job pair of step 8). What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found
@@ -20,7 +21,8 @@ booklet** is a candidate partner for it.
 - **Answer-only paper → confirmed paper:** automatic `proposed` match on the seven-field key
   (one-click Attach), or the Match panel's search + Attach.
 - **Answer-only paper → pending question paper of another job:** automatic link on the seven-field
-  key, or the Match panel's Link. Unlink exists on both sides.
+  key, or the Match panel's Link. Unlink exists on both sides. Automatic linking also runs from the
+  question side and within one booklet (#90); linking by hand is still across jobs only.
 - Answers always go onto questions **by question number**.
 - **Extracted names were lost when they did not match exactly** (fixed by #86: they are now kept as
   `extracted` and shown in the review sidebar's school combobox).

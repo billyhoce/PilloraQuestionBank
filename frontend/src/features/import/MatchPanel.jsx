@@ -196,7 +196,7 @@ export default function MatchPanel({ jobId, paper, metadata, refs, link, proposa
 
       {link && (
         <div role="status" className="text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5 space-y-1">
-          <p>Linked to {link.filename} {link.paper_key}. Confirming that question paper will bring these answers in.</p>
+          <p>Linked to {link.job_id === jobId ? `${link.paper_key} in this file` : `${link.filename} ${link.paper_key}`}. Confirming that question paper will bring these answers in.</p>
           <button
             type="button" onClick={() => reject(api.import.unmatchJobPaper)} disabled={loading || busy}
             className="text-blue-700 hover:underline disabled:opacity-50"

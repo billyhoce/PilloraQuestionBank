@@ -12,11 +12,12 @@ Rules, for a pending ``answer_only`` ``ingest_paper`` that is not linked to anot
 * Otherwise NULL: nothing to do.
 
 Pending <-> pending (#84): when all seven fields are known and *no* confirmed paper has the key, the
-row is auto-linked to the one pending ``question`` ``ingest_paper`` of another ``review_ready`` job
-with the exact key (``matched_ingest_paper_id`` on both rows, ``match_status`` ``auto``, ``match_note``
+row is auto-linked to the one pending ``question`` ``ingest_paper`` with the exact key, of another
+``review_ready`` job or of its own job (#90: a booklet whose papers the pipeline did not pair)
+(``matched_ingest_paper_id`` on both rows, ``match_status`` ``auto``, ``match_note``
 "auto-linked"); several such papers -> ``manual``. A single confirmed-paper match wins over this
-(the #83 proposal). The same runs from the question side (``match_job`` of a question job tries the
-older pending answer papers). An *auto* link is recomputed from scratch on every re-evaluation
+(the #83 proposal). The same runs from the question side: a question paper (on ``match_job`` or a
+metadata edit) tries the pending answer-only papers with its key, its own job's included. An *auto* link is recomputed from scratch on every re-evaluation
 (metadata edit, new job, new paper), so it follows the data; a link the admin set (``match_status``
 NULL) is never touched.
 
@@ -144,20 +145,26 @@ def partial_candidates(db: Session, row: IngestPaper) -> list[Paper]:
     return _open_to_answers(db, list(db.scalars(q.order_by(Paper.id))))
 
 
-def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
-    """Unlinked pending question papers of other review-ready jobs with ``row``'s exact key, bar
-    those rejected as its partner."""
+def _pending_partners(db: Session, row: IngestPaper, role: str) -> list[IngestPaper]:
+    """Unlinked pending ``role`` papers with ``row``'s exact key, bar those rejected as its partner:
+    of other ``review_ready`` jobs, or of ``row``'s own job (#90), whose status does not matter
+    because ``report`` matches a booklet's papers before the job turns ``review_ready``."""
     q = (
         select(IngestPaper)
         .join(IngestJob, IngestJob.id == IngestPaper.job_id)
         .where(
-            IngestPaper.role == "question", IngestPaper.status == "pending",
-            IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
-            IngestJob.status == "review_ready",
+            IngestPaper.role == role, IngestPaper.status == "pending", IngestPaper.id != row.id,
+            IngestPaper.matched_ingest_paper_id.is_(None),
+            (IngestJob.status == "review_ready") | (IngestPaper.job_id == row.job_id),
         )
     )
     q = _ip_key_clauses(_without(q, IngestPaper.id, rejected_ingest_ids(db, row)), row)
     return list(db.scalars(q.order_by(IngestPaper.id)))
+
+
+def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
+    """The pending question papers answer-only paper ``row`` could be auto-linked to."""
+    return _pending_partners(db, row, "question")
 
 
 def _ip_number_clause(value):
@@ -247,29 +254,18 @@ def _match(db: Session, row: IngestPaper) -> None:
 
 
 def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
-    """Pending, unlinked answer-only papers of other review-ready jobs with question paper ``row``'s
-    exact key, bar those rejected as its partner (so each can be matched from its own side, which
-    decides uniqueness)."""
+    """The pending answer-only papers question paper ``row`` could be auto-linked to (each is then
+    matched from its own side, which decides uniqueness)."""
     if row.status != "pending" or row.matched_ingest_paper_id is not None:
         return []
     if unknown_fields(row):
         return []
-    q = (
-        select(IngestPaper)
-        .join(IngestJob, IngestJob.id == IngestPaper.job_id)
-        .where(
-            IngestPaper.role == "answer_only", IngestPaper.status == "pending",
-            IngestPaper.matched_ingest_paper_id.is_(None), IngestPaper.job_id != row.job_id,
-            IngestJob.status == "review_ready",
-        )
-    )
-    q = _ip_key_clauses(_without(q, IngestPaper.id, rejected_ingest_ids(db, row)), row)
-    return list(db.scalars(q.order_by(IngestPaper.id)))
+    return _pending_partners(db, row, "answer_only")
 
 
 def match_job(db: Session, job: IngestJob) -> None:
-    """Match every pending answer-only paper of ``job``, and link the older pending answer papers
-    that fit its question papers."""
+    """Match every pending answer-only paper of ``job``, and link the pending answer papers (older
+    jobs' or its own) that fit its question papers."""
     for row in db.scalars(select(IngestPaper).where(IngestPaper.job_id == job.id)):
         if row.role in ("answer_only", "question"):
             match_row(db, row)

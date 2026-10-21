@@ -339,6 +339,20 @@ describe('ReviewPage', () => {
       expect(screen.getByText(/Answers for question 9 matched no question/)).toBeInTheDocument()
     })
 
+    it('names a linked answer paper from the same booklet as "this file"', async () => {
+      api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { filename: 'x.pdf', paper_key: 'a1', job_id: 'j1' } } })
+      api.import.confirmJobPaper.mockResolvedValue({
+        paper_id: 7, job_status: 'confirmed', questions: [],
+        answers_from: { job_id: 'j1', filename: 'x.pdf', paper_key: 'a1', attached: [1] }, unmatched: [],
+      })
+      renderPage()
+      expect(await screen.findByText(/Answers available from this file \(a1\) — they will be attached when you confirm/)).toBeInTheDocument()
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(await screen.findByText(/Attached answers for question 1 from this file \(a1\)/)).toBeInTheDocument()
+    })
+
     it('unmatches the linked answer job and shows whatever matching finds next', async () => {
       api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { filename: 'answers.pdf', paper_key: 'a1', job_id: 'j2' } } })
       api.import.unmatchJobPaper.mockResolvedValue({ matches: { filename: 'other.pdf', paper_key: 'a1', job_id: 'j3' }, proposal: null })
@@ -592,6 +606,12 @@ describe('ReviewPage', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Not this one' }))
       expect(await screen.findByText(/Linked to questions\.pdf q1/)).toBeInTheDocument()
       expect(screen.queryByText(/Answers match/)).not.toBeInTheDocument()
+    })
+
+    it('shows a link to a question paper of the same booklet as "in this file"', async () => {
+      api.import.review.mockResolvedValue({ ...ANSWERS, matches: { a1: { filename: 'x.pdf', paper_key: 'q1', job_id: 'j1' } } })
+      renderPage()
+      expect(await screen.findByText(/Linked to q1 in this file\./)).toBeInTheDocument()
     })
 
     it('hints at manual matching when several or only partial papers match', async () => {

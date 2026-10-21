@@ -229,3 +229,81 @@ def test_skipping_a_linked_question_paper_releases_the_answer_paper(
     assert admin_client.post(f"/api/import/jobs/{qj.id}/skip", json={"paper_label": "q1"}).status_code == 200
     a = prow(db_session, aj, "a1")
     assert a.matched_ingest_paper_id is None and a.match_status is None
+
+
+# --- the same booklet (#90): a question paper and an answer-only paper the pipeline did not pair ---
+
+def booklet(db, admin, store, meta, *, answers_meta=None, status="running", filename="booklet.pdf"):
+    """One job holding question paper ``q1`` (no answers of its own) and answer-only paper ``a1``, as
+    ``report`` leaves it: matching runs before the job turns ``review_ready``."""
+    question = qpaper(answer_label=None, questions=[q(1, [r(1)]), q(2, [r(2, 50, 400, 300, 600)])])
+    job = make_job(db, admin, proposal=proposal(question, answers_paper()), pages=3, filename=filename, status=status)
+    store.objects[job.source_key] = source_pdf()
+    job.report = {"paper_metadata": {"q1": meta, "a1": answers_meta or meta}}
+    sync_job_papers(db, job)
+    db.commit()
+    return job
+
+
+def test_a_booklets_own_answer_paper_is_auto_linked(db_session, admin_user, fake_object_store, meta):
+    job = booklet(db_session, admin_user, fake_object_store, meta)
+    match_job(db_session, job)
+    db_session.commit()
+    a, qq = prow(db_session, job, "a1"), prow(db_session, job, "q1")
+    assert a.matched_ingest_paper_id == qq.id and qq.matched_ingest_paper_id == a.id
+    assert (a.match_status, a.match_note) == ("auto", "auto-linked")
+
+
+def test_editing_the_question_paper_links_it_to_its_booklets_answer_paper(
+    admin_client, db_session, admin_user, fake_object_store, meta
+):
+    job = booklet(db_session, admin_user, fake_object_store, {**meta, "year": 2020}, answers_meta=meta, status="review_ready")
+    match_job(db_session, job)
+    db_session.commit()
+    assert prow(db_session, job, "a1").matched_ingest_paper_id is None  # the key differs
+    assert admin_client.put(f"/api/import/jobs/{job.id}/papers/q1/metadata", json=meta).status_code == 200
+    a, qq = prow(db_session, job, "a1"), prow(db_session, job, "q1")
+    assert a.matched_ingest_paper_id == qq.id and qq.match_status == "auto"
+    link = admin_client.get(f"/api/import/jobs/{job.id}/review").json()["matches"]
+    assert (link["q1"]["paper_key"], link["a1"]["paper_key"]) == ("a1", "q1")
+    assert link["q1"]["job_id"] == str(job.id) and link["q1"]["answer_numbers"] == [1, 2, 9]
+
+
+def test_unmatching_a_same_booklet_pair_rejects_it(admin_client, db_session, admin_user, fake_object_store, meta):
+    job = booklet(db_session, admin_user, fake_object_store, meta, status="review_ready")
+    match_job(db_session, job)
+    db_session.commit()
+    assert admin_client.delete(f"/api/import/jobs/{job.id}/papers/q1/match").status_code == 200
+    match_job(db_session, job)
+    db_session.commit()
+    assert prow(db_session, job, "a1").matched_ingest_paper_id is None
+    assert prow(db_session, job, "q1").matched_ingest_paper_id is None
+
+
+def test_confirming_a_same_booklet_pair_settles_the_job_once(
+    admin_client, db_session, admin_user, fake_object_store, mock_s3, meta, env  # noqa: F811
+):
+    _, cmeta = env
+    job = booklet(db_session, admin_user, fake_object_store, meta, status="review_ready", filename="b.pdf")
+    match_job(db_session, job)
+    db_session.commit()
+    reads = []
+    get = fake_object_store.get
+    fake_object_store.get = lambda key: reads.append(key) or get(key)
+    resp = admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**cmeta, "paper_label": "q1"})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert reads == [job.source_key]  # one source.pdf for both papers
+    assert body["job_status"] == "confirmed"
+    assert body["answers_from"] == {"job_id": str(job.id), "filename": "b.pdf", "paper_key": "a1", "attached": [1, 2]}
+    assert body["unmatched"] == [9]
+    paper = db_session.get(Paper, body["paper_id"])
+    answers = {x.question_number: [p.source_page for p in x.pages if p.page_type == "answer"] for x in paper.questions}
+    assert answers == {1: [1], 2: [2]}
+    db_session.expire_all()
+    j = db_session.get(IngestJob, job.id)
+    assert j.status == "confirmed" and j.report["review_outcome"] == {"q1": "confirmed", "a1": "attached"}
+    assert j.confirmed_paper_ids == [paper.id]
+    assert (prow(db_session, j, "q1").status, prow(db_session, j, "a1").status) == ("confirmed", "attached")
+    assert {e.kind for e in db_session.query(IngestEvent).filter_by(job_id=job.id)} >= {"paper_confirmed", "paper_attached"}
+    assert not any(k.startswith(f"tmp/ingest/{job.id}/") for k in fake_object_store.objects)

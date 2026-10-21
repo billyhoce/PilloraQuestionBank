@@ -166,15 +166,16 @@ def _drop_job_objects(source_key: str, store: ObjectStore) -> None:
 
 
 def _linked_answers(db: Any, job: IngestJob, key: str):
-    """The pending answer-only ``ingest_paper`` linked to question paper ``key`` and its job, or
-    ``(None, None)``. A read only: ``confirm_job_paper`` re-checks it once both jobs are locked."""
+    """The pending answer-only ``ingest_paper`` linked to question paper ``key`` and its job (``job``
+    itself for a pair from the same booklet, #90), or ``(None, None)``. A read only:
+    ``confirm_job_paper`` re-checks it once the job(s) are locked."""
     row = get_row(db, job, key)
     if row is None or row.role != "question" or row.matched_ingest_paper_id is None:
         return None, None
     partner = row.matched_ingest_paper
-    if partner is None or partner.job_id == job.id:
+    if partner is None:
         return None, None
-    return partner, db.get(IngestJob, partner.job_id)
+    return partner, job if partner.job_id == job.id else db.get(IngestJob, partner.job_id)
 
 
 def _answers_usable(db: Any, job: IngestJob, key: str, partner, partner_job) -> bool:
@@ -187,9 +188,9 @@ def _answers_usable(db: Any, job: IngestJob, key: str, partner, partner_job) -> 
     )
 
 
-def _linked_answer_payload(partner_job, partner, payload: dict, store: ObjectStore):
-    """Crop the linked answer paper's answer rects (from ITS job's source.pdf) and add them to the
-    question ``payload`` as answer pages, after the question's own answer pages. Returns
+def _linked_answer_payload(partner_job, partner, payload: dict, pdf_bytes: bytes):
+    """Crop the linked answer paper's answer rects (from ``pdf_bytes``, ITS job's source.pdf) and add
+    them to the question ``payload`` as answer pages, after the question's own answer pages. Returns
     ``(attached_numbers, unmatched_numbers, temp_keys)``."""
     paper_data = _find_paper(partner_job, partner.paper_key)
     by_number = {}
@@ -213,7 +214,7 @@ def _linked_answer_payload(partner_job, partner, payload: dict, store: ObjectSto
     cropped = {**paper_data, "questions": [
         {"number": n, "question_rects": [], "answer_rects": rects_by_number[n]} for n in numbers
     ]}
-    extra, temp_keys = build_confirm_payload(store.get(partner_job.source_key), cropped, {})
+    extra, temp_keys = build_confirm_payload(pdf_bytes, cropped, {})
     for number, eq in zip(numbers, extra["questions"]):
         target = by_number[number]
         base = sum(1 for p in target["pages"] if p["page_type"] == "answer")
@@ -228,17 +229,20 @@ def confirm_job_paper(
 ) -> tuple[Paper, bool]:
     """Create the paper for proposal paper ``key``. Returns ``(paper, job_settled)``.
 
-    If the paper is linked to a pending answer-only paper of another job (#84), that job's answers
-    come in too: cropped from the other job's ``source.pdf``, appended after this paper's own answer
-    pages, and the answer paper is recorded ``attached`` in the same transaction. ``answers_info``,
+    If the paper is linked to a pending answer-only paper (#84), its answers come in too: cropped from
+    that paper's job's ``source.pdf``, appended after this paper's own answer pages, and the answer
+    paper is recorded ``attached`` in the same transaction. The answer paper may be in this same job
+    (#90): then one job is locked, one ``source.pdf`` read, and the job settles once both are recorded. ``answers_info``,
     if given, is filled with ``answers_from`` (``{job_id, filename, paper_key, attached}`` or None),
     ``unmatched`` (answer numbers with no question) and ``answers_job_settled``.
 
     ``metadata`` may name a school not in the list yet (``new_school_name``, no ``school_id``): it is
     found or created here and given to the other pending papers carrying that name (#87)."""
     partner, partner_job = _linked_answers(db, job, key)
-    # Lock both jobs, lowest id first, so two confirms of a linked pair cannot deadlock.
-    for j in sorted([j for j in (job, partner_job) if j is not None], key=lambda j: str(j.id)):
+    # Lock both jobs (one, for a same-booklet pair), lowest id first, so two confirms of a linked
+    # pair cannot deadlock.
+    jobs = {j.id: j for j in (job, partner_job) if j is not None}
+    for j in sorted(jobs.values(), key=lambda j: str(j.id)):
         db.refresh(j, with_for_update=True)  # also serialises two clicks on the same paper
     _check_open(job, key)
     paper_data = _find_paper(job, key)
@@ -257,12 +261,14 @@ def confirm_job_paper(
         metadata = create_new_school(db, metadata)
     except ValueError as e:
         raise ReviewActionError(422, str(e))
-    payload, temp_keys = build_confirm_payload(store.get(job.source_key), paper_data, metadata)
+    pdf_bytes = store.get(job.source_key)
+    payload, temp_keys = build_confirm_payload(pdf_bytes, paper_data, metadata)
     attached: list[int] = []
     unmatched: list[Any] = []
     if partner is not None:
         try:
-            attached, unmatched, extra_keys = _linked_answer_payload(partner_job, partner, payload, store)
+            answer_pdf = pdf_bytes if partner_job.id == job.id else store.get(partner_job.source_key)
+            attached, unmatched, extra_keys = _linked_answer_payload(partner_job, partner, payload, answer_pdf)
         except Exception:
             _delete_quietly(temp_keys)
             raise
@@ -277,6 +283,7 @@ def confirm_job_paper(
     partner_filename = partner_job.filename if partner_job is not None else None
     partner_job_id = partner_job.id if partner_job is not None else None
     partner_source = partner_job.source_key if partner_job is not None else None
+    same_job = partner_job_id == job_id
 
     def link_and_record(paper: Paper) -> None:
         # Runs inside confirm_import's transaction, so the paper, its source job and the
@@ -286,14 +293,17 @@ def confirm_job_paper(
         settled = _record(job, key, "confirmed", paper.id)
         set_metadata(db, job, key, metadata)  # what the admin confirmed (admin-sourced if it differs)
         set_status(db, job, key, "confirmed", paper.id)
+        if partner is not None:
+            answers_settled = _record(partner_job, partner_key, "attached", paper.id)
+            if same_job:  # the job is settled only once its answer paper is recorded too
+                settled = answers_settled
+            set_status(db, partner_job, partner_key, "attached", paper.id)
         add_event(
             db, job_id, "paper_confirmed", actor_user_id=getattr(admin, "id", None),
             paper_id=paper.id, paper_label=key, job_settled=settled,
             answers_from_job=str(partner_job_id) if partner_job_id else None,
         )
         if partner is not None:
-            answers_settled = _record(partner_job, partner_key, "attached", paper.id)
-            set_status(db, partner_job, partner_key, "attached", paper.id)
             add_event(
                 db, partner_job_id, "paper_attached", actor_user_id=getattr(admin, "id", None),
                 paper_id=paper.id, paper_label=partner_key, attached=attached,
@@ -317,7 +327,7 @@ def confirm_job_paper(
             partner_job_id, "paper_attached", paper_id=paper.id, paper_label=partner_key, attached=attached,
             unmatched=[str(n) for n in unmatched], job_settled=answers_settled, via_job=str(job_id),
         )
-        if answers_settled:
+        if answers_settled and not same_job:
             _drop_job_objects(partner_source, store)
     if answers_info is not None:
         answers_info["unmatched"] = unmatched

@@ -66,7 +66,8 @@ reference list yet is a **new school**: held by name on the pending paper and cr
 question paper carrying it is confirmed.
 
 **Link / proposed attach**
-A **link** pairs a pending answer-only paper with a pending question paper of another job; confirming
+A **link** pairs a pending answer-only paper with a pending question paper, of another job or of the
+same booklet; confirming
 the question paper brings the answers in. A **proposed attach** names the one confirmed paper an
 answer-only paper matches; the admin accepts it with one click. A pair the admin turns down
 (Unmatch, or "Not this one") is **rejected**: automatic matching never offers that pair again, but
