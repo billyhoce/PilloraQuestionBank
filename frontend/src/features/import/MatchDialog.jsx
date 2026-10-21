@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Modal from '../../components/Modal'
 import Spinner from '../../components/Spinner'
+import AnswerMappingTable from './AnswerMappingTable'
 import { Thumbnail } from './RectPreview'
 import SchoolCombobox from './SchoolCombobox'
 import { candidateQuery, coverageNote, detailsText, differences, locationText, metadataBody } from './pairing'
@@ -31,7 +32,7 @@ export function AttachModeChoice({ mode, onMode }) {
   )
 }
 
-function Candidate({ c, fields, refs, role, ownPreview, saving, choosing, onPair, onAttach, onChoose, onMode }) {
+function Candidate({ c, fields, refs, role, ownPreview, saving, onChoose }) {
   const full = c.kind === 'bank' && c.answer_coverage === 'all'
   const note = coverageNote(c)
   const differ = differences(c, fields, refs)
@@ -61,20 +62,10 @@ function Candidate({ c, fields, refs, role, ownPreview, saving, choosing, onPair
         </div>
       </div>
       {!full && (
-        <div className="w-36 shrink-0 flex flex-col gap-2 items-start">
-          {c.kind === 'pending' ? (
-            <button type="button" className={btn} disabled={saving} onClick={() => onPair(c)}>Pair</button>
-          ) : choosing ? (
-            <>
-              <AttachModeChoice mode={choosing.mode} onMode={onMode} />
-              <button type="button" className={btn} disabled={saving} onClick={() => onAttach(c, choosing.mode)}>Attach answers</button>
-            </>
-          ) : (
-            <button type="button" className={btn} disabled={saving}
-              onClick={() => (c.answer_coverage === 'partial' ? onChoose(c) : onAttach(c, null))}>
-              Attach
-            </button>
-          )}
+        <div className="w-20 shrink-0 flex flex-col gap-2 items-start">
+          <button type="button" className={btn} disabled={saving} onClick={() => onChoose(c)}>
+            {c.kind === 'pending' ? 'Pair' : 'Attach'}
+          </button>
         </div>
       )}
     </li>
@@ -83,7 +74,8 @@ function Candidate({ c, fields, refs, role, ownPreview, saving, choosing, onPair
 
 /**
  * "Match this paper": search for the booklet a paper that needs a partner belongs with, by
- * ranking rather than filtering, then Pair it (a pending paper) or Attach it (a bank paper).
+ * ranking rather than filtering; choosing one (Pair for a pending paper, Attach for a bank paper)
+ * moves on to the answer mapping table, whose button saves the pair (or attach) and the mapping.
  *   jobId, paperKey, role - the paper being matched ('answer_only' or 'question')
  *   metadata       - its fields as the sidebar holds them; they pre-fill the search
  *   extractedSchool - the school read from its cover, shown while unresolved (searched as blank)
@@ -105,7 +97,7 @@ export default function MatchDialog({
   }))
   const [updateDetails, setUpdateDetails] = useState(true)
   const [results, setResults] = useState(null) // { exact, best }
-  const [choosing, setChoosing] = useState(null) // { paperId, mode } while asking append/replace
+  const [chosen, setChosen] = useState(null) // { c, mode }: the booklet in the mapping table step
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -119,10 +111,7 @@ export default function MatchDialog({
     return () => { live = false; clearTimeout(t) }
   }, [jobId, paperKey, fields])
 
-  const set = patch => {
-    setChoosing(null)
-    setFields(f => ({ ...f, ...patch }))
-  }
+  const set = patch => setFields(f => ({ ...f, ...patch }))
 
   async function save(call) {
     setSaving(true)
@@ -137,15 +126,39 @@ export default function MatchDialog({
     }
   }
 
-  const pair = c => save(async () => {
-    const state = await api.import.matchJobPaper(jobId, paperKey, c.ingest_paper_id, updateDetails ? metadataBody(fields) : undefined)
+  const pair = (c, mapping) => save(async () => {
+    const state = await api.import.matchJobPaper(
+      jobId, paperKey, c.ingest_paper_id, updateDetails ? metadataBody(fields) : undefined, mapping,
+    )
     onPaired(state, updateDetails ? fields : null)
   })
 
-  const attach = (c, mode) => save(async () => {
-    const result = await api.import.attachJobPaper(jobId, { key: paperKey, paper_id: c.paper_id, ...(mode && { mode }) })
+  const attach = (c, mode, mapping) => save(async () => {
+    const result = await api.import.attachJobPaper(jobId, { key: paperKey, paper_id: c.paper_id, ...(mode && { mode }), mapping })
     onAttached({ ...result, paper_id: c.paper_id })
   })
+
+  if (chosen) {
+    const { c, mode } = chosen
+    const bankPaper = c.kind === 'bank'
+    return (
+      <Modal isOpen onClose={onClose} title="Match this paper" wide>
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-gray-800">{locationText(c)}: {detailsText(c.details, refs) || 'No details'}</p>
+          {error && <ErrorBanner message={error} />}
+          <AnswerMappingTable
+            jobId={jobId} paperKey={paperKey}
+            target={bankPaper ? { paper_id: c.paper_id } : { ingest_paper_id: c.ingest_paper_id }}
+            saveLabel={bankPaper ? 'Attach answers' : 'Pair'} saving={saving}
+            onSave={mapping => (bankPaper ? attach(c, mode, mapping) : pair(c, mapping))}
+            onCancel={() => { setChosen(null); setError(null) }}
+          >
+            {mode && <AttachModeChoice mode={mode} onMode={m => setChosen(ch => ({ ...ch, mode: m }))} />}
+          </AnswerMappingTable>
+        </div>
+      </Modal>
+    )
+  }
 
   const list = results && (results.exact.length ? ['Exact matches', results.exact] : results.best.length ? ['Best matches', results.best] : null)
   // The tick box applies to Pair only: an answer paper's own details are not kept after an attach.
@@ -199,10 +212,8 @@ export default function MatchDialog({
                 <Candidate
                   key={c.kind === 'bank' ? `b${c.paper_id}` : `p${c.ingest_paper_id}`}
                   c={c} fields={fields} refs={refs} role={role} ownPreview={ownPreview} saving={saving}
-                  choosing={c.kind === 'bank' && choosing?.paperId === c.paper_id ? choosing : null}
-                  onPair={pair} onAttach={attach}
-                  onChoose={x => setChoosing({ paperId: x.paper_id, mode: 'append' })}
-                  onMode={mode => setChoosing(ch => ({ ...ch, mode }))}
+                  // append or replace is asked only of a partly answered bank paper (default append)
+                  onChoose={x => setChosen({ c: x, mode: x.kind === 'bank' && x.answer_coverage === 'partial' ? 'append' : null })}
                 />
               ))}
             </ul>

@@ -55,7 +55,7 @@ def job_coverage(job: IngestJob) -> dict[str, dict]:
 
 def paper_answer_numbers(job: IngestJob, key: str) -> list:
     """The numbers of proposal paper ``key``'s questions that have an answer box: for an answer-only
-    paper, the answers a linked confirm brings in by number."""
+    paper, the answers a linked confirm brings in (placed by the pair's mapping, #92)."""
     paper = current_papers(job).get(key)
     return answered_numbers(paper) if paper is not None else []
 

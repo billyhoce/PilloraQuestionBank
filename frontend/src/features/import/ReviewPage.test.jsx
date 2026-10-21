@@ -9,7 +9,7 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
-      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+      confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(), answerMappingTable: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
@@ -526,8 +526,11 @@ describe('ReviewPage', () => {
       const paperNo = within(dialog).getByLabelText('Paper no.')
       await userEvent.clear(paperNo)
       await userEvent.type(paperNo, '2')
+      api.import.answerMappingTable.mockResolvedValue({ questions: [{ label: '1', answered: false, preview: null }], answers: [{ label: '1', preview: null }], mapping: null })
       await userEvent.click(await within(dialog).findByRole('button', { name: 'Pair' }))
-      expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'q1', 41, expect.objectContaining({ paper_number: '2' }))
+      await within(dialog).findByRole('table')  // the answer mapping table, then Pair saves
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }))
+      expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'q1', 41, expect.objectContaining({ paper_number: '2' }), { 1: '1' })
       expect(await screen.findByText(/Paired with this file \(a9\)/)).toBeInTheDocument()
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
       expect(screen.getByPlaceholderText('1')).toHaveValue('2')  // the sidebar's paper no.
@@ -598,8 +601,10 @@ describe('ReviewPage', () => {
       api.import.attachJobPaper.mockResolvedValue({ attached: [1, 2], unmatched: [], modes: {}, job_status: 'confirmed' })
       renderPage()
       expect(await screen.findByText(/Answers match Raffles 2024 Sec 3 Math Paper 1/)).toBeInTheDocument()
+      api.import.answerMappingTable.mockResolvedValue({ questions: [{ label: '1', answered: false, preview: null }], answers: [{ label: '1', preview: null }], mapping: null })
       await userEvent.click(screen.getByRole('button', { name: 'Attach…' }))
-      await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 9 }))
+      await userEvent.click(await screen.findByRole('button', { name: 'Attach answers' }))  // from the mapping table
+      await waitFor(() => expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 9, mapping: { 1: '1' } }))
       await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
       await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/review'))
     })

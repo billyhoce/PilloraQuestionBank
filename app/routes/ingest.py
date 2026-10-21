@@ -29,10 +29,12 @@ from app.services.ingest_papers import (
     link_papers,
     paper_links,
     reject_proposed_paper,
+    set_answer_map,
     set_metadata as set_paper_metadata,
     sync_job_papers,
     unlink_paper,
 )
+from app.services.answer_mapping import mapping_table
 from app.services.match_candidates import find_candidates
 from app.services.ingest_confirm import ReviewActionError, attach_answers, confirm_job_paper, skip_job_paper
 from app.services.ingest_jobs import (
@@ -728,6 +730,9 @@ class JobMatchIn(BaseModel):
     ingest_paper_id: int
     # "Also update this paper's details": saved on this paper in the same transaction.
     metadata: Optional[PaperMetadataEditIn] = None
+    # The answer mapping table (answer label -> question label, null: left off), saved as the answer
+    # paper's ``answer_map``; omitted means by number (#92).
+    mapping: Optional[dict[str, Optional[str]]] = None
 
 
 @router.post("/jobs/{job_id}/papers/{paper_key}/match")
@@ -740,16 +745,68 @@ def match_job_paper(
 ):
     """Pair a pending paper with a pending paper of the other role (answer-only <-> question), of
     another review-ready job or this one (both rows get each other's id in
-    ``matched_ingest_paper_id``), optionally saving this paper's ``metadata`` first. Nothing is
-    attached yet; confirming the question paper settles the pair. The response is what this paper
-    has now."""
+    ``matched_ingest_paper_id``), optionally saving this paper's ``metadata`` first and the
+    pair's answer ``mapping``. Nothing is attached yet; confirming the question paper settles the
+    pair. The response is what this paper has now."""
     job = _get_own_job(db, job_id, current_user)
     if job.status != "review_ready":
         raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
     db.refresh(job, with_for_update=True)
     try:
         metadata = payload.metadata.model_dump() if payload.metadata is not None else None
-        link_papers(db, job, paper_key, payload.ingest_paper_id, metadata)
+        link_papers(db, job, paper_key, payload.ingest_paper_id, metadata, payload.mapping)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+@router.get("/jobs/{job_id}/papers/{paper_key}/answer-map")
+def answer_mapping_table(
+    job_id: uuid.UUID,
+    paper_key: str,
+    ingest_paper_id: Optional[int] = None,
+    paper_id: Optional[int] = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """The answer mapping table (#92) for this paper and a partner: the pending paper
+    ``ingest_paper_id``, the bank paper ``paper_id``, or (neither) its current link, as
+    ``{questions, answers, mapping}``. See ``app.services.answer_mapping``."""
+    job = _get_own_job(db, job_id, current_user)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    try:
+        return mapping_table(db, store, row, ingest_paper_id, paper_id)
+    except MatchError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+
+
+class AnswerMapIn(BaseModel):
+    # answer label -> question label (null: left off); null altogether means by number
+    mapping: Optional[dict[str, Optional[str]]] = None
+
+
+@router.put("/jobs/{job_id}/papers/{paper_key}/answer-map")
+def save_answer_map(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: AnswerMapIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Check answers…": save an edited answer mapping on a linked pair (#92), from either side; it
+    is stored on the answer paper and used when the question paper is confirmed. The response is
+    what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        set_answer_map(db, job, paper_key, payload.mapping)
     except MatchError as e:
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)
@@ -860,6 +917,9 @@ class JobAttachIn(BaseModel):
     key: str
     paper_id: int
     mode: Optional[Literal["append", "replace"]] = None
+    # The answer mapping table: answer label -> question label (null: left off); an answer it does
+    # not name goes onto the question with its number (#92).
+    mapping: Optional[dict[str, Optional[str]]] = None
 
 
 @router.post("/jobs/{job_id}/attach")
@@ -870,12 +930,14 @@ def attach_job(
     db: Session = Depends(get_db),
     store: ObjectStore = Depends(get_object_store),
 ):
-    """Attach an answer-only paper's answers to an existing paper, matched by question number.
-    Omitting ``mode`` replaces a question's answers when it has none and appends otherwise.
-    Answers whose number matches no question are returned as ``unmatched``."""
+    """Attach an answer-only paper's answers to an existing paper, placed by ``mapping`` if given,
+    else by question number. Omitting ``mode`` replaces a question's answers when it has none and
+    appends otherwise. Answers that land on no question are returned as ``unmatched``."""
     job = _get_own_job(db, job_id, current_user)
     try:
-        result = attach_answers(job, payload.key, payload.paper_id, payload.mode, current_user, db, store)
+        result = attach_answers(
+            job, payload.key, payload.paper_id, payload.mode, current_user, db, store, mapping=payload.mapping
+        )
     except ReviewActionError as e:
         db.rollback()
         raise HTTPException(status_code=e.status, detail=e.message)

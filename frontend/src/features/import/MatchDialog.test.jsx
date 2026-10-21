@@ -5,7 +5,7 @@ import MatchDialog from './MatchDialog'
 import { api } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
-  api: { import: { paperCandidates: vi.fn(), matchJobPaper: vi.fn(), attachJobPaper: vi.fn() } },
+  api: { import: { paperCandidates: vi.fn(), matchJobPaper: vi.fn(), attachJobPaper: vi.fn(), answerMappingTable: vi.fn() } },
 }))
 
 const REFS = {
@@ -40,9 +40,25 @@ function renderDialog(props = {}) {
   return handlers
 }
 
+// The mapping table step: questions 1 and 2 and answers 1 and 2, by number.
+const TABLE = {
+  questions: [{ label: '1', answered: false, preview: null }, { label: '2', answered: false, preview: null }],
+  answers: [{ label: '1', preview: null }, { label: '2', preview: null }],
+  mapping: null,
+}
+const BY_NUMBER = { 1: '1', 2: '2' }
+
+// Choose a booklet (its Pair / Attach button), then save from the mapping table.
+async function choose(name, save) {
+  await userEvent.click(await screen.findByRole('button', { name }))
+  await screen.findByRole('table')
+  await userEvent.click(screen.getByRole('button', { name: save }))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   api.import.paperCandidates.mockResolvedValue({ exact: [], best: [] })
+  api.import.answerMappingTable.mockResolvedValue(TABLE)
 })
 
 describe('MatchDialog', () => {
@@ -87,17 +103,22 @@ describe('MatchDialog', () => {
     expect(within(list).getByText('paper no. 2A ≠ 2')).toBeInTheDocument()
   })
 
-  it('pairs, saving the paper\'s details when ticked', async () => {
+  it('pairs after the mapping table, saving the paper\'s details when ticked and the mapping', async () => {
     api.import.paperCandidates.mockResolvedValue({ exact: [pending()], best: [] })
     const state = { matches: { filename: 'questions.pdf', paper_key: 'q1' }, proposal: null }
     api.import.matchJobPaper.mockResolvedValue(state)
     const { onPaired, beforeSave } = renderDialog()
     expect(await screen.findByLabelText("Also update this paper's details")).toBeChecked()
     await userEvent.click(screen.getByRole('button', { name: 'Pair' }))
+    expect(await screen.findByRole('table')).toBeInTheDocument()
+    expect(api.import.answerMappingTable).toHaveBeenCalledWith('j1', 'a1', { ingest_paper_id: 31 })
+    expect(api.import.matchJobPaper).not.toHaveBeenCalled() // nothing is saved before the table
+    await userEvent.selectOptions(screen.getByLabelText('Answer 2 goes onto'), '1')
+    await userEvent.click(screen.getByRole('button', { name: 'Pair' }))
     expect(beforeSave).toHaveBeenCalled()
     expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31, {
       subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1',
-    })
+    }, { 1: '1', 2: '1' })
     expect(onPaired).toHaveBeenCalledWith(state, expect.objectContaining({ school_id: 4, year: '2024' }))
   })
 
@@ -106,8 +127,8 @@ describe('MatchDialog', () => {
     api.import.matchJobPaper.mockResolvedValue({ matches: {}, proposal: null })
     const { onPaired } = renderDialog()
     await userEvent.click(await screen.findByLabelText("Also update this paper's details"))
-    await userEvent.click(await screen.findByRole('button', { name: 'Pair' }))
-    expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31, undefined)
+    await choose('Pair', 'Pair')
+    expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31, undefined, BY_NUMBER)
     expect(onPaired).toHaveBeenCalledWith({ matches: {}, proposal: null }, null)
   })
 
@@ -119,14 +140,17 @@ describe('MatchDialog', () => {
     expect(within(row).queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('attaches to a bank paper without answers straight away', async () => {
+  it('attaches to a bank paper without answers after the mapping table', async () => {
     api.import.paperCandidates.mockResolvedValue({ exact: [bank()], best: [] })
     const result = { attached: [1], unmatched: [], modes: {}, job_status: 'confirmed' }
     api.import.attachJobPaper.mockResolvedValue(result)
     const { onAttached } = renderDialog()
-    await userEvent.click(await screen.findByRole('button', { name: 'Attach' }))
+    await screen.findByRole('button', { name: 'Attach' })
     expect(screen.queryByLabelText("Also update this paper's details")).not.toBeInTheDocument() // nothing to pair
-    expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7 })
+    await choose('Attach', 'Attach answers')
+    expect(api.import.answerMappingTable).toHaveBeenCalledWith('j1', 'a1', { paper_id: 7 })
+    expect(screen.queryByLabelText('Add to the existing answers')).not.toBeInTheDocument()
+    expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mapping: BY_NUMBER })
     expect(onAttached).toHaveBeenCalledWith({ ...result, paper_id: 7 })
   })
 
@@ -136,18 +160,28 @@ describe('MatchDialog', () => {
     renderDialog()
     expect(await screen.findByText('Only 1 of 2 questions have answers')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Attach' }))
-    expect(api.import.attachJobPaper).not.toHaveBeenCalled()
+    await screen.findByRole('table')
     expect(screen.getByLabelText('Add to the existing answers')).toBeChecked()
     await userEvent.click(screen.getByLabelText('Replace the existing answers'))
     await userEvent.click(screen.getByRole('button', { name: 'Attach answers' }))
-    expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mode: 'replace' })
+    expect(api.import.attachJobPaper).toHaveBeenCalledWith('j1', { key: 'a1', paper_id: 7, mode: 'replace', mapping: BY_NUMBER })
+  })
+
+  it('goes back from the mapping table to the list without saving', async () => {
+    api.import.paperCandidates.mockResolvedValue({ exact: [pending()], best: [] })
+    renderDialog()
+    await userEvent.click(await screen.findByRole('button', { name: 'Pair' }))
+    await screen.findByRole('table')
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(await screen.findByRole('list', { name: 'Exact matches' })).toBeInTheDocument()
+    expect(api.import.matchJobPaper).not.toHaveBeenCalled()
   })
 
   it('shows a refused pair and stays open', async () => {
     api.import.paperCandidates.mockResolvedValue({ exact: [pending()], best: [] })
     api.import.matchJobPaper.mockRejectedValue({ message: 'That is not a pending question paper awaiting review' })
     const { onPaired } = renderDialog()
-    await userEvent.click(await screen.findByRole('button', { name: 'Pair' }))
+    await choose('Pair', 'Pair')
     expect(await screen.findByText('That is not a pending question paper awaiting review')).toBeInTheDocument()
     expect(onPaired).not.toHaveBeenCalled()
   })

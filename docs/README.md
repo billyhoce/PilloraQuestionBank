@@ -34,7 +34,7 @@ question by reading one file instead of three.
 | Doc | What's inside |
 |---|---|
 | [plans/ingest-hardening-and-qa-pairing.md](./plans/ingest-hardening-and-qa-pairing.md) | Implemented (except #81 duplicate-paper protection): kept for its decisions and rationale; behaviour lives in the feature docs |
-| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Agreed, not built:** follow-up to Phase 4 of the plan above. The "Match this paper" popup (editable fields with a school combobox that can name a new school, found booklets with exact and best matches), the question ↔ answer mapping table, answers all-or-none per paper, and unmatching that remembers the rejected pair |
+| [plans/qa-matching-ux.md](./plans/qa-matching-ux.md) | **Agreed, mostly built (see its status line):** follow-up to Phase 4 of the plan above. The "Match this paper" popup (editable fields with a school combobox that can name a new school, found booklets with exact and best matches), the question ↔ answer mapping table, answers all-or-none per paper, and unmatching that remembers the rejected pair |
 
 ## Decisions
 

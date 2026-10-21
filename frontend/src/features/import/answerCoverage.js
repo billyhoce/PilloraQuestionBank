@@ -7,8 +7,8 @@ const asNumber = n => {
   return Number.isInteger(v) ? v : null
 }
 
-// The numbers of `paper`'s questions with no answer box, counting `linkedAnswers` (the answer
-// numbers a linked answer paper brings in on confirm, matched by number) as answered.
+// The numbers of `paper`'s questions with no answer box, counting `linkedAnswers` (the question
+// numbers a linked answer paper's answers land on at confirm, by the pair's mapping) as answered.
 export function unansweredNumbers(paper, linkedAnswers = []) {
   const linked = new Set(linkedAnswers.map(asNumber).filter(n => n != null))
   return (paper?.questions ?? [])
@@ -23,9 +23,8 @@ export function coverageOf(paper, linkedAnswers = []) {
   return missing === 0 ? 'all' : 'partial'
 }
 
-// "Q5–Q7, Q9 have no answers"; null when every question has answers.
-export function unansweredWarning(numbers) {
-  if (!numbers?.length) return null
+// "Q5–Q7, Q9": question numbers in words, consecutive ones as a range.
+export function questionList(numbers) {
   const parts = []
   let run = null
   for (const n of numbers) {
@@ -38,10 +37,15 @@ export function unansweredWarning(numbers) {
     run = v != null ? { first: v, last: v } : { label: n }
   }
   parts.push(run)
-  const text = parts
+  return parts
     .map(r => (r.label != null ? `Q${r.label}` : r.first === r.last ? `Q${r.first}` : `Q${r.first}–Q${r.last}`))
     .join(', ')
-  return `${text} ${numbers.length === 1 ? 'has' : 'have'} no answers`
+}
+
+// "Q5–Q7, Q9 have no answers"; null when every question has answers.
+export function unansweredWarning(numbers) {
+  if (!numbers?.length) return null
+  return `${questionList(numbers)} ${numbers.length === 1 ? 'has' : 'have'} no answers`
 }
 
 // The warning for a paper that would be confirmed partly answered, else null (all answered, or

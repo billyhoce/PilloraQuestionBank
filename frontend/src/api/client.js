@@ -162,11 +162,22 @@ export const api = {
       return request('GET', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/candidates${qs ? `?${qs}` : ''}`)
     },
     // Pair paper `key` with a pending paper of the other role (another job's, or this one's),
-    // optionally saving this paper's `metadata` too. Returns { matches, proposal }.
-    matchJobPaper: (id, key, ingest_paper_id, metadata) =>
+    // optionally saving this paper's `metadata` and the answer `mapping` too. Returns { matches, proposal }.
+    matchJobPaper: (id, key, ingest_paper_id, metadata, mapping) =>
       request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, {
-        ingest_paper_id, ...(metadata && { metadata }),
+        ingest_paper_id, ...(metadata && { metadata }), ...(mapping && { mapping }),
       }),
+    // The answer mapping table for paper `key` and `target` ({ ingest_paper_id } or { paper_id };
+    // null: its current link) -> { questions, answers, mapping }.
+    answerMappingTable: (id, key, target) => {
+      const params = new URLSearchParams()
+      for (const [k, v] of Object.entries(target ?? {})) params.set(k, v)
+      const qs = params.toString()
+      return request('GET', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/answer-map${qs ? `?${qs}` : ''}`)
+    },
+    // "Check answers…": save a linked pair's edited mapping -> { matches, proposal }.
+    saveAnswerMap: (id, key, mapping) =>
+      request('PUT', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/answer-map`, { mapping }),
     // Unmatch a linked paper (either side): the pair is rejected for good and both are re-matched.
     // Returns what this paper has now: { matches, proposal }.
     unmatchJobPaper: (id, key) => request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`),
