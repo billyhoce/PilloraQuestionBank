@@ -21,6 +21,7 @@ from app.models.orm import INGEST_JOB_STATUSES, IngestJob, IngestPaper, Paper, Q
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.answer_coverage import job_coverage
 from app.services.ingest_matching import match_info, match_row
 from app.services.ingest_papers import (
     MatchError,
@@ -389,8 +390,11 @@ def _job_out(job: IngestJob) -> dict:
     }
 
 
-def _paper_summary(row: IngestPaper) -> dict:
-    """One proposed paper as the job list shows it: enough for an at-a-glance review queue card."""
+def _paper_summary(row: IngestPaper, coverage: dict | None = None) -> dict:
+    """One proposed paper as the job list shows it: enough for an at-a-glance review queue card.
+    ``answer_coverage`` (``none``/``partial``/``all``, of its own answer boxes) and ``unanswered``
+    (its question numbers without one) come from the job's current proposal."""
+    coverage = coverage or {"answer_coverage": "none", "unanswered": []}
     return {
         "key": row.paper_key,
         "role": row.role,
@@ -404,6 +408,7 @@ def _paper_summary(row: IngestPaper) -> dict:
         "paper_number": row.paper_number,
         "linked": row.matched_ingest_paper_id is not None,
         "match_status": row.match_status,
+        **coverage,
     }
 
 
@@ -418,8 +423,9 @@ def _papers_by_job(db: Session, jobs: list[IngestJob]) -> dict:
         .order_by(IngestPaper.job_id, IngestPaper.paper_key)
         .all()
     )
+    coverage = {j.id: job_coverage(j) for j in jobs}
     for r in rows:
-        by_job[r.job_id].append(_paper_summary(r))
+        by_job[r.job_id].append(_paper_summary(r, coverage[r.job_id].get(r.paper_key)))
     return by_job
 
 

@@ -25,6 +25,9 @@ the pair in ``ingest_match_rejection``. Every rule above skips a rejected pair (
 in either direction), so that pair is never proposed again while both papers stay free to match
 something else.
 
+Answers are all or none (#89): a confirmed paper whose every question already has an answer page
+(coverage ``all``) is never a candidate, exact or partial; a partly answered one still is.
+
 ``paper_number`` is not normalised in the bank, so it is compared after trimming and case-folding
 only. Nothing here commits; callers run it inside their own transaction.
 """
@@ -33,6 +36,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.orm import IngestJob, IngestMatchRejection, IngestPaper, Paper
+from app.services.answer_coverage import ALL, bank_coverage
 from app.services.ingest_papers import METADATA_FIELDS
 
 PARTIAL_FIELDS = ("school_id", "year", "subject_id")
@@ -85,12 +89,18 @@ def _without(q, column, ids):
     return q.where(column.notin_(ids)) if ids else q
 
 
+def _open_to_answers(db: Session, papers: list[Paper]) -> list[Paper]:
+    """``papers`` without those that already have answers on every question."""
+    coverage = bank_coverage(db, (p.id for p in papers))
+    return [p for p in papers if coverage[p.id] != ALL]
+
+
 def exact_candidates(db: Session, row: IngestPaper) -> list[Paper]:
     q = _without(select(Paper), Paper.id, rejected_paper_ids(db, row))
     for f in METADATA_FIELDS:
         value = getattr(row, f)
         q = q.where(_paper_number_clause(value) if f == "paper_number" else getattr(Paper, f) == value)
-    return list(db.scalars(q.order_by(Paper.id)))
+    return _open_to_answers(db, list(db.scalars(q.order_by(Paper.id))))
 
 
 def partial_candidates(db: Session, row: IngestPaper) -> list[Paper]:
@@ -99,7 +109,7 @@ def partial_candidates(db: Session, row: IngestPaper) -> list[Paper]:
     q = _without(select(Paper), Paper.id, rejected_paper_ids(db, row))
     for f in PARTIAL_FIELDS:
         q = q.where(getattr(Paper, f) == getattr(row, f))
-    return list(db.scalars(q.order_by(Paper.id)))
+    return _open_to_answers(db, list(db.scalars(q.order_by(Paper.id))))
 
 
 def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:

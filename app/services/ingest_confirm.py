@@ -14,6 +14,7 @@ from PIL import Image
 
 from app.logger import log, log_job_event
 from app.models.orm import IngestJob, Paper, QuestionPage
+from app.services.answer_coverage import ALL, bank_coverage
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
@@ -381,6 +382,9 @@ def attach_answers(
     commit and the temp keys deleted after it (as in confirm); the page rows, the job's outcome, the
     ``ingest_paper`` row and the event commit together, and a failure rolls everything back.
 
+    A paper that already has answers on every question (coverage ``all``) is refused (409): answers
+    are all or none, so it needs no more.
+
     Returns ``{"attached": [numbers], "unmatched": [numbers], "modes": {number: mode},
     "job_settled": bool}``."""
     if mode is not None and mode not in ATTACH_MODES:
@@ -393,6 +397,8 @@ def attach_answers(
     target = db.get(Paper, paper_id)
     if target is None:
         raise ReviewActionError(404, f"Paper {paper_id} does not exist")
+    if bank_coverage(db, [paper_id])[paper_id] == ALL:  # answers are all or none (#89)
+        raise ReviewActionError(409, f"Paper {paper_id} already has answers on every question")
     by_number = {q.question_number: q for q in target.questions}
 
     rects_by_number: dict[int, list[dict]] = {}  # matched question number -> its answer rects

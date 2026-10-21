@@ -441,6 +441,42 @@ describe('ReviewPage', () => {
       expect(refresh).toHaveBeenCalled()
     })
 
+    it('warns, without blocking confirm, when the paper would be confirmed partly answered', async () => {
+      api.import.review.mockResolvedValue(TWO)  // question 1 has an answer box, question 2 none
+      api.import.confirmJobPaper.mockResolvedValue({ paper_id: 7, job_status: 'review_ready', questions: [] })
+      renderPage()
+      expect(await screen.findByText(/Q2 has no answers/)).toHaveTextContent(/answer-box editor, or confirm anyway/)
+      const button = await screen.findByRole('button', { name: /Confirm paper/ })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+      expect(api.import.confirmJobPaper).toHaveBeenCalled()
+    })
+
+    it('counts a linked answer paper\'s answers in the warning', async () => {
+      const linked = { filename: 'answers.pdf', paper_key: 'a1', job_id: 'j2' }
+      api.import.review.mockResolvedValue({ ...TWO, matches: { q1: { ...linked, answer_numbers: [2] } } })
+      const first = renderPage()
+      await screen.findByText(/Answers available from answers\.pdf/)
+      expect(screen.queryByText(/has no answers/)).not.toBeInTheDocument()
+      first.unmount()
+      const none = q => ({ ...q, answer_rects: [] })
+      const bare = { ...TWO.proposal.papers[0], questions: TWO.proposal.papers[0].questions.map(none) }
+      api.import.review.mockResolvedValue({
+        ...TWO, proposal: { ...TWO.proposal, papers: [bare] }, matches: { q1: { ...linked, answer_numbers: [1, 7] } },
+      })
+      renderPage()
+      expect(await screen.findByText(/Q2 has no answers/)).toBeInTheDocument()
+    })
+
+    it('does not warn about a question paper with no answers at all', async () => {
+      const none = q => ({ ...q, answer_rects: [] })
+      const bare = { ...TWO.proposal.papers[0], questions: TWO.proposal.papers[0].questions.map(none) }
+      api.import.review.mockResolvedValue({ ...TWO, proposal: { ...TWO.proposal, papers: [bare] } })
+      renderPage()
+      await screen.findByRole('button', { name: /Confirm paper/ })
+      expect(screen.queryByText(/have no answers|has no answers/)).not.toBeInTheDocument()
+    })
+
     it('shows the server error when a confirm is refused', async () => {
       api.import.review.mockResolvedValue(TWO)
       api.import.confirmJobPaper.mockRejectedValue({ message: 'Paper q1 was already confirmed' })

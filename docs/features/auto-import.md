@@ -53,8 +53,10 @@ There is no multipart job-creation route; the old `POST /api/import/jobs` was re
 
 **Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
 `{key, role, status, school_id, year, level_id, subject_id, exam_type_id, stream_id, paper_number,
-linked, match_status}`, where `linked` means it is linked to a paper of another job. Empty until
-`report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
+linked, match_status, answer_coverage, unanswered}`, where `linked` means it is linked to a paper
+of another job, and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
+without an answer box) describe its own booklet's answers
+([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)). Empty until `report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
 
 **Worker liveness:** `worker_alive` is true when the heartbeat is at most 90 s old. If the worker
 has never started: `false` / `null`. Both values are computed server-side.
@@ -153,6 +155,7 @@ has never started: `false` / `null`. Both values are computed server-side.
     missing fields named, or "No details read from the cover"
   - for an answer-only paper: linked / matching paper found / needs matching / not matched; for a
     question paper: "Answers linked from another upload"
+  - for a pending question paper only partly answered by its own booklet: "Q5–Q7 have no answers"
   - a decided paper is greyed with its outcome
 - **Only jobs with unmatched answers** narrows the list in the browser.
 
@@ -181,6 +184,9 @@ All jobs). The header links back to the queue and to the **next job** in it (the
     disabled, with "Pick a school: “Raffles Instn” is not in the list." shown, until a school is
     picked. A job without `extracted` (from before it existed) shows nothing extra. The Manual
     import sidebar keeps its plain dropdown.
+  - A question paper that would be confirmed **partly answered** shows "Q5–Q7 have no answers. Add
+    them with the answer-box editor, or confirm anyway." above **Confirm paper**, which stays
+    enabled ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)).
   - answer-only paper: the Match panel ([qa-pairing.md](./qa-pairing.md)).
 - **Metadata edits** are kept per paper and saved (debounced 800 ms) to
   `PUT .../papers/{key}/metadata`. This is best effort, since confirm sends the final values.

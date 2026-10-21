@@ -55,7 +55,8 @@ app/
 │                   #   premium.py (who may open which premium paper), paper_admin.py (page edits),
 │                   #   ingest_jobs.py (upload, jobs, retry/cancel), ingest_review.py (review payload,
 │                   #   proposal edits), ingest_confirm.py (confirm/skip/attach), ingest_papers.py
-│                   #   (ingest_paper rows, links), ingest_matching.py, ingest_events.py (audit rows)
+│                   #   (ingest_paper rows, links), ingest_matching.py, answer_coverage.py (none/partial/
+│                   #   all), ingest_events.py (audit rows)
 ├── pdf/            # image_processing.py (PDF→image, standardization), layout_engine.py
 │                   #   (PDF packing + render), rich_text.py, sample_data.py (synthetic fixtures)
 ├── storage/        # s3_client.py — AWS S3 / MinIO client + signed URL helpers;
