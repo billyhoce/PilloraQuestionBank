@@ -29,6 +29,12 @@ def answers_paper():
     }
 
 
+def question_paper():
+    """A question paper with no answers of its own: the only kind another booklet's answers pair
+    with (answers are all or none). ``qpaper()`` has an answer on question 1."""
+    return qpaper(questions=[q(1, [r(1), r(2)]), q(2, [r(2, 50, 400, 300, 600)])])
+
+
 def mk(db, admin, store, paper, key, meta, filename, status="review_ready"):
     job = make_job(db, admin, proposal=proposal(paper), pages=3, filename=filename, status=status)
     store.objects[job.source_key] = source_pdf()
@@ -44,7 +50,7 @@ def prow(db, job, key):
 
 
 def test_answer_job_links_to_the_single_pending_question_paper(db_session, admin_user, fake_object_store, meta):
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -55,15 +61,15 @@ def test_answer_job_links_to_the_single_pending_question_paper(db_session, admin
 
 def test_question_job_finishing_later_links_an_older_answer_job(db_session, admin_user, fake_object_store, meta):
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     match_job(db_session, qj)
     db_session.commit()
     assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, qj, "q1").id
 
 
 def test_ambiguous_matches_are_not_linked(db_session, admin_user, fake_object_store, meta):
-    q1 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q1.pdf")
-    q2 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q2.pdf")
+    q1 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q1.pdf")
+    q2 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q2.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -82,18 +88,45 @@ def test_ambiguous_matches_are_not_linked(db_session, admin_user, fake_object_st
 
 
 def test_partial_key_is_not_linked(db_session, admin_user, fake_object_store, meta):
-    mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**meta, "paper_number": None}, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
     assert prow(db_session, aj, "a1").matched_ingest_paper_id is None
 
 
+@pytest.mark.parametrize("side", ["answer", "question"])
+def test_a_question_paper_with_answers_of_its_own_is_never_auto_linked(db_session, admin_user, fake_object_store, meta, side):
+    # partly answered counts as answered: question 1 of qpaper() has an answer box
+    if side == "answer":
+        qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+        aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
+        match_job(db_session, aj)
+    else:
+        aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
+        qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+        match_job(db_session, qj)
+    db_session.commit()
+    a, qq = prow(db_session, aj, "a1"), prow(db_session, qj, "q1")
+    assert a.matched_ingest_paper_id is None and qq.matched_ingest_paper_id is None
+    assert a.match_status is None and qq.match_status is None
+
+
+def test_the_admins_edit_decides_whether_a_question_paper_has_answers(db_session, admin_user, fake_object_store, meta):
+    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj.proposal_edited = proposal(question_paper())  # the admin removed its answer box
+    db_session.commit()
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, qj, "q1").id
+
+
 def test_confirmed_paper_proposal_wins_over_auto_link(db_session, admin_user, fake_object_store, meta):
     from datetime import UTC, datetime
     db_session.add(Paper(**meta, created_by=admin_user.id, created_at=datetime.now(UTC)))
     db_session.flush()
-    mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -102,7 +135,7 @@ def test_confirmed_paper_proposal_wins_over_auto_link(db_session, admin_user, fa
 
 
 def test_metadata_edit_drops_an_auto_link_and_unmatch_rejects_the_pair(admin_client, db_session, admin_user, fake_object_store, meta):
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -125,11 +158,11 @@ def test_metadata_edit_drops_an_auto_link_and_unmatch_rejects_the_pair(admin_cli
 
 
 def test_unmatch_frees_both_papers_to_find_another_partner(admin_client, db_session, admin_user, fake_object_store, meta):
-    q1 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q1.pdf")
+    q1 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q1.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
-    q2 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q2.pdf")  # a linked answer is left alone
+    q2 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q2.pdf")  # a linked answer is left alone
     match_job(db_session, q2)
     db_session.commit()
     assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, q1, "q1").id
@@ -146,7 +179,7 @@ def test_unmatch_frees_both_papers_to_find_another_partner(admin_client, db_sess
 
 
 def test_unmatch_from_the_question_side_rejects_the_pair(admin_client, db_session, admin_user, fake_object_store, meta):
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -158,7 +191,7 @@ def test_unmatch_from_the_question_side_rejects_the_pair(admin_client, db_sessio
 
 
 def test_review_of_question_paper_shows_the_link(admin_client, db_session, admin_user, fake_object_store, meta):
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "answers.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -172,7 +205,7 @@ def test_confirm_brings_in_the_other_jobs_answers_and_settles_both(
     admin_client, db_session, admin_user, fake_object_store, mock_s3, meta, env  # noqa: F811
 ):
     _, cmeta = env
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "answers.pdf")
     match_job(db_session, aj)
     db_session.commit()
@@ -183,13 +216,11 @@ def test_confirm_brings_in_the_other_jobs_answers_and_settles_both(
     assert body["unmatched"] == [9]
     assert body["answers_from"] == {"job_id": str(aj.id), "filename": "answers.pdf", "paper_key": "a1", "attached": [1, 2]}
     qs = {x["question_number"]: x for x in body["questions"]}
-    # q1: its own answer (page 3) first, then the other job's answer
-    assert sorted((p["page_type"], p["page_order"]) for p in qs[1]["pages"] if p["page_type"] == "answer") == [
-        ("answer", 1), ("answer", 2),
-    ]
+    # q1 had no answer of its own: the other job's answer (its page 1)
+    assert [(p["page_type"], p["page_order"]) for p in qs[1]["pages"] if p["page_type"] == "answer"] == [("answer", 1)]
     paper = db_session.get(Paper, body["paper_id"])
     pages = {p.page_order: p for p in next(x for x in paper.questions if x.question_number == 1).pages if p.page_type == "answer"}
-    assert pages[1].source_page == 3 and pages[2].source_page == 1
+    assert pages[1].source_page == 1
     assert [p.page_type for p in next(x for x in paper.questions if x.question_number == 2).pages].count("answer") == 1
     db_session.expire_all()
     for job, key, outcome in ((qj, "q1", "confirmed"), (aj, "a1", "attached")):
@@ -208,7 +239,7 @@ def test_confirm_proceeds_without_answers_when_the_answer_job_is_gone(
     admin_client, db_session, admin_user, fake_object_store, mock_s3, meta, env  # noqa: F811
 ):
     _, cmeta = env
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "answers.pdf")
     match_job(db_session, aj)
     aj.status = "cancelled"
@@ -224,7 +255,7 @@ def test_confirm_proceeds_without_answers_when_the_answer_job_is_gone(
 def test_skipping_a_linked_question_paper_releases_the_answer_paper(
     admin_client, db_session, admin_user, fake_object_store, meta
 ):
-    qj = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", meta, "answers.pdf")
     match_job(db_session, aj)
     db_session.commit()

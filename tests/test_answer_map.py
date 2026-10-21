@@ -4,8 +4,8 @@ when it is attached to a bank paper or confirmed with a linked question paper. A
 
 from app.models.orm import Paper, Question
 from app.services.ingest_matching import match_job
-from tests.test_ingest_confirm import attach_env, env, paper as qpaper, q, r  # noqa: F401
-from tests.test_ingest_link_confirm import answers_paper, meta, mk, prow  # noqa: F401
+from tests.test_ingest_confirm import attach_env, env, q, r  # noqa: F401
+from tests.test_ingest_link_confirm import answers_paper, meta, mk, prow, question_paper  # noqa: F401
 from tests.test_ingest_matching import add_paper
 from tests.test_match_candidates import add_question
 
@@ -40,7 +40,7 @@ def test_attach_without_a_mapping_still_goes_by_number(attach_env, db_session): 
 
 
 def linked(db, admin, store, meta, filename="answers.pdf"):  # noqa: F811
-    qj = mk(db, admin, store, qpaper(), "q1", meta, "q.pdf")
+    qj = mk(db, admin, store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db, admin, store, answers_paper(), "a1", meta, filename)
     return qj, aj
 
@@ -64,8 +64,8 @@ def test_pairing_saves_the_mapping_and_confirm_places_answers_by_it(
     assert body["answers_from"]["attached"] == [1, 2] and body["unmatched"] == [2]
     paper = db_session.get(Paper, body["paper_id"])
     answers = {x.question_number: [p.source_page for p in x.pages if p.page_type == "answer"] for x in paper.questions}
-    # q1: its own answer (page 3), then answer 9 (page 3); q2: answer 1 (page 1)
-    assert answers == {1: [3, 3], 2: [1]}
+    # q1: answer 9 (page 3); q2: answer 1 (page 1)
+    assert answers == {1: [3], 2: [1]}
 
 
 def test_a_linked_pair_with_no_mapping_goes_by_number(db_session, admin_user, fake_object_store, meta):  # noqa: F811
@@ -78,7 +78,7 @@ def test_a_linked_pair_with_no_mapping_goes_by_number(db_session, admin_user, fa
 
 def test_changing_the_match_discards_the_mapping(admin_client, db_session, admin_user, fake_object_store, meta):  # noqa: F811
     q1, aj = linked(db_session, admin_user, fake_object_store, {**meta, "year": 2020})
-    q2 = mk(db_session, admin_user, fake_object_store, qpaper(), "q1", {**meta, "year": 2020}, "q2.pdf")
+    q2 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", {**meta, "year": 2020}, "q2.pdf")
     url = f"/api/import/jobs/{aj.id}/papers/a1/match"
     admin_client.post(url, json={"ingest_paper_id": prow(db_session, q1, "q1").id, "mapping": {"1": "2"}})
     admin_client.post(url, json={"ingest_paper_id": prow(db_session, q2, "q1").id})  # a new match
@@ -129,7 +129,7 @@ def table(client, job, key, **target):
 def test_the_table_for_a_pending_pair_from_either_side(admin_client, db_session, admin_user, fake_object_store, meta):  # noqa: F811
     qj, aj = linked(db_session, admin_user, fake_object_store, {**meta, "year": 2020})
     got = table(admin_client, aj, "a1", ingest_paper_id=prow(db_session, qj, "q1").id)
-    assert [(x["label"], x["answered"]) for x in got["questions"]] == [("1", True), ("2", False)]
+    assert [(x["label"], x["answered"]) for x in got["questions"]] == [("1", False), ("2", False)]
     assert [a["label"] for a in got["answers"]] == ["1", "2", "9"]
     assert got["answers"][1]["preview"]["url"] == f"https://fake.url/tmp/ingest/{aj.id}/pages/p02.webp"
     assert got["questions"][0]["preview"]["rect"]["page"] == 1

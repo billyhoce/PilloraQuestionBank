@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  candidateQuery, coverageNote, detailsText, differences, locationText, needsPartner, pairingState,
+  alreadyAnswered, candidateQuery, coverageNote, detailsText, differences, locationText, needsPartner, pairingState,
 } from './pairing'
 
 const REFS = {
@@ -66,12 +66,28 @@ describe('locationText', () => {
   })
 })
 
+describe('alreadyAnswered', () => {
+  it('is a bank paper with every answer, or a pending question paper with any', () => {
+    expect(alreadyAnswered({ kind: 'bank', role: 'question', answer_coverage: 'all' })).toBe(true)
+    expect(alreadyAnswered({ kind: 'bank', role: 'question', answer_coverage: 'partial' })).toBe(false) // append or replace
+    expect(alreadyAnswered({ kind: 'pending', role: 'question', answer_coverage: 'partial' })).toBe(true)
+    expect(alreadyAnswered({ kind: 'pending', role: 'question', answer_coverage: 'none' })).toBe(false)
+    expect(alreadyAnswered({ kind: 'pending', role: 'answer_only', answer_coverage: 'all' })).toBe(false)
+  })
+})
+
 describe('coverageNote', () => {
   it('warns about a partly answered bank paper and marks a fully answered one', () => {
     expect(coverageNote({ kind: 'bank', answer_coverage: 'partial', question_numbers: [1, 2, 3], answer_numbers: [1, 2] }))
       .toBe('Only 2 of 3 questions have answers')
     expect(coverageNote({ kind: 'bank', answer_coverage: 'all', question_numbers: [1], answer_numbers: [1] })).toBe('Already has answers')
     expect(coverageNote({ kind: 'bank', answer_coverage: 'none', question_numbers: [1], answer_numbers: [] })).toBeNull()
-    expect(coverageNote({ kind: 'pending', answer_coverage: 'all' })).toBeNull()
+    expect(coverageNote({ kind: 'pending', role: 'answer_only', answer_coverage: 'all' })).toBeNull()
+  })
+
+  it('marks a pending question paper with any answers of its own as already answered', () => {
+    expect(coverageNote({ kind: 'pending', role: 'question', answer_coverage: 'partial' })).toBe('Already has answers')
+    expect(coverageNote({ kind: 'pending', role: 'question', answer_coverage: 'all' })).toBe('Already has answers')
+    expect(coverageNote({ kind: 'pending', role: 'question', answer_coverage: 'none' })).toBeNull()
   })
 })

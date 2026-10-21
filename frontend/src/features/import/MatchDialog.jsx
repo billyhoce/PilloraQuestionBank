@@ -6,7 +6,7 @@ import Spinner from '../../components/Spinner'
 import AnswerMappingTable from './AnswerMappingTable'
 import { Thumbnail } from './RectPreview'
 import SchoolCombobox from './SchoolCombobox'
-import { candidateQuery, coverageNote, detailsText, differences, locationText, metadataBody } from './pairing'
+import { alreadyAnswered, candidateQuery, coverageNote, detailsText, differences, locationText, metadataBody } from './pairing'
 
 const SEARCH_DELAY_MS = 250
 
@@ -33,7 +33,7 @@ export function AttachModeChoice({ mode, onMode }) {
 }
 
 function Candidate({ c, fields, refs, role, ownPreview, saving, onChoose }) {
-  const full = c.kind === 'bank' && c.answer_coverage === 'all'
+  const full = alreadyAnswered(c)
   const note = coverageNote(c)
   const differ = differences(c, fields, refs)
   const answerOnly = role === 'answer_only'
@@ -162,7 +162,7 @@ export default function MatchDialog({
 
   const list = results && (results.exact.length ? ['Exact matches', results.exact] : results.best.length ? ['Best matches', results.best] : null)
   // The tick box applies to Pair only: an answer paper's own details are not kept after an attach.
-  const canPair = !!list?.[1].some(c => c.kind === 'pending')
+  const canPair = !!list?.[1].some(c => c.kind === 'pending' && !alreadyAnswered(c))
   return (
     <Modal isOpen onClose={onClose} title="Match this paper" wide>
       <div className="space-y-4">

@@ -32,7 +32,9 @@ New schools (#87): a paper whose school the admin typed as new has no ``school_i
 case-folded). A confirmed paper always has an id, so a new-school paper only matches pending papers.
 
 Answers are all or none (#89): a confirmed paper whose every question already has an answer page
-(coverage ``all``) is never a candidate, exact or partial; a partly answered one still is.
+(coverage ``all``) is never a candidate, exact or partial; a partly answered one still is. A
+*pending* question paper is linked only when it has no answers of its own (coverage ``none``): a
+partly answered one counts as answered, from either side.
 
 ``paper_number`` is not normalised in the bank, so it is compared after trimming and case-folding
 only. Nothing here commits; callers run it inside their own transaction.
@@ -43,7 +45,7 @@ from sqlalchemy.orm import Session
 
 from app.models.orm import IngestJob, IngestMatchRejection, IngestPaper, Paper
 from app.services.answer_coverage import ALL, bank_coverage
-from app.services.ingest_papers import METADATA_FIELDS
+from app.services.ingest_papers import METADATA_FIELDS, open_to_answers
 
 PARTIAL_FIELDS = ("school_id", "year", "subject_id")
 _LABELS = {
@@ -159,7 +161,10 @@ def _pending_partners(db: Session, row: IngestPaper, role: str) -> list[IngestPa
         )
     )
     q = _ip_key_clauses(_without(q, IngestPaper.id, rejected_ingest_ids(db, row)), row)
-    return list(db.scalars(q.order_by(IngestPaper.id)))
+    rows = list(db.scalars(q.order_by(IngestPaper.id)))
+    if role == "question":  # only a question paper with no answers of its own takes another's
+        rows = [r for r in rows if open_to_answers(r, db.get(IngestJob, r.job_id))]
+    return rows
 
 
 def pending_question_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
@@ -264,7 +269,7 @@ def _answer_candidates(db: Session, row: IngestPaper) -> list[IngestPaper]:
     matched from its own side, which decides uniqueness)."""
     if row.status != "pending" or row.matched_ingest_paper_id is not None:
         return []
-    if unknown_fields(row):
+    if unknown_fields(row) or not open_to_answers(row, db.get(IngestJob, row.job_id)):
         return []
     return _pending_partners(db, row, "answer_only")
 

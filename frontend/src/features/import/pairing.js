@@ -82,10 +82,17 @@ export function locationText(c) {
   return c.same_job ? `Same file (${c.paper_key})` : `Pending in ${c.filename} (${c.paper_key})`
 }
 
-// Answers are all or none: what a bank paper already has, or null.
+// Answers are all or none: a candidate that cannot take these answers - a bank paper with an
+// answer on every question, or a pending question paper with any answers of its own.
+export function alreadyAnswered(c) {
+  if (c.kind === 'bank') return c.answer_coverage === 'all'
+  return c.role === 'question' && c.answer_coverage !== 'none'
+}
+
+// Answers are all or none: what a candidate already has, or null.
 export function coverageNote(c) {
+  if (alreadyAnswered(c)) return 'Already has answers'
   if (c.kind !== 'bank') return null
-  if (c.answer_coverage === 'all') return 'Already has answers'
   if (c.answer_coverage === 'partial') {
     return `Only ${c.answer_numbers.length} of ${c.question_numbers.length} questions have answers`
   }

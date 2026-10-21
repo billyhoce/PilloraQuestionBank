@@ -6,7 +6,7 @@ import uuid
 from app.models.orm import Question, QuestionPage
 from app.services.ingest_papers import sync_job_papers
 from app.services.match_candidates import rank
-from tests.test_ingest_match import ANSWERS, QUESTION, job_with, proposal, row
+from tests.test_ingest_match import ANSWERED_QUESTION, ANSWERS, QUESTION, job_with, proposal, row
 from tests.test_ingest_matching import add_paper, meta  # noqa: F401
 from tests.test_ingest_review import make_job, rect
 
@@ -164,6 +164,30 @@ def test_bank_papers_already_answered_are_flagged_not_dropped(
     assert (got[partly.id]["answer_coverage"], got[partly.id]["question_numbers"], got[partly.id]["answer_numbers"]) == (
         "partial", [1, 2], [1],
     )
+
+
+def test_pending_question_papers_with_answers_of_their_own_are_flagged_not_dropped(
+    admin_client, db_session, admin_user, fake_object_store, meta
+):
+    # answers are all or none: a partly answered question paper cannot take these answers
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, meta)
+    job_with(db_session, admin_user, ANSWERED_QUESTION, meta, filename="answered.pdf")
+    [got] = candidates(admin_client, ajob, akey, year=2024)["exact"]
+    assert (got["filename"], got["answer_coverage"], got["answer_numbers"]) == ("answered.pdf", "partial", [1])
+
+
+def test_a_candidates_preview_and_mapping_table_follow_the_admins_edit(
+    admin_client, db_session, admin_user, fake_object_store, meta
+):
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, meta)
+    qjob, _ = job_with(db_session, admin_user, QUESTION, meta)
+    edited = {**QUESTION, "questions": [{"number": 5, "question_rects": [rect(2)], "answer_rects": [], "flags": []}]}
+    qjob.proposal_edited = proposal(edited)  # the admin renumbered the question and moved its box
+    db_session.commit()
+    [got] = candidates(admin_client, ajob, akey, year=2024)["exact"]
+    assert got["question_numbers"] == [5] and got["preview"]["rect"] == rect(2)
+    resp = admin_client.get(f"/api/import/jobs/{ajob.id}/papers/{akey}/answer-map", params={"ingest_paper_id": got["ingest_paper_id"]})
+    assert [(x["label"], x["preview"]["rect"]) for x in resp.json()["questions"]] == [("5", rect(2))]
 
 
 def test_without_an_exact_match_the_best_matches_say_which_fields_differ(

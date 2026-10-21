@@ -14,6 +14,14 @@ QUESTION = {
     "questions": [{"number": 1, "question_rects": [rect(3)], "answer_rects": [], "flags": []}],
     "orphan_answers": [], "warnings": [],
 }
+# answers are all or none: a question paper with any answers of its own counts as answered
+ANSWERED_QUESTION = {
+    **QUESTION,
+    "questions": [
+        {"number": 1, "question_rects": [rect(3)], "answer_rects": [rect(2)], "flags": []},
+        {"number": 2, "question_rects": [rect(3)], "answer_rects": [], "flags": []},
+    ],
+}
 ANSWERS = {
     "label": None, "answer_label": "a1", "role": "answer_only", "answer_template": "table",
     "pages": [page(2)],
@@ -87,6 +95,23 @@ def test_link_refuses_bad_targets(admin_client, db_session, admin_user, fake_obj
     assert link(url, row(db_session, done, dk).id) == 422  # a job no longer under review
     assert link(f"/api/import/jobs/{qjob.id}/papers/{qkey}/match", row(db_session, other_question, oq).id) == 422
     assert link(f"/api/import/jobs/{ajob.id}/papers/nope/match", row(db_session, qjob, qkey).id) == 404
+
+
+def test_link_refuses_a_question_paper_that_has_answers_of_its_own(
+    admin_client, db_session, admin_user, fake_object_store
+):
+    qjob, qkey = job_with(db_session, admin_user, ANSWERED_QUESTION, {"year": 2023})
+    ajob, akey = job_with(db_session, admin_user, ANSWERS, {"year": 2023})
+    q, a = row(db_session, qjob, qkey), row(db_session, ajob, akey)
+    for url, target in (
+        (f"/api/import/jobs/{ajob.id}/papers/{akey}/match", q.id),  # from the answer side
+        (f"/api/import/jobs/{qjob.id}/papers/{qkey}/match", a.id),  # and from the question side
+    ):
+        resp = admin_client.post(url, json={"ingest_paper_id": target, "metadata": {"year": 2024}})
+        assert resp.status_code == 409, resp.text
+        assert "already has answers" in resp.json()["detail"]
+    assert row(db_session, ajob, akey).matched_ingest_paper_id is None
+    assert row(db_session, ajob, akey).year == 2023  # nothing saved
 
 
 def test_link_from_the_question_side(admin_client, db_session, admin_user, fake_object_store):
