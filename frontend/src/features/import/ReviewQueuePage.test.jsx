@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ReviewQueuePage from './ReviewQueuePage'
 import { REVIEW_POLL_MS } from './useReviewQueue'
-import { describeMetadata, matchState } from './reviewQueueText'
+import { describeMetadata, matchState, needsPartner } from './reviewQueueText'
 import { api } from '../../api/client'
 
 vi.mock('../../api/client', () => ({
   api: {
-    import: { listJobs: vi.fn() },
+    import: {
+      listJobs: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), attachJobPaper: vi.fn(), answerMappingTable: vi.fn(),
+    },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
   },
@@ -91,6 +93,71 @@ describe('ReviewQueuePage', () => {
     expect(within(card).getAllByText(/no answers/)).toHaveLength(1)
   })
 
+  it('puts a Match button only on the paper lines that need a partner', async () => {
+    const bare = paper('q1', 'question', { answer_coverage: 'none', unanswered: [1, 2] })
+    const answered = paper('q2', 'question', { answer_coverage: 'all', unanswered: [] })
+    const linked = paper('a1', 'answer_only', { answer_coverage: 'all', unanswered: [], linked: true })
+    const loose = paper('a2', 'answer_only', { answer_coverage: 'all', unanswered: [] })
+    api.import.listJobs.mockResolvedValue(listing([{ ...OLD, papers: [bare, answered, linked, loose] }]))
+    renderPage()
+    const [card] = await screen.findAllByTestId('review-card')
+    const lines = within(card).getAllByRole('listitem')
+    expect(lines.map(l => within(l).queryByRole('button', { name: /Match/ }) !== null)).toEqual([true, false, false, true])
+  })
+
+  it('opens the "Match this paper" popup from the queue and refreshes the card after pairing', async () => {
+    const bare = paper('q1', 'question', {
+      school_id: null, extracted_school: 'Raffles Instn', answer_coverage: 'none', unanswered: [1, 2],
+    })
+    api.import.listJobs.mockResolvedValue(listing([{ ...OLD, papers: [bare] }]))
+    api.import.paperCandidates.mockResolvedValue({ exact: [{
+      kind: 'pending', ingest_paper_id: 31, paper_id: null, job_id: 'j2', filename: 'answers.pdf', paper_key: 'a1',
+      same_job: false, role: 'answer_only', details: {}, agree: [], differ: [], partner: null, preview: null,
+      question_numbers: [], answer_numbers: [1, 2], answer_coverage: 'all',
+    }], best: [] })
+    api.import.answerMappingTable.mockResolvedValue({
+      questions: [{ label: '1', answered: false, preview: null }], answers: [{ label: '1', preview: null }], mapping: null,
+    })
+    api.import.matchJobPaper.mockResolvedValue({ matches: { filename: 'answers.pdf', paper_key: 'a1' }, proposal: null })
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Match q1' }))
+    expect(await screen.findByText('Match this paper')).toBeInTheDocument()
+    // pre-filled from the summary, the unresolved school searched as blank
+    await waitFor(() => expect(api.import.paperCandidates).toHaveBeenCalledWith('old', 'q1', {
+      subject_id: 1, level_id: 3, exam_type_id: 5, year: 2024, paper_number: '1',
+    }))
+    expect(screen.getByText(/Raffles Instn/)).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: 'Pair' }))
+    await screen.findByRole('table')
+    api.import.listJobs.mockClear()
+    await userEvent.click(screen.getByRole('button', { name: 'Pair' }))
+    expect(api.import.matchJobPaper).toHaveBeenCalledWith('old', 'q1', 31, expect.any(Object), { 1: '1' })
+    await waitFor(() => expect(screen.queryByText('Match this paper')).toBeNull())
+    expect(api.import.listJobs).toHaveBeenCalledWith('review_ready')
+  })
+
+  it('refreshes the queue after attaching from it', async () => {
+    api.import.listJobs.mockResolvedValue(listing([NEWER]))
+    api.import.paperCandidates.mockResolvedValue({ exact: [{
+      kind: 'bank', ingest_paper_id: null, paper_id: 7, job_id: null, filename: null, paper_key: null,
+      same_job: false, role: 'question', details: {}, agree: [], differ: [], partner: null, preview: null,
+      question_numbers: [1], answer_numbers: [], answer_coverage: 'none',
+    }], best: [] })
+    api.import.answerMappingTable.mockResolvedValue({
+      questions: [{ label: '1', answered: false, preview: null }], answers: [{ label: '1', preview: null }], mapping: null,
+    })
+    api.import.attachJobPaper.mockResolvedValue({ job_status: 'review_ready', attached: 1 })
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Match a1' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Attach' }))
+    await screen.findByRole('table')
+    api.import.listJobs.mockClear()
+    await userEvent.click(screen.getByRole('button', { name: 'Attach answers' }))
+    expect(api.import.attachJobPaper).toHaveBeenCalledWith('new', { key: 'a1', paper_id: 7, mapping: { 1: '1' } })
+    await waitFor(() => expect(screen.queryByText('Match this paper')).toBeNull())
+    expect(api.import.listJobs).toHaveBeenCalledWith('review_ready')
+  })
+
   it('says when there is nothing to review', async () => {
     api.import.listJobs.mockResolvedValue(listing([]))
     renderPage()
@@ -116,5 +183,20 @@ describe('reviewQueueText', () => {
     expect(matchState({ role: 'answer_only', match_status: 'proposed' }).text).toMatch(/found/)
     expect(matchState({ role: 'answer_only', match_status: 'manual' }).tone).toBe('amber')
     expect(matchState({ role: 'question', linked: false })).toBeNull()
+  })
+
+  it('says which paper lines need a partner', () => {
+    const p = (role, extra) => ({ role, status: 'pending', linked: false, answer_coverage: 'all', unanswered: [], ...extra })
+    expect(needsPartner(p('answer_only'))).toBe(true)
+    expect(needsPartner(p('answer_only', { match_status: 'proposed' }))).toBe(true)
+    expect(needsPartner(p('question', { answer_coverage: 'none', unanswered: [1, 2] }))).toBe(true)
+    expect(needsPartner(p('question'))).toBe(false)
+    expect(needsPartner(p('question', { answer_coverage: 'partial', unanswered: [2] }))).toBe(false)
+    // already linked, decided, or with no questions at all
+    expect(needsPartner(p('answer_only', { linked: true }))).toBe(false)
+    expect(needsPartner(p('question', { answer_coverage: 'none', unanswered: [1], linked: true }))).toBe(false)
+    expect(needsPartner(p('answer_only', { status: 'skipped' }))).toBe(false)
+    expect(needsPartner(p('question', { answer_coverage: 'none', unanswered: [] }))).toBe(false)
+    expect(needsPartner(p('answer_only', { answer_coverage: 'none', unanswered: [] }))).toBe(false)
   })
 })

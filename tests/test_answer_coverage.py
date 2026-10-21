@@ -135,3 +135,12 @@ def test_review_of_a_linked_question_paper_lists_the_partners_answer_numbers(
     assert resp.status_code == 200, resp.text
     link = admin_client.get(f"/api/import/jobs/{qjob.id}/review").json()["matches"][qkey]
     assert link["answer_numbers"] == [1, 3]  # what confirm will bring in, by number
+
+
+def test_job_list_names_the_school_read_from_the_cover(admin_client, db_session, admin_user):
+    # The queue's Match button pre-fills the popup from the summary, so it needs the raw name (#93).
+    meta = {"school_id": None, "extracted": {"school": "Raffles Instn", "subject": None}}
+    job_with(db_session, admin_user, question_paper(False), meta, filename="q.pdf")
+    job_with(db_session, admin_user, question_paper(False), filename="r.pdf")
+    assert summary(admin_client, "q.pdf")["extracted_school"] == "Raffles Instn"
+    assert summary(admin_client, "r.pdf")["extracted_school"] is None

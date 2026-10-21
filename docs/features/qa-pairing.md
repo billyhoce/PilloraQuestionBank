@@ -79,7 +79,8 @@ bank paper that already has answers everywhere.
     `page_type = 'answer'`. `bank_coverage(db, paper_ids)` computes it in one query.
 - **Job list summary:** each paper carries `answer_coverage` and `unanswered` (its question numbers
   without an answer box), from its own booklet only. The review queue flags a pending question
-  paper whose coverage is `partial` ("Q5–Q7 have no answers").
+  paper whose coverage is `partial` ("Q5–Q7 have no answers"), and gives one whose coverage is
+  `none` a [**Match** button](#from-the-review-queue).
 - **Automatic matching** never counts a bank paper with coverage `all` as a candidate, exact or
   partial. A partly answered bank paper is still a normal candidate.
 - **Attach** to a bank paper with coverage `all` is refused (`409`).
@@ -150,7 +151,8 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
 
 ### The popup
 
-`MatchDialog.jsx`, opened by **Match this paper…** or **Change match…**.
+`MatchDialog.jsx`, opened by **Match this paper…** or **Change match…**, or by a queue card's
+[**Match** button](#from-the-review-queue).
 
 - **Fields:** subject, stream, level, school, exam type, year, paper number, pre-filled from the
   paper. Each reference field is a type-to-search picker of existing entries; school is the
@@ -174,6 +176,20 @@ place of it on an answer-only paper, on every paper that needs a partner or has 
   shown only while a pending booklet is listed: an answer paper's own details are not kept after an
   attach.
 - Before saving, any pending proposal edit is flushed (the server crops the saved proposal).
+
+### From the review queue
+
+On the [Review queue](./auto-import.md#review-queue), each paper line that needs a partner has a
+**Match** button that opens the same popup without opening the job (`ReviewQueuePage.jsx`).
+
+- **Which lines:** decided from the job list summary (`needsPartner` in `reviewQueueText.js`): a
+  pending paper that is not linked and has questions, and is answer-only or has
+  `answer_coverage` `none`. A linked paper's match is changed or undone on the review page.
+- **Pre-filled** from the summary's fields, with `extracted_school` as the unresolved school.
+- **No previews of the paper's own pages:** the queue has no page images, so only the candidates'
+  thumbnails show. The mapping table loads its own previews (`GET .../answer-map`).
+- After a pair or an attach the popup closes and the queue refreshes, so the card shows the new
+  state (or leaves the queue once every paper is decided).
 
 ### Candidates
 

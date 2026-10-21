@@ -5,15 +5,16 @@ import Spinner from '../../components/Spinner'
 import AgeBadge from './AgeBadge'
 import { unansweredWarning } from './answerCoverage'
 import { useReferenceData } from './importMetadata'
+import MatchDialog from './MatchDialog'
 import useReviewQueue from './useReviewQueue'
-import { describeMetadata, matchState } from './reviewQueueText'
+import { describeMetadata, matchState, needsPartner } from './reviewQueueText'
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const TONE = { green: 'text-green-700', amber: 'text-amber-700' }
 const OUTCOME = { confirmed: 'Confirmed', skipped: 'Skipped', attached: 'Attached' }
 
-function PaperLine({ paper, refs }) {
+function PaperLine({ paper, refs, onMatch }) {
   const meta = describeMetadata(paper, refs)
   const match = matchState(paper)
   const decided = paper.status !== 'pending'
@@ -32,6 +33,14 @@ function PaperLine({ paper, refs }) {
           {meta.missing.length > 0 && meta.text && <span className="ml-1.5 text-amber-700">(missing {meta.missing.join(', ')})</span>}
           {match && <span className={`ml-1.5 ${TONE[match.tone]}`}>· {match.text}</span>}
           {partly && <span className="ml-1.5 text-amber-700">· {partly}</span>}
+          {needsPartner(paper) && (
+            <button
+              type="button" aria-label={`Match ${paper.key}`} onClick={() => onMatch(paper)}
+              className="ml-2 rounded border border-blue-300 px-1.5 py-0.5 text-blue-700 hover:bg-blue-50"
+            >
+              Match
+            </button>
+          )}
         </>
       )}
     </li>
@@ -44,9 +53,12 @@ export default function ReviewQueuePage() {
   const outlet = useOutletContext()
   // Rendered outside the import layout (tests), it polls for itself.
   const own = useReviewQueue({ enabled: !outlet?.reviewQueue })
-  const { jobs, error, checkedAt } = outlet?.reviewQueue ?? own
+  const { jobs, error, checkedAt, refresh } = outlet?.reviewQueue ?? own
   const refs = useReferenceData()
   const [unmatchedOnly, setUnmatchedOnly] = useState(false)
+  // The paper line whose "Match this paper" popup is open: { jobId, paper }.
+  const [matching, setMatching] = useState(null)
+  const matched = () => { setMatching(null); refresh() }
 
   // Jobs that arrived after the page first loaded get a "New" tag.
   const initial = useRef(null)
@@ -112,7 +124,9 @@ export default function ReviewQueuePage() {
                     {job.warnings_count > 0 && <span className="text-amber-700"> · {plural(job.warnings_count, 'warning')}</span>}
                     {job.needs_review && <span className="text-amber-700"> · Pages flagged for a closer look</span>}
                   </div>
-                  {papers.length > 0 && <ul className="mt-1.5 space-y-1">{papers.map(p => <PaperLine key={p.key} paper={p} refs={refs} />)}</ul>}
+                  {papers.length > 0 && <ul className="mt-1.5 space-y-1">{papers.map(p => (
+                    <PaperLine key={p.key} paper={p} refs={refs} onMatch={paper => setMatching({ jobId: job.id, paper })} />
+                  ))}</ul>}
                 </div>
                 <Link
                   to={`/admin/import/jobs/${job.id}/review`}
@@ -124,6 +138,16 @@ export default function ReviewQueuePage() {
             )
           })}
         </ul>
+      )}
+      {matching && (
+        // The queue has no page images, so the popup shows no preview of the paper's own pages;
+        // its fields come from the summary.
+        <MatchDialog
+          jobId={matching.jobId} paperKey={matching.paper.key} role={matching.paper.role} metadata={matching.paper}
+          extractedSchool={matching.paper.extracted_school ?? null}
+          refs={refs} ownPreview={null}
+          onPaired={matched} onAttached={matched} onClose={() => setMatching(null)}
+        />
       )}
     </div>
   )

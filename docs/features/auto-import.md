@@ -53,9 +53,10 @@ There is no multipart job-creation route; the old `POST /api/import/jobs` was re
 
 **Papers** (on every job in the list): one entry per `ingest_paper` row, in key order —
 `{key, role, status, school_id, new_school_name, year, level_id, subject_id, exam_type_id, stream_id,
-paper_number, linked, match_status, answer_coverage, unanswered}`, where `new_school_name` is a school
+paper_number, linked, match_status, extracted_school, answer_coverage, unanswered}`, where `new_school_name` is a school
 typed during review that confirm will create ([qa-pairing.md](./qa-pairing.md#new-schools)), `linked` means it is linked to another pending paper
-(of another job or the same one), and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
+(of another job or the same one), `extracted_school` is the school name read from its cover
+(`report.paper_metadata[key].extracted.school`, else null), and `answer_coverage` (`none`/`partial`/`all`) and `unanswered` (question numbers
 without an answer box) describe its own booklet's answers
 ([qa-pairing.md](./qa-pairing.md#answers-are-all-or-none)). Empty until `report` has run. Loaded in one query for the whole list. This is what the review queue's cards show.
 
@@ -158,6 +159,9 @@ has never started: `false` / `null`. Both values are computed server-side.
   - for an answer-only paper: linked / matching paper found / needs matching / not matched; for a
     question paper: "Answers linked from another upload"
   - for a pending question paper only partly answered by its own booklet: "Q5–Q7 have no answers"
+  - on a paper that needs a partner (pending, not linked, and answer-only or with no answers of its
+    own), a **Match** button that opens the "Match this paper" popup; pairing or attaching there
+    refreshes the queue ([qa-pairing.md](./qa-pairing.md#from-the-review-queue))
   - a decided paper is greyed with its outcome
 - **Only jobs with unmatched answers** narrows the list in the browser.
 

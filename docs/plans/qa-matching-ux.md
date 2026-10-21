@@ -1,18 +1,12 @@
 # Fixing and forcing question/answer matches (plan)
 
-**Status: agreed.** The "Match this paper" popup and the answer mapping table (below) are agreed.
-Built so far: keeping the extracted names and the review-sidebar school combobox (#86, backend
-step 1 and part of frontend steps 1 and 6); per-pair rejection with Unmatch and "Not this one" (#88,
-the rejection table of step 2, "skip rejected pairs" of step 4, `DELETE` of step 6 and the
-rejection of step 7, surfaced in today's Match panel and question-side banner); answer coverage and the all-or-none
-warnings (#89: [Answers are all or none](#answers-are-all-or-none), coverage in the job list summary
-of step 9, step 10, the `409` of step 6 and the warning of frontend step 6); wider automatic
-matching (#90: the rest of backend step 4, and the same-job pair of step 8); the popup and the
-Pairing block without the mapping table (#91: backend step 5, step 6 bar `mapping`, frontend steps
-2 and 4 bar the mapping step and **Check answers…**); the answer mapping table (#92: `answer_map` of
-step 2, `mapping` of steps 6 and 7, the `answer-map` endpoints, step 8's placing by map, frontend
-step 3 and the rest of 2 and 4). What exists today is in
-[features/qa-pairing.md](../features/qa-pairing.md).
+**Status: built.** Every step below is built: keeping the extracted names and the review-sidebar
+school combobox (#86); per-pair rejection with Unmatch and "Not this one" (#88); new schools during
+review (#87); answer coverage and the all-or-none warnings (#89); wider automatic matching (#90); the
+popup and the Pairing block (#91); the answer mapping table (#92); and the **Match** button on Review
+queue cards (#93: frontend step 5, with `extracted_school` added to the job list summary). What
+exists today is in [features/qa-pairing.md](../features/qa-pairing.md); this plan is kept for its
+rationale.
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found
 booklet** is a candidate partner for it.
