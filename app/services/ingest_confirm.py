@@ -2,7 +2,7 @@
 
 The admin's reviewed rectangles (``proposal_edited`` if there is one, else ``proposal``) are
 cropped out of the job's ``source.pdf`` into page images and handed to the Manual flow's own
-``confirm_import``, unchanged. See docs/features/auto-import.md ("Confirm and skip") and docs/features/qa-pairing.md.
+``confirm_import``, unchanged. See docs/features/auto-import.md ("Deciding each paper") and docs/features/qa-pairing.md.
 """
 
 import uuid

@@ -1,4 +1,4 @@
-"""Tunable knobs for the ingester. See ingester/README.md."""
+"""Tunable knobs for the ingester. See docs/features/ingestion-pipeline.md."""
 
 from __future__ import annotations
 

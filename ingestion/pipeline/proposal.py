@@ -2,9 +2,9 @@
 
 ``report`` builds it (``proposal.json``) from what the section stages left: the segment
 plan (which answer section belongs to which question section), each section's
-``manifest.json`` and split PDF, and the review WebPs the render stages wrote. See
-``ingestion/README.md`` ("The proposal") for the shape; this module is the one place
-that knows it.
+``manifest.json`` and split PDF, and the review WebPs the render stages wrote. This
+module is the one place that knows its shape (at the end of this docstring); the
+behaviour is in docs/features/ingestion-pipeline.md.
 
 Everything in it is in the **booklet's** terms, so the review page and the cropper
 never need the split PDFs: pages are booklet page numbers (the manifest's
@@ -23,6 +23,40 @@ own, such as answers uploaded apart from the questions: its answer rectangles ke
 question numbers, as questions with empty ``question_rects``, so a later step can attach
 them to the question paper they belong to. A question section with no answer section is
 flagged by a warning.
+
+Shape::
+
+    {"papers": [{
+        "label": "q1", "role": "question", "answer_label": "a1", "answer_template": "table",
+        "pages": [{"page": 7, "image": "pages/p07.webp", "width_pt": 595.3, "height_pt": 841.9,
+                   "needs_review": false, "review_reason": null}],
+        "questions": [{"number": 1,
+                       "question_rects": [{"page": 7, "x0": 72.0, "y0": 100.0, "x1": 523.0, "y1": 160.0}],
+                       "answer_rects": [{"page": 23, "x0": 72.0, "y0": 100.0, "x1": 290.0, "y1": 160.0}],
+                       "flags": []}],
+        "orphan_answers": [{"page": 23, "x0": ..., "y0": ..., "x1": ..., "y1": ...}],
+        "warnings": []}],
+     "unrouted": [{"label": "a2", "status": "not_routed", "reason": "...",
+                   "first_page": 31, "last_page": 36}],
+     "warnings": []}
+
+- Pairing: a question section and the answer section with the same segment ``index``
+  form one paper. ``answer_label`` is null when there is no such answer section;
+  ``answer_template`` is that section's template.
+- Pages: the question and answer sections' rendered pages, each once, sorted by booklet
+  page. ``width_pt``/``height_pt`` are the size as the review image shows it (rotation
+  applied); the image is ``review_zoom`` times that in pixels. ``image`` is null (with a
+  paper warning) if the WebP could not be written.
+- Straightened scans: rectangles measured on a straightened scan page are rotated back
+  about the page centre, boxed and clipped, so every rectangle lies inside its page as filed.
+- Flags: per question, without repetition, ``page N: <reason>`` for each flagged page it
+  touches (answer pages' reasons go to the question they answer), ``pixel_ink`` and
+  ``grid_page``.
+- Unrouted: every section not extracted, with its reason and booklet page range. A question
+  section not extracted whose answer section was still gets a paper with no ``questions``
+  and the answers in ``orphan_answers``. An answer-only upload is a paper with
+  ``label: null``. A paper none of whose sections was extracted is omitted. A proposal
+  without ``role`` is a ``question`` paper.
 """
 
 from __future__ import annotations

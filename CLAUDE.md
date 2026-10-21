@@ -1,166 +1,76 @@
 # PilloraQuestionBank
 
-A web application that serves as a database of secondary school exam questions (Singapore curriculum). Admins import exam papers (PDFs), split them into individual questions as page images, label metadata and topics, and store them. Public users browse, filter, and generate custom exam papers as downloadable PDFs.
+Question bank of Singapore school exam questions. Admins import exam-paper PDFs, which become
+per-question page images labelled with metadata, topics and marks. Users browse, filter and
+generate custom papers as PDFs; premium papers unlock per school level.
 
-A question is stored as **one set of page images** but labelled as a list of
-**parts** — (a), (b), (a)(i) … — each with its own topics/subtopics and its own
-marks. The images are never split per part; the split is produced by the AI
-labeller and corrected by the admin. A question's marks total is derived by
-summing its parts. See [docs/DATA_MODEL.md](./docs/DATA_MODEL.md#questions-have-parts) and
-[docs/features/ai-labelling.md](./docs/features/ai-labelling.md).
+- Stack: React (Vite) SPA · FastAPI · Postgres (Supabase) · S3 · ingest worker (same image, 2nd
+  container) · Claude API (Haiku 4.5; segmentation retries on Opus) · Tesseract OCR.
+- A **question** is one set of page images labelled as a list of **parts** ((a), (b)(i) …), each
+  with its own topics and marks; the question's marks are the sum of its parts.
+- Domain vocabulary (job, task, stage, section, proposal, link, …): [docs/CONTEXT.md](docs/CONTEXT.md).
 
-## Scale
+## Where to look
 
-- 1–10 concurrent users
-- ~640 papers/year, ~9,600 images/year
-- ~2 GB/year of image data
+**[docs/README.md](docs/README.md) indexes all docs** — read the feature doc before changing a
+feature; each one opens with a `Code:` line naming its implementation paths.
 
-## User Roles
-
-| Who | Capabilities |
+| Task touches | Read |
 |---|---|
-| **Admin** (1–2 users) | Import papers, CRUD all reference data (subjects, streams, levels, schools, exam types, topics/subtopics), configure paper generation (cover titles, subtitle placeholders, cover body, header/footer presets — the Generation Config page), full control of cover/header/footer when generating, manage users (roles and premium access), unrestricted by the paywall |
-| **Normal + premium for a school level** (registered, paid) | All Normal capabilities, plus view images of, and generate papers from, premium papers **in that school level** |
-| **Public / Normal** (registered) | View/filter questions (metadata for all; images only for non-premium papers), generate and download custom papers from non-premium questions — always with a cover page, choosing a title from the admin-configured list; the cover body, header, and footer are admin presets |
+| Code layout, components, page routes | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Tables, S3 keys, image conventions | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) |
+| Roles, premium, paywall | [docs/features/users-and-premium.md](docs/features/users-and-premium.md) |
+| PDF → proposal (`ingestion/`) | [docs/features/ingestion-pipeline.md](docs/features/ingestion-pipeline.md) |
+| Upload, jobs, worker, review, confirm | [docs/features/auto-import.md](docs/features/auto-import.md) |
+| Question ↔ answer booklet matching | [docs/features/qa-pairing.md](docs/features/qa-pairing.md) |
+| Tests, PDF visual check, ingestion sample diff | [docs/TESTING.md](docs/TESTING.md) |
+| Deploy, env vars, CI/CD | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Why it is built this way | [docs/adr/](docs/adr/) |
 
-Admins also **edit the public About page** in place and manage **users** — pre-adding an account by
-email so its premium is live before the customer signs up, deleting accounts, and toggling the
-site-wide deterrent against copying question images.
+Issues: GitHub `billyhoce/PilloraQuestionBank` via `gh` ([docs/agents/](docs/agents/)).
 
-The stored role values are just `admin` and `public` (shown as "Normal" in the UI).
-**Premium is not a role — it is the set of school levels a user has paid for** (`Primary`,
-`Secondary`, …), held in `user_premium_school_level`; a user may hold several, and "is this user
-premium" is derived from those rows rather than stored. Papers carry an `is_premium` flag, and a
-premium paper unlocks only for admins and for users holding **its** school level — the one on its
-`level`. Premium is granted per school level by an admin via the User Management page — the
-Subscribe page (one plan per school level) is a payment stub for now.
+## Rules for every change
 
-Users hold a first name, last name and email address (stored lower-cased). Accounts are created
-either manually (email + password, bcrypt-hashed), with **Google OAuth 2.0** — a server-side
-authorization-code flow; the browser never handles the client ID, the client secret or any Google
-token — or **pre-created by an admin** as a credential-less row so premium is ready before the person
-signs up. Signing in with Google on an address that already has an account links the two, keeping the
-existing role and entitlements; that same path is what claims a pre-created row. Either way the
-session is a JWT in an httpOnly cookie.
+- **Update the owning doc in `docs/` in the same change** (the feature doc, per docs/README.md).
+  Docs describe business behaviour, high level and in bullets; fix stale lines, don't append.
+- **Write tests** for testable behaviour: pytest in `tests/`, Vitest colocated `*.test.js(x)`.
+- **PDF appearance changes** (`app/pdf/`): render samples and inspect the PNGs (docs/TESTING.md).
+- **`ingestion/` changes**: no unit tests — diff its output over `ingestion/samples/` before and
+  after (docs/TESTING.md).
 
-## Tech Stack (Summary)
+## Gotchas
 
-| Layer | Technology |
-|---|---|
-| Frontend | React (Vite) — SPA |
-| Backend API | Python 3.11+ / FastAPI |
-| Database | PostgreSQL on Supabase (managed, free tier) |
-| Object Store | AWS S3 |
-| Ingest worker | `python -m app.worker` — a second container from the same image, draining the ingest-job queue through the `ingestion/` package (installed in the image); OCR via Tesseract 5.3 (`apt`) |
-| Hosting | Oracle Cloud Free Tier — 1 Ampere ARM VM (arm64), 2 OCPU / 12 GB RAM (API + worker; the worker is capped at 1 CPU / 6 GB) |
-| AI | Anthropic Claude API — Haiku 4.5 for both the vision and text calls |
-
-Full rationale and alternatives are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
-
-## Architecture (Text Diagram)
-
-```
-Browser (React SPA)
-    │  HTTPS
-    ▼
-Nginx (static + reverse proxy)  ── Oracle Cloud VM ──┐
-    │  /api/*                                        │
-    ▼                                                │
-FastAPI                                              │
-    ├──► PostgreSQL (Supabase)        — metadata    │
-    ├──► AWS S3                       — images      │
-    └──► Anthropic Claude API         — AI labeling │
-                                                     │
-Ingest worker (same image, 2nd container)            │
-    ├──► PostgreSQL — job/task queue                 │
-    ├──► AWS S3     — source PDFs, review images     │
-    ├──► Tesseract  — OCR of scanned answer tables   │
-    └──► Anthropic Claude API — segmentation         │
-─────────────────────────────────────────────────────┘
-```
-
-## Documentation Map
-
-Docs are organised **by feature**, not by layer: each file under `docs/features/` covers one
-capability end-to-end (its API, its UI, and any AI or PDF work it involves), so answering a question
-usually means opening one file. [docs/README.md](./docs/README.md) is the full index.
-
-| Doc | What's inside |
-|---|---|
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Stacks, backend/frontend code layout, object store, routes, navigation, cross-cutting conventions |
-| [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) | Database schema (reference + core tables), image storage conventions, image dimension standards |
-| [docs/features/auth.md](./docs/features/auth.md) | Registration, password login, Google OAuth 2.0, JWT sessions, security posture, auth UI |
-| [docs/features/users-and-premium.md](./docs/features/users-and-premium.md) | The three tiers, user management, `is_premium`, how the paywall is enforced |
-| [docs/features/reference-data.md](./docs/features/reference-data.md) | Subjects/streams/levels/schools/exam types/topics CRUD + admin UI |
-| [docs/features/ingestion.md](./docs/features/ingestion.md) | Manual import (wizard, PDF→image, confirm/delete), Manage Papers editor, provenance |
-| [docs/features/auto-import.md](./docs/features/auto-import.md) | Auto import: drop PDFs/folders, upload queue, processing board, review queue, ingest jobs, worker, review/confirm, retention + reconciler, logs/events/cost |
-| [docs/features/qa-pairing.md](./docs/features/qa-pairing.md) | Answer-only papers, attach to an existing paper, Pairing block and "Match this paper" popup, automatic matching, linked confirm |
-| [docs/features/ai-labelling.md](./docs/features/ai-labelling.md) | Claude part-split + topic/marks labelling, paper metadata extraction, parts write path, review UI, costs |
-| [docs/features/browse.md](./docs/features/browse.md) | `/api/questions` filtering + search, filter panel and results UI |
-| [docs/features/paper-generation.md](./docs/features/paper-generation.md) | Selection algorithms, generate endpoints, role enforcement, `/generate` UI |
-| [docs/features/generation-config.md](./docs/features/generation-config.md) | Admin presets + cover titles that constrain non-admin generations |
-| [docs/features/site-config.md](./docs/features/site-config.md) | Public About page + its WYSIWYG editor and sanitizer, and the image-copy deterrent toggle |
-| [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md) | Layout engine, packing, page chrome, cover page, rich-text cover body |
-| [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md) | DB-free sample-PDF generation and the visual self-verification workflow |
-| [ingestion/README.md](./ingestion/README.md) | The PDF ingester (`question_extractor`, `ingester`): segments a booklet, splits it, locates each question's rectangle, reads answer tables (OCR via the Tesseract image). Has its own [CLAUDE.md](./ingestion/CLAUDE.md) and per-package READMEs |
-| [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) | Hosting plan, deployment checklist, env vars, backup strategy |
-
-## Contribution Requirements
-
-Every new feature or behavior change must, **in the same change**:
-
-- **Update the docs.** Revise the relevant doc(s) under `docs/` (and `CLAUDE.md` itself when the
-  scope, stack, or architecture changes) so they never drift from the code. Put the change in the
-  **feature** doc that owns the capability — the Documentation Map above and
-  [docs/README.md](./docs/README.md) say which. Only genuinely cross-cutting facts belong in
-  `ARCHITECTURE.md` / `DATA_MODEL.md`. Fix any statement the change makes stale, not just add new
-  prose.
-- **Visually verify PDF layout changes.** After changing `app/pdf/layout_engine.py`,
-  `app/pdf/rich_text.py`, or anything else that affects generated-PDF appearance (see
-  [docs/features/pdf-rendering.md](./docs/features/pdf-rendering.md)), run
-  `python scripts/generate_sample_pdf.py --png --out <scratch>/sample.pdf` (no DB/S3 needed) and
-  inspect the emitted page PNGs before concluding. See
-  [docs/PDF_GENERATION_TESTING.md](./docs/PDF_GENERATION_TESTING.md).
-- **Write tests where the change is testable.** Add or update backend tests (`pytest`, in `tests/`)
-  and frontend tests (Vitest, colocated `*.test.js` / `*.test.jsx`) to cover new or changed
-  behavior. Both suites run in CI's `frontend-build` job. Pure-config / asset-only changes with no
-  testable behavior are exempt.
-
-## Ingestion package
-
-`ingestion/` is the PDF ingester, moved in from the former `PilloraQuestionBankIngester` repo
-(history stays in that archived repo). It holds three packages — `question_extractor` (inside one paper),
-`ingester` (the booklet) and `pipeline` (runs the booklet-level stages as tasks in a store; see
-[docs/adr/0001-stage-pipeline.md](./docs/adr/0001-stage-pipeline.md) and [CONTEXT.md](./CONTEXT.md)). It is a separate installable library
-(`pip install -e ./ingestion`; its own `pyproject.toml`) that must never import `app` — a pytest
-(`tests/test_ingestion_independence.py`) enforces it. It keeps its own conventions
-([ingestion/CLAUDE.md](./ingestion/CLAUDE.md)) and **its own verification rule**: it has no unit-test
-suite and is verified by running its commands over `ingestion/samples/` before and after a change and
-diffing the output — **not** by the "write tests" rule below. The webapp's `samples/` folder is
-unrelated to `ingestion/samples/`. The Tesseract image is built with
-`docker compose build tesseract` from the repo root.
-
-## Out of Scope (v1)
-
-- OCR for full-text search within questions
-- Difficulty rating / analytics per topic
-- Student-facing mode (practice tests, tracking)
-- Social login beyond Google (Facebook, Apple, …)
-- Self-service profile editing / password reset
-- CDN for image delivery
-
-## Agent skills
-
-### Issue tracker
-
-Issues live as GitHub issues in `billyhoce/PilloraQuestionBank`, driven by the `gh` CLI. See
-`docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five canonical roles, each label string equal to its name. See
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- `ingestion/` is a separate library and must never import `app` (`tests/test_ingestion_independence.py`).
+- Ingestion: warn, never raise — collect problems into `warnings` / `needs_review`; one section or
+  paper failing must not stop the rest. Every threshold lives in its package's config dataclass with
+  its justification. Only `question_extractor/geometry.py` touches PyMuPDF extraction, only
+  `question_extractor/ocr.py` runs Tesseract, only `ingester/request.py` calls Claude.
+- Ingestion stages: declare inputs/settings/outputs for the fingerprint and bump the stage `version`
+  when its output changes, or stale results are silently reused. Keep `pipeline/store.py`'s Protocol
+  free of SQLite specifics (the worker implements it on Postgres).
+- Union PyMuPDF rects with explicit `min`/`max`, not `|` — a zero-width stroke counts as empty and is dropped.
+- Premium is one rule written twice: `premium_gate` (Python) and `restrict_premium_pool` (SQL) in
+  `app/services/premium.py` — change both. A paper's premium school level comes from its **level**,
+  never its stream.
+- Browse and Generate share filter semantics in `app/services/question_query.py`; the Generate page
+  builds its own select payload in `frontend/src/pages/GeneratePage.jsx`.
+- Non-admin cover/header/footer rules are enforced server-side in `app/routes/generate.py`; hiding
+  fields in the UI is not the guard. `header_text: null` means "use the preset"; `""` means none.
+- PDF layout: packing and drawing in `app/pdf/layout_engine.py` must mirror each other's flow and
+  gaps exactly. Test rich-text emptiness with `is_blank` (a cleared editor stores `<p></p>`).
+- Emails go through `normalize_email` on every write and lookup, or one person gets two accounts.
+- Stored About HTML is sanitised on write and is the only `dangerouslySetInnerHTML`; reuse that
+  sanitiser for any new stored HTML.
+- `paper` has no unique key (#81); matching must tolerate duplicates. Automatic matching only
+  rewrites links with `match_status = 'auto'` — an admin-made link has NULL; keep it that way.
+- Ingestion: Tesseract-backed scanned tables need Docker and `docker compose build tesseract`;
+  without it those pages come back flagged, not erroring.
+- Unit tests build the schema from ORM models, so migrations are never tested — run new ones with
+  `alembic upgrade head` on the dev DB. Tests swap I/O via the seams in `tests/conftest.py`; patch
+  those, not names inside route modules.
+- Auto-import job files live under S3 `ingest/{job_id}/` and are deleted on settle; derive a job's
+  prefix from its stored `source_key` (legacy jobs sit under `tmp/ingest/`), and never put a
+  lifecycle rule on `ingest/`.
+- Job statuses are derived only in `app/worker/store.py`; the API alone owns `awaiting_upload`,
+  `confirmed` and `cancelled`.
+- The repo `.venv` is Windows layout: `.venv/Scripts/python`.

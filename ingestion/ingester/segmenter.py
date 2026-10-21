@@ -1,7 +1,7 @@
 """The segmentation stage: one PDF in, one ``segments.json`` out.
 
 Reuse a plan on disk, refuse an oversized document, ask, validate, escalate
-once, write the file either way. See ingester/README.md.
+once, write the file either way. See docs/features/ingestion-pipeline.md.
 """
 
 from __future__ import annotations

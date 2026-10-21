@@ -4,7 +4,7 @@ Each section's pages are copied whole into ``_split/<label>.pdf`` under the
 paper's output folder, and ``_split/split.json`` records, per section, the page
 map from each split page back to the original -- the map
 :class:`question_extractor.SourceProvenance` takes. The work directory is
-replaced on every run. See ingester/README.md.
+replaced on every run. See docs/features/ingestion-pipeline.md.
 """
 
 from __future__ import annotations
