@@ -78,7 +78,7 @@ def test_link_sets_both_sides_review_shows_it_and_unlink_clears(
     assert row(db_session, qjob, qkey).matched_ingest_paper_id == arow.id
     assert admin_client.get(f"/api/import/jobs/{ajob.id}/review").json()["matches"][akey]["paper_key"] == "q1"
     assert admin_client.get(f"/api/import/jobs/{qjob.id}/review").json()["matches"][qkey]["filename"] == "a.pdf"
-    assert admin_client.delete(url).status_code == 204
+    assert admin_client.delete(url).json() == {"matches": None, "proposal": None}
     assert row(db_session, ajob, akey).matched_ingest_paper_id is None
     assert row(db_session, qjob, qkey).matched_ingest_paper_id is None
     assert admin_client.get(f"/api/import/jobs/{ajob.id}/review").json()["matches"] == {}

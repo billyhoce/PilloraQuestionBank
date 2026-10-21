@@ -287,12 +287,23 @@ IngestPaper: {                -- one row per paper an ingest job proposed; the q
   status ("pending" | "confirmed" | "skipped" | "attached"),   -- default pending
   paper_id (nullable FK -> Paper, ON DELETE SET NULL),         -- the paper confirming it created
   matched_ingest_paper_id (nullable self-FK, ON DELETE SET NULL),  -- answer-only <-> pending question paper link (Match panel or auto link); both rows point at each other
-  match_status ("proposed" | "manual" | "auto" | "unlinked", nullable),  -- automatic matching of an answer-only paper to the bank (proposed/manual) or to a pending question paper (auto link; unlinked = admin declined it); NULL: nothing to do
+  match_status ("proposed" | "manual" | "auto", nullable),  -- automatic matching of an answer-only paper to the bank (proposed/manual) or to a pending question paper (auto link); NULL: nothing to do
   proposed_paper_id (nullable FK -> Paper, ON DELETE SET NULL),  -- the one confirmed paper when match_status = proposed
   match_note (string(200), nullable),                          -- why manual, e.g. "2 papers have this key", "partial: year differ"
   created_at, updated_at,
   UNIQUE (job_id, paper_key)
 }
+
+IngestMatchRejection {        -- table: ingest_match_rejection — a pair the admin turned down (Unmatch / "Not this one")
+  id,
+  ingest_paper_id (FK -> IngestPaper, ON DELETE CASCADE),                    -- the paper the admin acted on
+  rejected_ingest_paper_id (nullable FK -> IngestPaper, ON DELETE CASCADE),  -- a rejected pending partner; the pair counts in either direction
+  rejected_paper_id (nullable FK -> Paper, ON DELETE CASCADE),               -- a rejected proposed bank paper
+  created_at,
+  CHECK exactly one of rejected_ingest_paper_id / rejected_paper_id is set
+}
+-- Automatic matching skips every rejected pair, so it never proposes or auto-links that pair again
+-- but stays free to find another partner (see features/qa-pairing.md#rejecting-a-match).
 -- Written by the worker's `report` hook in the same transaction as the proposal (an upsert on
 -- (job_id, paper_key), so a re-run never duplicates; metadata from report.paper_metadata[key] -> `cover`, else
 -- the old report.filename_metadata -> `filename`). `PUT /api/import/jobs/{id}/papers/{key}/metadata`

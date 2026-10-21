@@ -161,10 +161,16 @@ export const api = {
       const qs = params.toString()
       return request('GET', `/api/import/papers/pending${qs ? `?${qs}` : ''}`).then(r => r.data)
     },
-    // Link / unlink an answer-only paper (its `key`) with a pending question paper of another job.
+    // Link an answer-only paper (its `key`) with a pending question paper of another job.
     matchJobPaper: (id, key, ingest_paper_id) =>
       request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, { ingest_paper_id }),
+    // Unmatch a linked paper (either side): the pair is rejected for good and both are re-matched.
+    // Returns what this paper has now: { matches, proposal }.
     unmatchJobPaper: (id, key) => request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`),
+    // "Not this one": reject an answer-only paper's proposed confirmed paper and re-match it.
+    // Returns { matches, proposal } like unmatchJobPaper.
+    rejectProposedPaper: (id, key) =>
+      request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/proposed-paper`),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),

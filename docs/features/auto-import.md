@@ -40,7 +40,7 @@ All admin-only (`403` otherwise). Any admin can see and act on any admin's job.
 | `POST /api/import/jobs/{id}/manual-pages` `{first_page, last_page}` | Cuts that range of the job's PDF into Manual-flow pages, using the job's stored metadata (no Claude call). Bad range → `422`. |
 | `POST /api/import/jobs/{id}/confirm` | Confirm one paper. See [Confirm and skip](#confirm-and-skip). |
 | `POST /api/import/jobs/{id}/skip` `{paper_label}` | Skip one paper. |
-| `POST /api/import/jobs/{id}/attach`, `GET /api/import/papers/pending`, `POST`/`DELETE /api/import/jobs/{id}/papers/{key}/match` | Pairing. See [qa-pairing.md](./qa-pairing.md). |
+| `POST /api/import/jobs/{id}/attach`, `GET /api/import/papers/pending`, `POST`/`DELETE /api/import/jobs/{id}/papers/{key}/match`, `DELETE /api/import/jobs/{id}/papers/{key}/proposed-paper` | Pairing, Unmatch and "Not this one". See [qa-pairing.md](./qa-pairing.md). |
 
 There is no multipart job-creation route; the old `POST /api/import/jobs` was removed.
 

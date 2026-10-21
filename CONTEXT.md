@@ -66,7 +66,9 @@ matching an answer booklet to its question paper.
 **Link / proposed attach**
 A **link** pairs a pending answer-only paper with a pending question paper of another job; confirming
 the question paper brings the answers in. A **proposed attach** names the one confirmed paper an
-answer-only paper matches; the admin accepts it with one click. See docs/features/qa-pairing.md.
+answer-only paper matches; the admin accepts it with one click. A pair the admin turns down
+(Unmatch, or "Not this one") is **rejected**: automatic matching never offers that pair again, but
+both papers stay free to match another. See docs/features/qa-pairing.md.
 
 **Fingerprint**
 A hash of what a task's artefact was produced from (the content of the input artefacts, the

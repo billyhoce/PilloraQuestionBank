@@ -2,7 +2,9 @@
 
 **Status: agreed.** The "Match this paper" popup and the answer mapping table (below) are agreed.
 Built so far: keeping the extracted names and the review-sidebar school combobox (#86, backend
-step 1 and part of frontend steps 1 and 6). What exists today is in
+step 1 and part of frontend steps 1 and 6); per-pair rejection with Unmatch and "Not this one" (#88,
+the rejection table of step 2, "skip rejected pairs" of step 4, `DELETE` of step 6 and the
+rejection of step 7, surfaced in today's Match panel and question-side banner). What exists today is in
 [features/qa-pairing.md](../features/qa-pairing.md).
 
 Terms: the **no-match paper** is the paper being matched (question or answer-only); a **found
@@ -28,9 +30,9 @@ booklet** is a candidate partner for it.
    that the pipeline failed to pair cannot be linked at all.
 2. A school that is not in the reference list cannot be entered during review; the admin has to
    leave the review, add it on the Reference page, and come back.
-3. Unlink sets both rows `unlinked`, which blocks *all* automatic linking for them until their
-   metadata changes, not just the one wrong pair. A wrong `proposed` match to a confirmed paper
-   cannot be dismissed.
+3. Unlink set both rows `unlinked`, which blocked *all* automatic linking for them until their
+   metadata changed, not just the one wrong pair, and a wrong `proposed` match to a confirmed paper
+   could not be dismissed (fixed by #88: Unmatch and "Not this one" reject only that pair).
 4. Numbering is assumed to agree (Section B restarting at 1, answers numbered `3a`/`3b`).
 5. No undo after confirm. **Not addressed:** a confirmed paper is assumed not to change much, so
    detaching answers after confirm is [not planned](#not-planned).
