@@ -9,7 +9,8 @@ behaviour is in docs/features/ingestion-pipeline.md.
 Everything in it is in the **booklet's** terms, so the review page and the cropper
 never need the split PDFs: pages are booklet page numbers (the manifest's
 ``original_page``), images are ``pages/pNN.webp`` at booklet numbering, and rectangles
-are PDF points on that booklet page in its original, unstraightened frame.
+are PDF points on that booklet page, in the frame its review image shows: the page as
+filed, or for a straightened scan the page rotated by its ``straightened_deg``.
 
 Rectangles are never dropped. A question's rectangles go under its ``question_rects``;
 an answer rectangle goes to the question with the same number, or under
@@ -29,7 +30,7 @@ Shape::
     {"papers": [{
         "label": "q1", "role": "question", "answer_label": "a1", "answer_template": "table",
         "pages": [{"page": 7, "image": "pages/p07.webp", "width_pt": 595.3, "height_pt": 841.9,
-                   "needs_review": false, "review_reason": null}],
+                   "straightened_deg": null, "needs_review": false, "review_reason": null}],
         "questions": [{"number": 1,
                        "question_rects": [{"page": 7, "x0": 72.0, "y0": 100.0, "x1": 523.0, "y1": 160.0}],
                        "answer_rects": [{"page": 23, "x0": 72.0, "y0": 100.0, "x1": 290.0, "y1": 160.0}],
@@ -47,8 +48,11 @@ Shape::
   page. ``width_pt``/``height_pt`` are the size as the review image shows it (rotation
   applied); the image is ``review_zoom`` times that in pixels. ``image`` is null (with a
   paper warning) if the WebP could not be written.
-- Straightened scans: rectangles measured on a straightened scan page are rotated back
-  about the page centre, boxed and clipped, so every rectangle lies inside its page as filed.
+- Straightened scans: a scanned page that was straightened has ``straightened_deg``, the
+  rotation (counter-clockwise as seen, about the page centre, the page keeping its size)
+  its review image and every rectangle on it were made after; a cropper rotates the page
+  as filed by it first. ``null`` for a page in its own frame; a proposal from before the
+  key existed has every rectangle in the page's own frame.
 - Flags: per question, without repetition, ``page N: <reason>`` for each flagged page it
   touches (answer pages' reasons go to the question they answer), ``pixel_ink`` and
   ``grid_page``.
@@ -61,7 +65,6 @@ Shape::
 
 from __future__ import annotations
 
-import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,29 +85,6 @@ def page_image(page: int) -> str:
     """Job-relative path of a booklet page's review image: ``pages/p07.webp``
     (``p100.webp`` from the hundredth page; the number is at least two digits)."""
     return f"{PAGES_DIR}/{review_filename(page)}"
-
-
-def unstraighten(rect: tuple[float, float, float, float], angle_deg: float, width: float, height: float):
-    """Map a rectangle from a straightened scan's frame back to the page as filed.
-
-    The straightened page is the original rotated counter-clockwise (as seen, y down)
-    by ``angle_deg`` about the page centre (``cv2.getRotationMatrix2D``); this rotates
-    the four corners the other way and takes their axis-aligned bounding box (a rotated
-    rectangle is not an axis-aligned one, and the box is what a crop can use; at the
-    <=5 degrees a scan is straightened by it is a few points larger than the original
-    on each side).
-    """
-    x0, y0, x1, y1 = rect
-    if not angle_deg:
-        return rect
-    cx, cy = width / 2.0, height / 2.0
-    cos, sin = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
-    xs, ys = [], []
-    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
-        dx, dy = x - cx, y - cy
-        xs.append(cx + cos * dx - sin * dy)
-        ys.append(cy + sin * dx + cos * dy)
-    return min(xs), min(ys), max(xs), max(ys)
 
 
 @dataclass
@@ -219,6 +199,7 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
                 "image": image,
                 "width_pt": width,
                 "height_pt": height,
+                "straightened_deg": angles.get(local) or None,
                 "needs_review": page["needs_review"],
                 "review_reason": page["review_reason"],
             })
@@ -230,9 +211,7 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
             for rect in q["rects"]:
                 local = rect["page"]
                 width, height = sizes.get(local, (None, None))
-                rects.append(_rect(
-                    rect, angles.get(local, 0.0), width, height, tolerance, f"{label} Q{number}", warnings
-                ))
+                rects.append(_rect(rect, width, height, tolerance, f"{label} Q{number}", warnings))
                 for flag in _rect_flags(rect, review_pages.get(local)):
                     if flag not in flags:
                         flags.append(flag)
@@ -288,15 +267,13 @@ def _page_sizes(section: _Section) -> dict[int, tuple[float, float]]:
         return {}
 
 
-def _rect(rect, angle, width, height, tolerance, who, warnings) -> dict:
+def _rect(rect, width, height, tolerance, who, warnings) -> dict:
     x0, y0, x1, y1 = rect["x0"], rect["y0"], rect["x1"], rect["y1"]
     if width is not None:
-        x0, y0, x1, y1 = unstraighten((x0, y0, x1, y1), angle, width, height)
+        # A straightened page keeps its size, so its rectangles are clipped to it alike.
         clipped = (max(x0, 0.0), max(y0, 0.0), min(x1, width), min(y1, height))
-        # How far it stuck out. A straightened scan's box always does by a little (see
-        # ``unstraighten``), so only a digital page's overhang is worth a warning.
         out = max(clipped[0] - x0, clipped[1] - y0, x1 - clipped[2], y1 - clipped[3])
-        if out > tolerance and not angle:
+        if out > tolerance:
             warnings.append(f"{who}: rectangle on booklet page {rect['original_page']} sticks out of the page by {out:.1f}pt; clipped")
         x0, y0, x1, y1 = clipped
     return {

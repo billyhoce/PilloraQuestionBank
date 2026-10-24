@@ -49,12 +49,13 @@ class ExtractConfig:
     much shorter key starts matching cover-page form fields.
     """
     furniture_tail_frac: float = 0.12
-    """A page's last text row this close to the bottom edge may be a footer."""
+    """A page's last text row this close to the bottom edge may be a footer, and its
+    first row this close to the top a header."""
     furniture_tail_min_pages: int = 3
-    """...if the same trailing text appears on at least this many pages.
+    """...if the same trailing (leading) text appears on at least this many pages.
 
-    Far fewer than the text rule demands, because being the last thing on the page
-    and inside the outer margin is strong evidence on its own.
+    Far fewer than the text rule demands, because being the last (first) thing on
+    the page and inside the outer margin is strong evidence on its own.
     """
     default_top_margin: float = 40.0
     default_bottom_margin: float = 40.0
@@ -240,6 +241,16 @@ class ExtractConfig:
     than rotated. The steepest sample page tilts 1.55° (Yuying a2 p4); a tilt much past
     2° breaks a hairline rule into pieces shorter than ``scan_rule_min_len``, so a
     larger reading comes from a few stray strokes, not from the table."""
+    scan_text_skew_dpi: int = 100
+    """Resolution the text-line tilt (:func:`.scanpage.read_scan_page`'s fallback) is
+    searched at, for a page with no rule ``scan_skew_min_len`` long: a question page
+    of words and short answer lines. A text line is still a few pixels tall here and
+    a whole 0.05° step apart, and the search takes 0.07s a page. Over the 32 pages
+    of the Yuying scan, on the 28 that have a long rule as well, it agrees with the
+    rules to within 0.1° (median 0.03°)."""
+    scan_text_skew_step: float = 0.05
+    """Step of that search, in degrees: a 450pt line drifts 0.4pt across it, under
+    the 0.1° the search can be trusted to anyway."""
     scan_rule_pos_tol: float = 3.0
     """``table_rule_pos_tol`` on a scanned page.
 
@@ -284,7 +295,32 @@ class ExtractConfig:
     touches the image edge."""
     ocr_timeout_s: float = 300.0
     """Seconds the one container run per section may take. All 131 scanned cells
-    of the samples read in 0.8s, most of it the container's start-up."""
+    of the samples read in 0.8s, most of it the container's start-up; a batch of
+    eight whole question pages (:attr:`ocr_page_batch`) in about 3s."""
+
+    # --- OCR of whole scanned question pages (``ocr.read_pages``) -------------
+    ocr_page_psm: int = 6
+    """Tesseract's page segmentation mode for a whole question page: one uniform block.
+
+    Compared over the four scanned question sections of the samples (Bedok View and
+    Yuying, sections A and B). 4 (one column) read Yuying whole but dropped Bedok
+    View's bold ``1`` and ``2`` beside their part labels, losing both questions.
+    6 reads every question number of the four; it also reads a graph's axis labels
+    as words, which the numbering sequence then sets aside (``anchors.filter_sequence``).
+    3 (automatic) dropped Yuying's ``Answer .... [2]`` lines, 11 and 12 (sparse
+    text) its question numbers."""
+    ocr_number_gap: float = 8.0
+    """A question number this far or more before the next word on its OCR'd line is
+    split off as a line of its own, as a born-digital paper sets it.
+
+    Measured over the 21 OCR'd Yuying question pages: words of one line sit 1-7pt
+    apart (2-3pt mostly), and a question number 11.8-29.3pt before the text beside
+    it. Left joined, the locator reads the line as body text crossing ``x_cut`` and
+    warns on every question."""
+    ocr_page_batch: int = 8
+    """Pages straightened and read per Tesseract run. A page is 8.7 MB of pixels at
+    ``scan_dpi``, so a batch holds about 70 MB however long the section; each run
+    costs half a second of container start-up on top of about 0.3s a page."""
 
     # --- figures ---------------------------------------------------------
     figure_min_overlap: float = 0.25

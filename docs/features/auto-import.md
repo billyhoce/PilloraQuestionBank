@@ -231,7 +231,8 @@ paper.
 - **Sections not extracted** (failed or unroutable sections) are listed with reason and page range.
   **Handle manually** cuts that page range out of the booklet into the
   [Manual import](./manual-import.md) wizard, with metadata pre-filled from the job (no new Claude
-  call), and switches to it. This is how a booklet whose questions could not be located is finished.
+  call), and switches to it. This is how a booklet whose questions could not be located is finished
+  (a scan is located automatically after OCR; it is listed here only when OCR failed).
 - A decided paper is read-only.
 
 ### Editing
@@ -292,7 +293,8 @@ identified by its key: its question label (`q1`), else its answer label (`a1`), 
   `review_ready`, the paper is already decided, the stream and level belong to different school
   levels, the paper has no questions (skip it instead), or it is answer-only (attach or skip it).
 - Each rectangle of the saved proposal is cropped from the booklet at 300 dpi and standardised like
-  any page image ([DATA_MODEL.md](../DATA_MODEL.md)). Question boxes become question pages and answer
+  any page image ([DATA_MODEL.md](../DATA_MODEL.md)); a scanned page the pipeline straightened is
+  rotated by its `straightened_deg` first, so the crop is straight and matches the review image. Question boxes become question pages and answer
   boxes answer pages, in order. **Orphan answers are not imported.**
 - The paper, its questions and pages, its provenance ([manage-papers.md](./manage-papers.md#provenance))
   and the paper's outcome commit together; if anything fails nothing is kept. Images reach permanent

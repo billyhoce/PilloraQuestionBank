@@ -140,8 +140,15 @@ def _eligible(line: TextLine, geom: PageGeometry) -> bool:
     return True
 
 
-def detect_furniture(pages: list[PageGeometry], config: ExtractConfig) -> Furniture:
-    """Find the running header/footer and derive each page's body band."""
+def detect_furniture(
+    pages: list[PageGeometry], config: ExtractConfig, drift: bool = False
+) -> Furniture:
+    """Find the running header/footer and derive each page's body band.
+
+    ``drift`` says the pages are scans read by OCR, whose header and footer drift
+    from page to page: the edge rows (:func:`_edge_rows`) are then peeled as deep
+    as they repeat, not one row only.
+    """
     furniture = Furniture(key_chars=config.furniture_key_chars)
     if not pages:
         return furniture
@@ -162,7 +169,7 @@ def detect_furniture(pages: list[PageGeometry], config: ExtractConfig) -> Furnit
     )
     furniture.keys = {key for key, seen in occurrences.items() if len(seen) >= threshold}
 
-    _assign_bands(pages, furniture, config)
+    _assign_bands(pages, furniture, config, drift)
     if furniture.keys:
         log.debug("detected %d running header/footer line(s)", len(furniture.keys))
     else:
@@ -171,9 +178,39 @@ def detect_furniture(pages: list[PageGeometry], config: ExtractConfig) -> Furnit
 
 
 def _tail_footers(
-    pages: list[PageGeometry], config: ExtractConfig
+    pages: list[PageGeometry], config: ExtractConfig, peel: bool = False
 ) -> dict[int, float]:
-    """The ``y0`` of each page's trailing footer row, where one repeats.
+    """The ``y0`` of each page's trailing footer row, where one repeats; see :func:`_edge_rows`."""
+    return _edge_rows(pages, config, top=False, peel=peel)
+
+
+def _head_headers(
+    pages: list[PageGeometry], config: ExtractConfig, peel: bool = False
+) -> dict[int, float]:
+    """The ``y1`` of each page's leading header row, where one repeats.
+
+    :func:`_tail_footers` turned upside down. A scan's sheet sits a little higher
+    or lower on each page: Yuying's page numbers, the only header it prints, run
+    from y=62 to 74 (recto and verso land 9pt apart), so no two-point height
+    bucket gathers half the pages, and each page number was read as the top of the
+    question carried over from the page before. Being the first row on the page,
+    inside the margin, says header as clearly as the last row says footer.
+    """
+    return _edge_rows(pages, config, top=True, peel=peel)
+
+
+def _edge_rows(
+    pages: list[PageGeometry], config: ExtractConfig, top: bool, peel: bool = False
+) -> dict[int, float]:
+    """The inner edge of each page's first (``top``) or last row, where that row repeats.
+
+    With ``peel``, once a page's edge row is taken the row inside it is tried in
+    turn, and so on while the rows inside the margin keep repeating. A scanned
+    footer is several rows that each drift with the sheet: Yuying's ``SEC 2G3_EM``
+    line sits at y=751-777 under a ``Turn over`` printed on one side only, above a
+    stamped page number. Not on a born-digital paper, whose stacked footer the
+    height-bucketed keys already find: there an identical ``Answer .... [2]`` line
+    just above the footer on most pages would be peeled away with it.
 
     The repetition rule above needs a line on half the paper's pages, which a
     footer misses whenever it is printed on one side only — ``[Turn over`` on the
@@ -187,33 +224,58 @@ def _tail_footers(
     The result feeds only the band's bottom edge — nothing needs to recognise these
     lines as furniture later, because a line below the band is already excluded.
     """
-    candidates: dict[str, dict[int, float]] = {}
-    for geom in pages:
-        if not geom.lines:
-            continue
-        edge = geom.rect.y1 - config.furniture_tail_frac * geom.height
-        lowest = max(line.y0 for line in geom.lines)
-        if lowest < edge:
-            continue
-        for line in geom.lines:
-            if abs(line.y0 - lowest) > config.row_tol or not _eligible(line, geom):
+    rows = {geom.number: _margin_rows(geom, config, top) for geom in pages}
+    depth = {page: 0 for page in rows}
+    edges: dict[int, float] = {}
+    pick = max if top else min
+    while True:
+        candidates: dict[str, dict[int, float]] = {}
+        for geom in pages:
+            page_rows = rows[geom.number]
+            if depth[geom.number] >= len(page_rows):
                 continue
-            text = _normalise(line.text)[: config.furniture_key_chars]
-            # No height bucket: being the trailing row has already fixed the
-            # position, and a footer drifts by a point or two between pages.
-            candidates.setdefault(text, {})[geom.number] = line.y0
+            for line in page_rows[depth[geom.number]]:
+                if not _eligible(line, geom):
+                    continue
+                text = _normalise(line.text)[: config.furniture_key_chars]
+                # No height bucket: being the edge row has already fixed the
+                # position, and a header or footer drifts between pages.
+                candidates.setdefault(text, {})[geom.number] = line.y1 if top else line.y0
+        taken: set[int] = set()
+        for seen in candidates.values():
+            if len(seen) < config.furniture_tail_min_pages:
+                continue
+            for page, y in seen.items():
+                edges[page] = pick(edges.get(page, y), y)
+                taken.add(page)
+        if not peel or not taken:
+            return edges
+        for page in taken:
+            depth[page] += 1
 
-    tails: dict[int, float] = {}
-    for seen in candidates.values():
-        if len(seen) < config.furniture_tail_min_pages:
-            continue
-        for page, y0 in seen.items():
-            tails[page] = min(tails.get(page, y0), y0)
-    return tails
+
+def _margin_rows(geom: PageGeometry, config: ExtractConfig, top: bool) -> list[list[TextLine]]:
+    """The page's rows inside its top (bottom) ``furniture_tail_frac``, from the edge in.
+
+    A row is the lines within ``row_tol`` of the edgemost line left, as the edge
+    row has always been taken."""
+    margin = config.furniture_tail_frac * geom.height
+    if top:
+        left = sorted((ln for ln in geom.lines if ln.y0 <= geom.rect.y0 + margin), key=lambda ln: ln.y0)
+    else:
+        left = sorted(
+            (ln for ln in geom.lines if ln.y0 >= geom.rect.y1 - margin), key=lambda ln: -ln.y0
+        )
+    rows: list[list[TextLine]] = []
+    while left:
+        edge = left[0].y0
+        rows.append([ln for ln in left if abs(ln.y0 - edge) <= config.row_tol])
+        left = [ln for ln in left if abs(ln.y0 - edge) > config.row_tol]
+    return rows
 
 
 def _assign_bands(
-    pages: list[PageGeometry], furniture: Furniture, config: ExtractConfig
+    pages: list[PageGeometry], furniture: Furniture, config: ExtractConfig, drift: bool = False
 ) -> None:
     """Derive the body band per page, filling gaps from the paper-wide median.
 
@@ -223,7 +285,8 @@ def _assign_bands(
     """
     raw_tops: dict[int, float] = {}
     raw_bottoms: dict[int, float] = {}
-    tails = _tail_footers(pages, config)
+    tails = _tail_footers(pages, config, peel=drift)
+    heads = _head_headers(pages, config, peel=drift)
 
     for geom in pages:
         top_limit = geom.rect.y0 + config.furniture_band_frac * geom.height
@@ -255,6 +318,8 @@ def _assign_bands(
         )
         if geom.number in tails:
             bottom = min(bottom, tails[geom.number] - config.furniture_pad)
+        if geom.number in heads:
+            top = max(top, heads[geom.number] + config.furniture_pad)
         # Never let furniture detection invert or collapse a page's body band.
         top = max(geom.rect.y0, min(top, geom.rect.y1))
         bottom = min(geom.rect.y1, max(bottom, top + 1.0))

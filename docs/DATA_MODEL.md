@@ -70,7 +70,8 @@ migration seeds school levels, subjects, streams, levels and exam types.
   - `page_type` `question` or `answer`, `page_order` (unique per question and type), `image_key`,
     `width_px` / `height_px` (positive; used by the PDF layout engine).
   - Provenance for auto-imported pages: `source_page` (booklet page) and `source_rect` (crop
-    rectangle in PDF points); null for manual imports.
+    rectangle in PDF points; on a straightened scan page, in its straightened frame); null for
+    manual imports.
 - **question_topic** — a topic on a part.
 - **question_subtopic** — a subtopic on a part; the database only accepts it when the part already
   has the subtopic's topic, and removing that topic removes the subtopic.

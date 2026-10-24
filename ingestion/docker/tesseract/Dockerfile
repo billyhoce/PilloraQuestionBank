@@ -1,5 +1,5 @@
-# Tesseract OCR, for scans: a section with no text layer is not routed (see
-# ingester/router.py), and Tesseract is what gives a page image one.
+# Tesseract OCR, for scans: it reads a scanned answer table's question cells and gives a
+# scanned question paper the text layer it lacks (question_extractor/ocr.py).
 #
 # Debian stable is the version pin. It keeps one Tesseract release (bookworm: 5.3.0)
 # for its whole life, so OCR output changes only when this tag does.

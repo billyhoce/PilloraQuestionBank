@@ -56,6 +56,9 @@ flowchart LR
 
 There is no staging environment: PR review, green CI and fast rollback cover it.
 
+Locally the worker runs either on the host (`python -m app.worker`) or in the production image via
+the opt-in compose profile (`docker compose --profile worker up -d --build`); see the README.
+
 ## CI (pull requests and non-`main` branches)
 
 `.github/workflows/ci.yml`, two parallel jobs:

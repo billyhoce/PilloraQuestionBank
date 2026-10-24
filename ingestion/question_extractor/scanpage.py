@@ -24,6 +24,12 @@ than 0.054°. That rotation is the only
 transform, and it is reported per page (``straightened.angle_deg``): every
 rectangle read from a scan is in the straightened page's points.
 
+A page with no rule that long (a question page: words and short answer lines)
+takes its tilt from its text instead: the angle that makes its rows of ink
+sharpest, searched within ``scan_max_skew_deg`` at ``scan_text_skew_dpi``. A
+tilt found at the very edge of that range is not trusted, as a rule-measured
+one past it is not.
+
 **Rules.** A morphological opening with a ``scan_rule_min_len`` kernel keeps only
 ink that runs that far along one axis, after Otsu's threshold has split ink from
 paper. A short closing (``scan_rule_bridge``) mends breaks in a faint rule. Each
@@ -145,10 +151,12 @@ def read_scan_page(page: pymupdf.Page, config: ExtractConfig) -> ScanPage:
     scale = config.scan_dpi / 72.0
     gray = _whiten_borders(_render_gray(page, config.scan_dpi))
     measured = _skew(_find_rules(gray, scale, config), config)
+    if measured is None:
+        measured = _text_skew(gray, config)
     scan = ScanPage(
         page=page.number + 1, image=gray, angle_deg=0.0, measured_deg=measured, scale=scale
     )
-    if measured is not None and abs(measured) > config.scan_max_skew_deg:
+    if measured is not None and abs(measured) >= config.scan_max_skew_deg:
         scan.problems.append(
             f"the scan measures a {measured:.1f}° tilt, more than "
             f"scan_max_skew_deg ({config.scan_max_skew_deg}°); it was not straightened"
@@ -179,12 +187,22 @@ def straightened_document(
     What the renders draw a scanned page's rectangles on, since those rectangles
     are in the straightened page's points. The caller closes it.
     """
-    ok, png = cv2.imencode(".png", straightened_image(page, angle_deg, config))
     doc = pymupdf.open()
-    sheet = doc.new_page(width=page.rect.width, height=page.rect.height)
+    add_image_page(doc, page.rect, straightened_image(page, angle_deg, config))
+    return doc
+
+
+def add_image_page(doc: pymupdf.Document, rect: pymupdf.Rect, image: np.ndarray) -> None:
+    """Append a page of ``rect``'s size to ``doc`` with ``image`` filling it.
+
+    The page keeps its source's size, not the image's, so a rectangle measured on
+    the image in points lands on this page unchanged. Lossless (PNG): the pixel
+    passes that read the page afterwards see what was measured.
+    """
+    sheet = doc.new_page(width=rect.width, height=rect.height)
+    ok, png = cv2.imencode(".png", image)
     if ok:
         sheet.insert_image(sheet.rect, stream=png.tobytes())
-    return doc
 
 
 def _render_gray(page: pymupdf.Page, dpi: int) -> np.ndarray:
@@ -278,3 +296,32 @@ def _skew(rules: list[PixelRule], config: ExtractConfig) -> float | None:
         if rule.length >= config.scan_skew_min_len
     ]
     return float(np.median(angles)) if angles else None
+
+
+def _text_skew(gray: np.ndarray, config: ExtractConfig) -> float | None:
+    """The page's tilt from its text: the rotation leaving its ink rows sharpest.
+
+    Each candidate angle rotates the page's ink and scores the row sums by how
+    sharply they change from row to row, which is greatest when every text line
+    lies along one pixel row. A coarse pass over ``scan_max_skew_deg`` either way,
+    then ``scan_text_skew_step`` around the best. ``None`` on a page without ink.
+    Same sign as :func:`_skew`: the angle :func:`_rotate` straightens by.
+    """
+    factor = config.scan_text_skew_dpi / config.scan_dpi
+    small = cv2.resize(gray, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
+    ink = _ink(small).astype(np.float32) / 255.0
+    if not ink.any():
+        return None
+    h, w = ink.shape
+
+    def sharpness(angle: float) -> float:
+        matrix = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+        rotated = cv2.warpAffine(ink, matrix, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+        return float(np.sum(np.diff(rotated.sum(axis=1)) ** 2))
+
+    coarse_step = 5 * config.scan_text_skew_step
+    limit = config.scan_max_skew_deg
+    coarse = np.arange(-limit, limit + coarse_step / 2, coarse_step)
+    best = max(coarse, key=sharpness)
+    fine = np.arange(best - coarse_step, best + coarse_step * 1.01, config.scan_text_skew_step)
+    return float(round(max(fine, key=sharpness), 4))

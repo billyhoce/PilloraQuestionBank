@@ -41,7 +41,7 @@ flowchart LR
 | **PostgreSQL** | All metadata, the ingest job/task queue, audit events, worker heartbeat. No images. |
 | **S3** | Question page images, temporary uploads, auto-import source PDFs and review pages. Never public: the browser reaches objects only through presigned URLs. |
 | **Claude API** | Paper metadata extraction, part split + topic/marks labelling (API), booklet segmentation (worker). |
-| **Tesseract** | OCR of scanned answer tables (worker only). |
+| **Tesseract** | OCR of scans: answer-table question cells and whole question pages (worker only). |
 | **`ingestion/` library** | Booklet → proposal: segment, split, locate questions, read answer tables. Installed into the image; never imports `app`. See [features/ingestion-pipeline.md](./features/ingestion-pipeline.md). |
 
 ## Code map

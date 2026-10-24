@@ -68,8 +68,8 @@ def render_pages(
     is that pixmap with marks composited on: ``pNN.png`` with the question
     rectangles drawn on, ``_debug/pNN.png`` with whatever ``debug_draws`` draws for
     the page (the caller's whole overlay, rectangles included, so a debug view
-    can be drawn from a saved file), and ``review/pNN.webp`` with nothing drawn,
-    from the page as filed. Returns page number to the annotated file name,
+    can be drawn from a saved file), and ``review/pNN.webp`` with nothing drawn.
+    Returns page number to the annotated file name,
     relative to the paper's output folder. The source PDF is opened fresh and
     never saved.
 
@@ -77,8 +77,9 @@ def render_pages(
     not parse is exactly the page a human needs to look at.
 
     ``straightened`` maps a scanned table page to the rotation it was read after
-    (:mod:`.scanpage`); its rectangles are in that frame, so they are drawn on
-    the straightened image rather than on the page as filed.
+    (:mod:`.scanpage`); its rectangles are in that frame, so every image of it,
+    the review image included, is of the straightened page rather than the page
+    as filed.
     """
     return render_outputs(
         pdf_path,
@@ -140,13 +141,12 @@ def render_outputs(
         for number in sorted(set(annotated) | set(debug_draws)):
             page = doc[number - 1]
             name = page_filename(number)
-            if review:
-                _write_review(page, out_dir / REVIEW_SUBDIR / review_filename(number), config)
-
             angle = straightened.get(number)
             sheet = straightened_document(page, angle, config) if angle else None
             if sheet is not None:
                 page = sheet[0]
+            if review:
+                _write_review(page, out_dir / REVIEW_SUBDIR / review_filename(number), config)
             clean = rasterise_page(page, config.zoom)
             if number in annotated:
                 draw_on(clean, page, config.zoom, annotated[number]).save(out_dir / name)
@@ -163,11 +163,13 @@ def render_outputs(
 
 
 def _write_review(page: pymupdf.Page, path: Path, config: ExtractConfig) -> None:
-    """The page as filed, clean, at ``review_zoom``: no rectangles, no straightening.
+    """The page, clean, at ``review_zoom``: no rectangles.
 
     The admin review page lays an SVG of the manifest's rectangles over this, in
-    the PDF's points scaled by image width over page width, so it has to be the
-    page in the PDF's own frame, which a straightened scan is not.
+    the page's points scaled by image width over page width, so it is the page in
+    the frame those rectangles are in: a straightened scan's straightened image,
+    which keeps the page's size. The webapp crops a confirmed question out of the
+    page straightened the same way (the proposal records the angle).
     """
     try:
         write_webp(rasterise_page(page, config.review_zoom), path, config.review_webp_quality)

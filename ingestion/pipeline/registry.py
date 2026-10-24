@@ -18,13 +18,15 @@ scope, a kind, its dependencies and whether it fans out.
   the stage also has a hard need that is broken it is ``blocked`` as usual.
 - **fan_out**: a job-scope stage whose ``Outcome.sections`` become one task for
   every stage of that section's route.
-- **route**: a section stage belongs to one route's chain (``question``: ``locate``
-  -> ``render``; ``table``: ``grid`` -> ``ocr`` -> ``questions`` -> ``render``). The fan-out picks each
+- **route**: a section stage belongs to one route's chain (``question``: ``scan``
+  -> ``locate`` -> ``render``; ``table``: ``grid`` -> ``ocr`` -> ``questions`` -> ``render``). The fan-out picks each
   section's chain once, from how ``ingester.router`` would route it, so a section
   only ever gets the tasks that apply to it. Two routes may each have a stage of
   the same name (``render``): a task is identified by ``(job_id, section, stage)``
   and a section has exactly one route, so the name is unique where it matters. A
-  section's route is recovered from the stages it has (:meth:`Registry.route_of`).
+  section's route is recovered from the stages it has (:meth:`Registry.route_of`):
+  any stage only one route has names it, so a job made before a stage was added to
+  its route (a question section with no ``scan`` task) is still recognised.
 - **inputs / settings / outputs / version**: what the task fingerprint is made of and
   what "its artefacts exist" checks (``pipeline.fingerprint``).
 - **after_sections**: a job-scope stage that also waits for every *section* task of the job
@@ -155,10 +157,12 @@ class Registry:
 
     def route_of(self, stage_names: set[str] | list[str]) -> str | None:
         """The route a section is on, from the names of the stages it has tasks for:
-        the route whose first stage is among them."""
+        the route with a stage among them that no other route has."""
         names = set(stage_names)
-        for route in self.routes():
-            if self.section_stages(route)[0].name in names:
+        routes = self.routes()
+        for route in routes:
+            others = {s.name for r in routes if r != route for s in self.section_stages(r)}
+            if any(s.name in names and s.name not in others for s in self.section_stages(route)):
                 return route
         return None
 
@@ -193,6 +197,7 @@ def default_registry() -> Registry:
         questions,
         register,
         render,
+        scan,
         segment,
         split,
         report,
@@ -205,7 +210,9 @@ def default_registry() -> Registry:
             register.STAGE,
             segment.STAGE,
             split.STAGE,
-            # the question route: question sections and annotated_booklet answer sections
+            # the question route: question sections and annotated_booklet answer sections,
+            # scanned ones read by OCR first
+            scan.STAGE,
             locate.STAGE,
             render.STAGE,
             # the table route: table answer sections, scanned ones included

@@ -12,6 +12,7 @@ Layout under ``<job dir>``, matching ``ingester ingest``'s ``output/<paper>/``::
     job.json                      register
     segments.json                 segment
     _split/<label>.pdf, split.json  split
+    _scan/<label>.pdf, <label>.json scan (a scanned question section: straightened copy, OCR text)
     <label>/manifest.json, detections.json   locate
     <label>/pNN.png, review/pNN.webp, _debug/pNN.png   render
     <label>/grid.json, cells.tiff   grid (a table section: column pairs, row bands, OCR cells)
@@ -34,10 +35,16 @@ JOB_NAME = "job.json"
 SEGMENTS_NAME = "segments.json"
 SPLIT_DIR = "_split"
 SPLIT_NAME = "split.json"
+SCAN_DIR = "_scan"
 CELLS_TIFF_NAME = "cells.tiff"
 OCR_NAME = "ocr.json"
 REPORT_NAME = "ingest.json"
 PROPOSAL_NAME = "proposal.json"
+
+
+def scan_paths(job_dir: Path, label: str) -> tuple[Path, Path]:
+    """Where ``scan`` leaves a section's straightened PDF and its OCR record."""
+    return job_dir / SCAN_DIR / f"{label}.pdf", job_dir / SCAN_DIR / f"{label}.json"
 
 
 def write_bytes(path: Path, data: bytes) -> Path:

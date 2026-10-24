@@ -42,7 +42,7 @@ from .boundaries import PageResult, Question, build_questions
 from .calibration import Calibration, CalibrationError, calibrate, find_question_pages
 from .config import ExtractConfig
 from .furniture import Furniture, detect_furniture
-from .geometry import PageGeometry, extract_document
+from .geometry import PageGeometry, TextLine, extract_document
 from .manifest import build_manifest, write_manifest
 from .pagekind import end_of_paper_y
 from .provenance import SourceProvenance, check_page_map
@@ -176,13 +176,17 @@ def locate_questions(
     config: ExtractConfig,
     start_page: int | None = None,
     provenance: SourceProvenance | None = None,
+    text: dict[int, list[TextLine]] | None = None,
 ) -> LocatedPaper:
     """Stages 1-6: find every question's rectangles. Writes nothing.
 
     The result is all the writers need: :func:`write_renders` draws the pages,
     :func:`write_question_manifest` records the rectangles. ``provenance`` is
     only checked here (one warning for a bad page map); it changes no detection.
-    Warnings go to the innermost open :func:`collect_warnings` scope.
+    ``text``, when given, is every page's text layer by page number, in place of
+    the PDF's own: a scan's OCR (:mod:`.scanpaper`), with ``pdf_path`` its
+    straightened copy. Warnings go to the innermost open :func:`collect_warnings`
+    scope.
     """
     name = paper_name(pdf_path)
     log.info("processing %s", pdf_path.name)
@@ -196,13 +200,16 @@ def locate_questions(
 
     if not pages:
         raise ExtractionError(f"{pdf_path.name} has no pages")
+    if text is not None:
+        for geom in pages:
+            geom.lines = sorted(text.get(geom.number, []), key=lambda ln: (ln.y0, ln.x0))
 
     # Checked here, before anything is detected, so one warning covers a bad map
     # instead of one per page that reads it. A disagreement never stops the run:
     # an unmapped page reports its local number, as a run with no provenance does.
     check_page_map(provenance, page_count, pdf_path.name)
 
-    furniture = detect_furniture(pages, config)
+    furniture = detect_furniture(pages, config, drift=text is not None)
     question_pages = find_question_pages(pages, furniture, config)
     resolved_start = resolve_start_page(question_pages, start_page, page_count)
 
@@ -360,8 +367,10 @@ def write_question_manifest(
     config: ExtractConfig,
     warnings: list[str],
     provenance: SourceProvenance | None = None,
+    straightened: dict[int, float] | None = None,
 ) -> Path:
-    """Write ``manifest.json`` for a located paper; returns its path."""
+    """Write ``manifest.json`` for a located paper; returns its path. ``straightened``
+    is :func:`.manifest.build_manifest`'s: given for a paper read off its straightened copy."""
     manifest = build_manifest(
         paper=located.paper,
         source_pdf=located.pdf_path,
@@ -375,6 +384,7 @@ def write_question_manifest(
         config=config,
         warnings=warnings,
         provenance=provenance,
+        straightened=straightened,
     )
     return write_manifest(manifest, out_dir)
 

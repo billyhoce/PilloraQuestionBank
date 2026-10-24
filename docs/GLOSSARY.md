@@ -13,8 +13,8 @@ The words this project uses on purpose. Most belong to ingestion
 folder of artefacts. Made of tasks. Local statuses: `queued`, `running`, `done`, `failed`; the
 webapp's lifecycle is in [features/auto-import.md](./features/auto-import.md).
 
-**Stage** — A registered unit of work (`register`, `segment`, `split`, `locate`, `render`, `grid`,
-`ocr`, `questions`, `unrouted`, `report`) with a scope (job or section), a kind (cpu, api,
+**Stage** — A registered unit of work (`register`, `segment`, `split`, `scan`, `locate`, `render`,
+`grid`, `ocr`, `questions`, `unrouted`, `report`) with a scope (job or section), a kind (cpu, api,
 subprocess) and its dependencies. Boundaries sit where an external dependency lives, where a human
 may edit the artefact, or where work is costly and separately useful; smaller steps are function calls.
 
@@ -23,7 +23,7 @@ may edit the artefact, or where work is costly and separately useful; smaller st
 `blocked`, plus attempts, a lease, warnings and a reason or error.
 
 **Soft need** — A dependency the stage waits for but does not require: it runs however the
-predecessor ended (`questions` after `ocr`).
+predecessor ended (`questions` after `ocr`, `locate` after `scan`).
 
 **Lease** — How long a claimed task stays its runner's without a heartbeat; when it lapses the task
 is handed back automatically, up to the retry limit.
@@ -41,11 +41,12 @@ their answer papers (an answer paper takes its question paper's index). Section 
 paper's metadata from them.
 
 **Route** — The chain of section stages a section runs, chosen once at `split`: `question`
-(question sections and `annotated_booklet` answers: `locate`, `render`), `table` (table answers:
+(question sections and `annotated_booklet` answers: `scan`, `locate`, `render`), `table` (table answers:
 `grid`, `ocr`, `questions`, `render`) or `unrouted` (one `skipped` task with the reason).
 
-**Scan** — A page that is one page-sized image with no text layer. Scanned tables are deskewed and
-OCR'd; scanned question and annotated sections are not routed.
+**Scan** — A page that is one page-sized image with no text layer. Scans are deskewed and OCR'd:
+tables cell by cell, question and annotated sections page by page (the `scan` stage). Their
+rectangles and review images are in the straightened frame (`straightened_deg` on the proposal page).
 
 **Flag / needs review** — A page or section a human should check, with a reason. Raised instead of
 guessing or raising an error ("warn, never raise").

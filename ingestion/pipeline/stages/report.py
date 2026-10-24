@@ -219,5 +219,7 @@ STAGE = Stage(
         ctx.path(artefacts.PROPOSAL_NAME),
         ctx.path(proposal.PAGES_DIR),
     ],
-    version=3,  # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range
+    # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range;
+    # v4: a straightened scan's rectangles stay straightened, its pages carry straightened_deg
+    version=4,
 )

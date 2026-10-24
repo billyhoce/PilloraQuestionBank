@@ -8,7 +8,7 @@ describe('pipelinePhases', () => {
     expect(jobPhase({ status: 'awaiting_upload' })).toEqual({ current: idx('upload'), state: 'active' })
     expect(jobPhase({ status: 'queued', stage: null })).toEqual({ current: idx('read'), state: 'waiting' })
     expect(jobPhase({ status: 'running', stage: 'segment' })).toEqual({ current: idx('find'), state: 'active' })
-    for (const stage of ['locate', 'render', 'grid', 'ocr', 'questions']) {
+    for (const stage of ['scan', 'locate', 'render', 'grid', 'ocr', 'questions']) {
       expect(jobPhase({ status: 'running', stage }).current).toBe(idx('extract'))
     }
     expect(jobPhase({ status: 'running', stage: 'report' }).current).toBe(idx('assemble'))

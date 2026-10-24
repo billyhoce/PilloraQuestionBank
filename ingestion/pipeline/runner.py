@@ -75,9 +75,14 @@ def settle(store: Store, registry: Registry, job_id: str) -> None:
                 continue
             route = routes.get(task.section)
             needs = [tasks.get(key) for key in registry.needs(task.stage, task.section, route)]
-            soft = [tasks.get(key) for key in registry.soft_needs(task.stage, task.section, route)]
-            if any(need is None for need in (*needs, *soft)):
+            soft_keys = registry.soft_needs(task.stage, task.section, route)
+            if any(need is None for need in needs) or any(
+                key not in tasks and key[0] is None for key in soft_keys
+            ):
                 continue  # a dependency not yet created (a section stage before its fan-out)
+            # A section's tasks are all created at once, so a missing soft need of the
+            # section's own is one its job predates (``scan``, added later): nothing to wait for.
+            soft = [tasks[key] for key in soft_keys if key in tasks]
             if registry.get(task.stage, route).after_sections and any(
                 t.section is not None and t.status not in _SETTLED for t in tasks.values()
             ):

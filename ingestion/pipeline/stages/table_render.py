@@ -3,8 +3,8 @@
 Reads ``labelled.json`` (what ``questions`` saved) and the section's split PDF, rasterises
 each page once and writes ``pNN.png`` (the question rectangles in red, drawn on the
 straightened image for a scanned page, the frame its rectangles are in), ``review/pNN.webp``
-(clean and **unstraightened**, the PDF's own frame, for the admin review page) and, when the
-job asks for debug, ``_debug/pNN.png`` (column pairs, row bands and reading order drawn in).
+(clean, for the admin review page; straightened too, so the rectangles the proposal carries
+in that frame sit on it) and, when the job asks for debug, ``_debug/pNN.png`` (column pairs, row bands and reading order drawn in).
 Nothing is read or detected again; every mark comes from the saved file, as in
 ``ingester ingest --debug``.
 """
@@ -53,4 +53,5 @@ STAGE = Stage(
     settings=render_settings,
     outputs=lambda ctx: [ctx.path(ctx.section, "review")]
     + ([ctx.path(ctx.section, "_debug")] if ctx.debug else []),
+    version=2,  # v2: a scanned page's review image is straightened
 )

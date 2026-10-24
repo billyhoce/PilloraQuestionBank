@@ -2,7 +2,9 @@
 
 The admin's reviewed rectangles (``proposal_edited`` if there is one, else ``proposal``) are
 cropped out of the job's ``source.pdf`` into page images and handed to the Manual flow's own
-``confirm_import``, unchanged. See docs/features/auto-import.md ("Deciding each paper") and docs/features/qa-pairing.md.
+``confirm_import``, unchanged. A scanned page the pipeline straightened (its proposal page has
+``straightened_deg``) is rotated by that angle before it is cropped, since its rectangles were
+drawn on the straightened page. See docs/features/auto-import.md ("Deciding each paper") and docs/features/qa-pairing.md.
 """
 
 import uuid
@@ -69,14 +71,36 @@ def _check_open(job: IngestJob, key: str) -> None:
         raise ReviewActionError(409, f"Paper {key!r} was already {done}")
 
 
-def render_crop(page: "fitz.Page", rect: dict) -> tuple[bytes, int, int]:
-    """One rectangle (PDF points) as a standardised WebP: ``(bytes, width_px, height_px)``.
-    The pixmap and the PIL images are released before returning."""
-    pix = page.get_pixmap(dpi=CROP_DPI, clip=fitz.Rect(rect["x0"], rect["y0"], rect["x1"], rect["y1"]))
+def straightened_page(page: "fitz.Page", angle_deg: float) -> Image.Image:
+    """The whole page at ``CROP_DPI``, rotated counter-clockwise (as seen) by ``angle_deg`` about
+    its centre and kept at its size, the corners filled white: the frame the ingestion pipeline
+    straightened a scan into (``question_extractor.scanpage``), so a rectangle measured there
+    lands on the same content here."""
+    pix = page.get_pixmap(dpi=CROP_DPI)
     try:
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     finally:
         del pix
+    return img.rotate(angle_deg, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+
+
+def render_crop(
+    page: "fitz.Page", rect: dict, straightened: Image.Image | None = None
+) -> tuple[bytes, int, int]:
+    """One rectangle (PDF points) as a standardised WebP: ``(bytes, width_px, height_px)``,
+    cut from ``straightened`` (the page from :func:`straightened_page`) when given, else from the
+    page itself. The pixmap and the PIL images are released before returning."""
+    if straightened is not None:
+        scale = CROP_DPI / 72
+        img = straightened.crop(
+            tuple(round(rect[k] * scale) for k in ("x0", "y0", "x1", "y1"))
+        )
+    else:
+        pix = page.get_pixmap(dpi=CROP_DPI, clip=fitz.Rect(rect["x0"], rect["y0"], rect["x1"], rect["y1"]))
+        try:
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        finally:
+            del pix
     std = standardize(img)
     webp = to_webp_bytes(std)
     w, h = get_dimensions(std)
@@ -99,11 +123,14 @@ def build_confirm_payload(
     ``question_rects`` become ``question`` pages and its ``answer_rects`` ``answer`` pages, in
     list order, ``page_order`` counting from 1 per type like the Manual flow. Provenance rides
     along: each question carries its ``section`` (the paper's question label) and
-    ``proposal_question_index``, each page its ``source_page`` and ``source_rect``. Orphan answers are
-    not imported. On a failure the images already uploaded are deleted again."""
+    ``proposal_question_index``, each page its ``source_page`` and ``source_rect`` (in the
+    straightened frame for a straightened page). Orphan answers are not imported. On a failure the
+    images already uploaded are deleted again."""
     upload_id = upload_id or str(uuid.uuid4())
     keys: list[str] = []
     questions = []
+    angles = {p["page"]: p.get("straightened_deg") for p in paper.get("pages", [])}
+    held: tuple[int, Image.Image] | None = None  # the last straightened page: rects come page by page
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             n = 0
@@ -113,7 +140,13 @@ def build_confirm_payload(
                     for order, rect in enumerate(rects, start=1):
                         if not 1 <= rect["page"] <= doc.page_count:
                             raise ReviewActionError(422, f"Question {q['number']} uses page {rect['page']}, which the PDF lacks")
-                        webp, w, h = render_crop(doc[rect["page"] - 1], rect)
+                        straightened = None
+                        if angles.get(rect["page"]):
+                            if held is None or held[0] != rect["page"]:
+                                held = None  # let the previous page go before rendering the next
+                                held = (rect["page"], straightened_page(doc[rect["page"] - 1], angles[rect["page"]]))
+                            straightened = held[1]
+                        webp, w, h = render_crop(doc[rect["page"] - 1], rect, straightened)
                         key = f"tmp/{upload_id}/page_{n}.webp"
                         put(key, webp)
                         keys.append(key)

@@ -82,6 +82,43 @@ def test_payload_deletes_uploaded_images_when_a_crop_fails(monkeypatch):
     assert deleted == ["tmp/u2/page_0.webp"]
 
 
+def tilted_rule_pdf(tilt_pt: float) -> bytes:
+    """One page with a 400pt rule through its centre, one end ``tilt_pt`` above the other: a
+    scanned table rule as the sheet lay crooked on the glass."""
+    doc = fitz.open()
+    p = doc.new_page(width=W, height=H)
+    p.draw_line((W / 2 - 200, H / 2 + tilt_pt / 2), (W / 2 + 200, H / 2 - tilt_pt / 2), width=1.0)
+    return doc.tobytes()
+
+
+def ink_columns(webp: bytes) -> float:
+    """The share of the image's pixel columns holding dark ink."""
+    gray = Image.open(io.BytesIO(webp)).convert("L")
+    w, h = gray.size
+    px = gray.load()
+    return sum(any(px[x, y] < 128 for y in range(h)) for x in range(w)) / w
+
+
+def test_straightened_page_is_rotated_as_the_pipeline_straightened_it():
+    from question_extractor import ExtractConfig
+    from question_extractor.scanpage import read_scan_page
+
+    pdf = tilted_rule_pdf(12.0)  # about 1.7 degrees
+    with fitz.open(stream=pdf, filetype="pdf") as doc:
+        angle = read_scan_page(doc[0], ExtractConfig()).angle_deg
+    assert 1.0 < abs(angle) < 2.5
+    # The rule, straightened about the page centre, lies along y = H/2: a band 8pt tall holds it.
+    band = r(1, W / 2 - 195, H / 2 - 4, W / 2 + 195, H / 2 + 4)
+    crops = {}
+    for deg in (angle, None):
+        one = {**paper(questions=[q(1, [band])]), "pages": [{**page(1, W, H), "straightened_deg": deg}]}
+        puts = {}
+        build_confirm_payload(pdf, one, {}, put=puts.__setitem__, upload_id="u")
+        crops[deg] = puts["tmp/u/page_0.webp"]
+    assert ink_columns(crops[angle]) > 0.98  # the whole rule, straight across the band
+    assert ink_columns(crops[None]) < 0.8  # as filed, its ends run out of the band
+
+
 def test_paper_key_falls_back_to_answer_label_then_position():
     assert paper_key({"label": "q1", "answer_label": "a1"}, 0) == "q1"
     assert paper_key({"label": None, "answer_label": "a2"}, 1) == "a2"

@@ -185,6 +185,11 @@ def _split_columns(
     )
 
     if content is not None:
+        # A question number left of the content column is in the gutter even when it
+        # sits clear of the gutter's own cluster: on a scan the sheet shifts from page
+        # to page, and Yuying's Q1 is set 8pt right of its other numbers, which put the
+        # cut through it and lost the question.
+        gutter_right = max([gutter_right, *(x for x in number_xs if x < content[0])])
         return gutter_x, content[0], (gutter_right + content[0]) / 2.0, True
 
     # No cleanly separated content column: fall back to the nearest thing to the

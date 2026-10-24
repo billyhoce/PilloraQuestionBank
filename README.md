@@ -58,11 +58,17 @@ cd frontend && npm run dev                # http://localhost:5173, proxies /api 
 
 # Terminal 3 — ingest worker, only needed for Auto import
 python -m app.worker
+# …or the worker in the production image instead (rebuild after changing app/ or ingestion/)
+docker compose --profile worker up -d --build
 ```
 
-- The worker reads the same `.env`. By default it runs OCR through the `pillora-tesseract` Docker
-  image; set `INGEST_OCR_COMMAND=tesseract` if the binary is installed locally. Other worker
+- The host worker reads the same `.env`. By default it runs OCR through the `pillora-tesseract`
+  Docker image; set `INGEST_OCR_COMMAND=tesseract` if the binary is installed locally. Other worker
   settings are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#configuration).
+- The `worker` compose service is opt-in (a plain `docker compose up` starts only MinIO). It reads
+  `.env` but overrides `S3_ENDPOINT_URL=http://minio:9000` and `INGEST_OCR_COMMAND=tesseract`, and
+  has the production 1 CPU / 6 GB limits. Run either it or the host worker, not both. Logs:
+  `docker compose logs -f worker`.
 - For Google sign-in locally, set the three `GOOGLE_*` values with
   `GOOGLE_REDIRECT_URI=http://localhost:5173/api/auth/google/callback`.
 

@@ -24,6 +24,14 @@ paid once. The TIFF is a stage artefact of its own: :func:`encode_cells` makes i
 and :func:`read_tiff` reads it, so a separate ``ocr`` stage can run from the saved
 file (the cells' metadata, in ``grid.json``, places the words).
 
+**Whole question pages** (:func:`read_pages`) are a scanned question paper's text
+layer, which it never had: every straightened page, whitened past its ink level as
+a cell is, in one run of ``ocr_page_psm`` with no whitelist. Each Tesseract line
+becomes a :class:`.geometry.TextLine` in the straightened page's points, one span
+per word, which is what the question locator reads off a born-digital page. A
+question number Tesseract set at the head of its text's line is split off as a
+line of its own (``ocr_number_gap``), where a born-digital paper has it.
+
 **Failure is reported, never raised.** The command missing, Docker's daemon down, the image
 not built, a timeout, or a reply that does not cover every cell: :func:`read_cells`
 returns the reason as a string, and the pipeline flags the scanned pages with
@@ -35,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -44,6 +53,7 @@ import pymupdf
 from .config import ExtractConfig
 from .geometry import Span, TextLine, rect_entry, rect_from_entry
 from .scanpage import ScanPage
+from .tokens import is_anchor_token
 from .tables import RowBand, TablePage
 
 log = logging.getLogger(__name__)
@@ -180,14 +190,76 @@ def read_tiff(tiff: bytes, cells: list[OcrCell], config: ExtractConfig) -> list[
     """
     if not cells:
         return []
-    command = [
-        *config.ocr_command,
-        "stdin", "stdout",
-        "--psm", str(config.ocr_psm),
-        "--dpi", str(config.scan_dpi),
-        "-c", f"tessedit_char_whitelist={config.ocr_whitelist}",
-        "tsv",
+    words = _run(
+        tiff,
+        len(cells),
+        "cell(s)",
+        ["--psm", str(config.ocr_psm), "-c", f"tessedit_char_whitelist={config.ocr_whitelist}"],
+        config,
+    )
+    if isinstance(words, str):
+        return words
+    log.info("OCR read %d question cell(s) in one run of %s", len(cells), config.ocr_command[0])
+    return [_read(cell, words.get(n, [])) for n, cell in enumerate(cells, start=1)]
+
+
+def read_pages(scans: list[ScanPage], config: ExtractConfig) -> list[list[TextLine]] | str:
+    """Every line of text on each straightened page, in order, or why nothing could be read.
+
+    One Tesseract run for all the pages. A page reading nothing gets no lines.
+    """
+    if not scans:
+        return []
+    images = []
+    for scan in scans:
+        page = scan.image.copy()
+        page[page > scan.ink_level] = 255  # print showing through from the back is not text
+        images.append(page)
+    params = [
+        cv2.IMWRITE_TIFF_XDPI, config.scan_dpi, cv2.IMWRITE_TIFF_YDPI, config.scan_dpi,
+        cv2.IMWRITE_TIFF_COMPRESSION, _TIFF_LZW,
     ]
+    ok, tiff = cv2.imencodemulti(".tiff", images, params)
+    if not ok:
+        return "the scanned pages could not be encoded as a TIFF"
+    words = _run(tiff.tobytes(), len(scans), "page(s)", ["--psm", str(config.ocr_page_psm)], config)
+    if isinstance(words, str):
+        return words
+    log.info("OCR read %d scanned page(s) in one run of %s", len(scans), config.ocr_command[0])
+    pages = []
+    for n, scan in enumerate(scans, start=1):
+
+        def to_rect(word: _Word, scale: float = scan.scale) -> pymupdf.Rect:
+            return pymupdf.Rect(
+                word.left / scale,
+                word.top / scale,
+                (word.left + word.width) / scale,
+                (word.top + word.height) / scale,
+            )
+
+        groups = [
+            part
+            for group in _lines(words.get(n, []))
+            for part in _split_number(group, scan.scale, config)
+        ]
+        lines = [_text_line(scan.page, group, to_rect) for group in groups]
+        lines.sort(key=lambda line: (line.y0, line.x0))
+        pages.append(lines)
+    return pages
+
+
+_TIFF_LZW = 5
+"""libtiff's code for LZW. A whole page is 8.7 MB raw at 300 dpi and mostly white,
+which LZW packs to a small fraction of that, so a booklet's pages pipe to
+Tesseract without holding hundreds of MB."""
+
+
+def _run(
+    tiff: bytes, expected: int, what: str, options: list[str], config: ExtractConfig
+) -> dict[int, list[_Word]] | str:
+    """The words on each TIFF page, by 1-based page, from one run of the OCR command;
+    a string says why there are none."""
+    command = [*config.ocr_command, "stdin", "stdout", "--dpi", str(config.scan_dpi), *options, "tsv"]
     program = command[0]
     try:
         proc = subprocess.run(command, input=tiff, capture_output=True, timeout=config.ocr_timeout_s)
@@ -201,10 +273,9 @@ def read_tiff(tiff: bytes, cells: list[OcrCell], config: ExtractConfig) -> list[
         return f"Tesseract (via {program}) failed: {_last_error(proc.stderr)}"
 
     pages, words = _parse_tsv(proc.stdout.decode("utf-8", errors="replace"))
-    if pages != len(cells):
-        return f"Tesseract returned {pages} page(s) for {len(cells)} cell(s)"
-    log.info("OCR read %d question cell(s) in one run of %s", len(cells), program)
-    return [_read(cell, words.get(n, [])) for n, cell in enumerate(cells, start=1)]
+    if pages != expected:
+        return f"Tesseract returned {pages} page(s) for {expected} {what}"
+    return words
 
 
 @dataclass(frozen=True)
@@ -248,16 +319,33 @@ def _parse_tsv(tsv: str) -> tuple[int, dict[int, list[_Word]]]:
 def _read(cell: OcrCell, words: list[_Word]) -> OcrRead:
     if not words:
         return OcrRead()
-    by_line: dict[tuple[int, int, int], list[_Word]] = {}
-    for word in words:
-        by_line.setdefault(word.line, []).append(word)
-    lines = [_text_line(cell, sorted(group, key=lambda w: w.left)) for group in by_line.values()]
+    lines = [
+        _text_line(cell.page, group, lambda word: _page_rect(cell, word)) for group in _lines(words)
+    ]
     lines.sort(key=lambda line: (line.y0, line.x0))
     return OcrRead(lines=tuple(lines), confidence=min(word.confidence for word in words))
 
 
-def _text_line(cell: OcrCell, words: list[_Word]) -> TextLine:
-    spans = tuple(Span(rect=_page_rect(cell, word), text=word.text) for word in words)
+def _lines(words: list[_Word]) -> list[list[_Word]]:
+    """The words grouped by the text line Tesseract put them on, each left to right."""
+    by_line: dict[tuple[int, int, int], list[_Word]] = {}
+    for word in words:
+        by_line.setdefault(word.line, []).append(word)
+    return [sorted(group, key=lambda w: w.left) for group in by_line.values()]
+
+
+def _split_number(words: list[_Word], scale: float, config: ExtractConfig) -> list[list[_Word]]:
+    """``words`` (one line), with a leading question number set ``ocr_number_gap`` or
+    more before the next word made a line of its own."""
+    if len(words) > 1 and is_anchor_token(words[0].text):
+        gap = (words[1].left - words[0].left - words[0].width) / scale
+        if gap >= config.ocr_number_gap:
+            return [words[:1], words[1:]]
+    return [words]
+
+
+def _text_line(page: int, words: list[_Word], to_rect: Callable[[_Word], pymupdf.Rect]) -> TextLine:
+    spans = tuple(Span(rect=to_rect(word), text=word.text) for word in words)
     rect = pymupdf.Rect(
         min(span.rect.x0 for span in spans),
         min(span.rect.y0 for span in spans),
@@ -265,7 +353,7 @@ def _text_line(cell: OcrCell, words: list[_Word]) -> TextLine:
         max(span.rect.y1 for span in spans),
     )
     return TextLine(
-        page=cell.page,
+        page=page,
         rect=rect,
         text=" ".join(span.text for span in spans),
         leading_token=spans[0].text.split()[0],

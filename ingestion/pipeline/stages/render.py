@@ -9,6 +9,9 @@ runs: the rectangles and every overlay come from the saved file, which is also h
 
 The manifest ``locate`` wrote already names these images, so a page whose image is
 not written here is a warning on this task.
+
+A scanned section is drawn from ``scan``'s straightened copy (``_scan/<label>.pdf``),
+the frame its rectangles are in, so its review images are straight too.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import logging
 from question_extractor.pipeline import DETECTIONS_NAME, render_saved
 from question_extractor.render import page_filename
 
+from .. import artefacts
 from ..fingerprint import plan_inputs, render_settings
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, QUESTION, SECTION, Stage
@@ -35,9 +39,9 @@ def run(ctx: StageContext) -> Outcome:
         return failed(f"{detections} is missing; locate has not written it")
     pages = json.loads(detections.read_text(encoding="utf-8"))["pages"]
 
-    written = render_saved(
-        section.pdf, out_dir, ctx.config.extract, debug=ctx.debug, review=True
-    )
+    scan_pdf, _ = artefacts.scan_paths(ctx.job_dir, section.segment.label)
+    pdf = scan_pdf if scan_pdf.is_file() else section.pdf
+    written = render_saved(pdf, out_dir, ctx.config.extract, debug=ctx.debug, review=True)
     for page in pages:
         if page["page"] not in written:
             log.warning("%s: page %d was not rendered", section.segment.label, page["page"])
@@ -58,7 +62,12 @@ STAGE = Stage(
     run=run,
     needs=("locate",),
     route=QUESTION,
-    inputs=lambda ctx: [*plan_inputs(ctx), ctx.path(ctx.section, DETECTIONS_NAME)],
+    inputs=lambda ctx: [
+        *plan_inputs(ctx),
+        ctx.path(ctx.section, DETECTIONS_NAME),
+        artefacts.scan_paths(ctx.job_dir, ctx.section)[0],
+    ],
     settings=render_settings,
     outputs=_outputs,
+    version=2,  # v2: a scanned section is drawn from scan's straightened copy
 )

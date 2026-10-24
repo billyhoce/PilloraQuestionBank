@@ -7,7 +7,7 @@ It is the `ingestion/` library; the webapp's ingest worker runs it (see
 
 **Code:** `ingestion/pipeline/` (runner, registry, store, `stages/`, `proposal.py`),
 `ingestion/ingester/` (segment, split, routing), `ingestion/question_extractor/` (locating questions,
-answer tables, OCR, renders), `ingestion/docker/tesseract/`
+answer tables, scans, OCR, renders), `ingestion/docker/tesseract/`
 **Related:** [auto-import.md](./auto-import.md), [qa-pairing.md](./qa-pairing.md), [ai-labelling.md](./ai-labelling.md),
 [GLOSSARY.md](../GLOSSARY.md), [ADR 0001](../adr/0001-stage-pipeline.md), [ADR 0002](../adr/0002-qa-booklet-pairing.md)
 
@@ -21,7 +21,9 @@ rerun, inspected or hand-edited.
 flowchart TD
     pdf[/booklet PDF/] --> register --> segment --> split
     segment -.->|no fixture| claude[[Claude vision]]
-    split -->|question section,<br/>annotated_booklet answers| locate --> qrender[render]
+    split -->|question section,<br/>annotated_booklet answers| scan -.->|soft| locate --> qrender[render]
+    split --> locate
+    scan -.-> tess
     split -->|table answers,<br/>digital or scanned| grid --> questions --> trender[render]
     grid --> ocr -.->|soft| questions
     ocr -.-> tess[[Tesseract]]
@@ -40,11 +42,12 @@ flowchart TD
   `needs_review` flag. One section failing never stops the others; one booklet failing never stops
   a folder run or another job.
 - A task ends `done`, `skipped` (with a reason) or `failed` (with an error; a crash keeps its
-  traceback tail). Downstream of `failed` is `blocked`, of `skipped` is `skipped` — except `questions`,
-  which only *soft*-needs `ocr` and runs however it ended.
+  traceback tail). Downstream of `failed` is `blocked`, of `skipped` is `skipped` — except `locate`
+  and `questions`, which only *soft*-need `scan` and `ocr` and run however those ended.
 - A job ends `failed` if any task failed or was blocked, else `done` (the webapp maps this onto its
   own job statuses; see [auto-import.md](./auto-import.md)).
-- Page numbers are 1-based PDF positions, not printed page numbers. Rectangles are in PDF points.
+- Page numbers are 1-based PDF positions, not printed page numbers. Rectangles are in PDF points; on
+  a straightened scan, in the points of the straightened page (same size, rotated about its centre).
 - The library never touches the database, S3 or the webapp; matching and attaching answers live in
   the webapp ([qa-pairing.md](./qa-pairing.md)).
 
@@ -97,25 +100,37 @@ Decides which pages are which and writes the plan (`segments.json`).
 
 | Section | Route | Stages |
 |---|---|---|
-| Question paper, or `annotated_booklet` answers | question | `locate` → `render` |
+| Question paper, or `annotated_booklet` answers | question | `scan` → `locate` → `render` |
 | `table` answers, digital or scanned | table | `grid` → `ocr` → `questions` → `render` |
 | Answer section with no template | unrouted | one `skipped` task, flagged `needs_review` |
 
-## 4. Question route: locate and render
+## 4. Question route: scan, locate and render
 
-**Code:** `ingestion/pipeline/stages/locate.py`, `render.py`, `ingestion/question_extractor/` (`pipeline.py` and the modules it runs)
+**Code:** `ingestion/pipeline/stages/scan.py`, `locate.py`, `render.py`, `ingestion/question_extractor/` (`pipeline.py` and the modules it runs; `scanpaper.py`, `scanpage.py`, `ocr.py` for scans)
 
+- **Scan** gives a section with **no text layer on any page** (a scan) one: every page is deskewed
+  (tilt from its long rules, else from its text lines; 5° or more is not trusted, and the page is
+  flagged instead) into a straightened copy of the section, and read by Tesseract, 8 pages a run.
+  `skipped` when any page has text; `failed` when Tesseract is missing, errors or times out.
 - **Locate** finds each question by its gutter number and records the rectangle(s) it occupies; a
-  question spanning pages gets one rectangle per page. Images are never split by part.
-- A section with **no text layer on any page** (a scan) is `skipped` → reported `not_routed` and
-  flagged: scanned question papers and annotated booklets are not located automatically.
+  question spanning pages gets one rectangle per page. Images are never split by part. A scan is
+  located on its straightened copy and OCR text exactly as a digital paper is, with one warning
+  ("check each question's number"); its rectangles are in the straightened frame.
+- If `scan` did not finish, a scan is `skipped` → reported `not_routed` with the OCR error, flagged.
+- Calibration counts every question number left of the content column as gutter (a scan's pages
+  shift; some papers indent one number further). The numbering kept is the longest rising run, so a
+  stray number (a graph's axis label) is dropped rather than shutting out every question after it.
+- Header and footer: besides text repeating at one height, a page's first and last rows inside the
+  margin are furniture when their text repeats on 3+ pages; on a scan, the rows stacked inside them
+  are peeled the same way (its header and footer drift from page to page).
 - Not flagged: blank pages and pages after an end-of-paper marker (skipped with a reason).
 - Flagged `needs_review`: a textless page inside a digital paper, a content page with no question
   number and no open question, a paper with no question numbers at all (every page left for review).
 - Per-rectangle flags: `pixel_ink` (bounds measured from pixels, not text) and `grid_page` (a
   graph-paper page, boxed onto the grid).
 - **Render** draws each page with its rectangles in red (`pNN.png`) and writes a clean review image
-  (WebP, ~144 dpi) for the admin review page; `--debug` adds intermediate-detection overlays.
+  (WebP, ~144 dpi) for the admin review page (a scan's straightened page); `--debug` adds
+  intermediate-detection overlays.
 
 ## 5. Table route: grid, OCR, questions, render
 
@@ -137,8 +152,7 @@ Decides which pages are which and writes the plan (`segments.json`).
   fit the layout or don't pair; a pair has no row rules; text crosses a row rule or lies outside
   every pair; a cell holds two question numbers; reading order contradicts the layout; numbers
   repeat, go backwards or skip; a scan tilts more than 5°; OCR was unavailable.
-- **Render** draws scans on the straightened image; the review image is always the page as filed
-  (unstraightened).
+- **Render** draws scans, and their review images, on the straightened image.
 
 ## 6. Report and proposal
 
@@ -161,9 +175,10 @@ Runs once every section has settled, even if `register`, `segment` or `split` fa
     ([ADR 0002](../adr/0002-qa-booklet-pairing.md)); warned.
 - **Rectangles are never dropped.** An answer rectangle joins the question with the same number;
   one with no such question goes to the paper's `orphan_answers`.
-- **Scanned tables are mapped back** from the straightened frame to the page as filed (bounding box
-  of the rotated corners, clipped to the page). A digital rectangle overhanging its page by more than
-  2 pt is clipped and warned.
+- **Straightened pages stay straightened.** A straightened scan page carries `straightened_deg`; its
+  review image and rectangles are in that frame, and confirm rotates the page by it before cropping
+  ([auto-import.md](./auto-import.md)). A rectangle overhanging its page by more than 2 pt is clipped
+  and warned.
 - **Question flags** combine the page's review reason (an answer page's reasons go to the question
   it answers), `pixel_ink` and `grid_page`.
 - **Unrouted.** Every section not extracted is listed with its reason and booklet page range (what
@@ -213,6 +228,6 @@ python -m question_extractor paper.pdf --output-dir out/ [--table] [--debug]    
   diff the outputs (`ingest.json`, every `manifest.json`, `tables.json`, `segments.json`, the PNGs).
 - Each sample has a committed hand-written `<paper>.segments.json` fixture, so runs make **no API
   call** and need no credential. Delete old `segments.json` outputs first, or they are reused.
-- Scanned answer tables need Docker running and `docker compose build tesseract`; without it their
-  pages come back flagged instead of read.
+- Scans need Docker running and `docker compose build tesseract`; without it scanned tables come
+  back flagged instead of read, and scanned question sections `not_routed`.
 - The full workflow, with what each sample should produce, is in [TESTING.md](../TESTING.md).

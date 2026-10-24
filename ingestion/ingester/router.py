@@ -14,17 +14,19 @@ A split section goes to whichever pipeline can crop its shape:
 * an answer section with no template (the segmenter was unsure) -> nowhere,
   flagged for review, since guessing a pipeline would crop it as the wrong shape;
 * a question or ``annotated_booklet`` section none of whose pages carries
-  extractable text -> nowhere. That is a scan, which the question extractor
-  cannot crop: it would emit every page "for review", which reads as a result
-  when it is not one. Text is read through :mod:`question_extractor.geometry`,
-  the only module that talks to PyMuPDF extraction. A section with *some* text
-  pages is routed; the extractor already flags a textless page inside an
-  otherwise digital paper.
+  extractable text is a scan: it goes to the question extractor too, after the
+  pipeline's ``scan`` stage has straightened its pages and read them by OCR. If
+  that could not be done (Tesseract missing, say) it goes nowhere: the extractor
+  would emit every page "for review", which reads as a result when it is not
+  one. Text is read through :mod:`question_extractor.geometry`, the only module
+  that talks to PyMuPDF extraction. A section with *some* text pages is not
+  OCR'd; the extractor already flags a textless page inside an otherwise digital
+  paper.
 
 :func:`choose_route`, :func:`has_text` and :func:`table_layout` are what the
 ``pipeline`` stages call (the fan-out chooses each section's chain with
-``choose_route``; ``locate`` applies the text rule; ``questions`` reads the table
-layout). The walk over a paper's sections that used to live here, ``ingest``, is
+``choose_route``; ``scan`` and ``locate`` apply the text rule; ``questions`` reads the
+table layout). The walk over a paper's sections that used to live here, ``ingest``, is
 ``pipeline``'s ``report`` stage: it writes ``<paper>/ingest.json`` -- every section
 with its label, range, template, route, status, question count, warnings and review
 flag, as a :class:`SectionReport` -- from the artefacts the stages left.

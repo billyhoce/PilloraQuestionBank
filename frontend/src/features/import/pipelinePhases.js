@@ -7,9 +7,9 @@ export const PHASES = [
   { id: 'read', label: 'Read PDF', stages: ['register'] },
   { id: 'find', label: 'Find papers', stages: ['segment'] },
   { id: 'split', label: 'Split', stages: ['split'] },
-  // Per-section stages: the question route (locate → render) and the answer-table route
-  // (grid → ocr → questions → render).
-  { id: 'extract', label: 'Extract questions', stages: ['locate', 'render', 'grid', 'ocr', 'questions'] },
+  // Per-section stages: the question route (scan → locate → render; scan OCRs a scanned paper)
+  // and the answer-table route (grid → ocr → questions → render).
+  { id: 'extract', label: 'Extract questions', stages: ['scan', 'locate', 'render', 'grid', 'ocr', 'questions'] },
   { id: 'assemble', label: 'Assemble', stages: ['report'] },
 ]
 

@@ -141,6 +141,13 @@ def filter_sequence(anchors: list[Anchor], config: ExtractConfig) -> list[Anchor
     Gaps are allowed but reported, since they usually mean a genuine anchor was
     missed rather than that the paper skips a number.
 
+    Which numbers are the false positives is decided over the whole paper: the
+    anchors kept are the longest run that rises throughout (:func:`_rising_run`),
+    not each number that rises past the last one kept. Taken one at a time, a stray
+    number larger than the next question shuts out every question after it: on
+    Yuying's scanned section B the graph page's axis label ``80`` sat in the gutter
+    after Q14 and cost Q15-Q18.
+
     That upward run is also what admits an OCR-repaired number, and the only thing
     that does: a repaired anchor is kept when it is exactly the next question in
     the sequence, and dropped otherwise. Never the first anchor of a paper, and
@@ -149,7 +156,8 @@ def filter_sequence(anchors: list[Anchor], config: ExtractConfig) -> list[Anchor
     joins the sequence, which is what lets consecutive garbled numbers chain.
     """
     kept: list[Anchor] = []
-    for anchor in anchors:
+    run = _rising_run(anchors, config)
+    for index, anchor in enumerate(anchors):
         if anchor.number > config.max_anchor_number:
             log.warning(
                 "page %d: ignoring implausible question number %d", anchor.page, anchor.number
@@ -168,13 +176,21 @@ def filter_sequence(anchors: list[Anchor], config: ExtractConfig) -> list[Anchor
             )
             kept.append(anchor)
             continue
-        if kept and anchor.number <= kept[-1].number:
-            log.warning(
-                "page %d: ignoring out-of-sequence question number %d (previous was %d)",
-                anchor.page,
-                anchor.number,
-                kept[-1].number,
-            )
+        if index not in run or (kept and anchor.number <= kept[-1].number):
+            if kept:
+                log.warning(
+                    "page %d: ignoring out-of-sequence question number %d (previous was %d)",
+                    anchor.page,
+                    anchor.number,
+                    kept[-1].number,
+                )
+            else:
+                log.warning(
+                    "page %d: ignoring question number %d, which the numbering after it "
+                    "does not follow",
+                    anchor.page,
+                    anchor.number,
+                )
             continue
         if kept and anchor.number != kept[-1].number + 1:
             log.warning(
@@ -186,3 +202,28 @@ def filter_sequence(anchors: list[Anchor], config: ExtractConfig) -> list[Anchor
             )
         kept.append(anchor)
     return kept
+
+
+def _rising_run(anchors: list[Anchor], config: ExtractConfig) -> set[int]:
+    """Indices of the longest run of plausible, unrepaired anchors whose numbers rise
+    throughout. Of runs as long, the one taking the earlier anchors wins."""
+    candidates = [
+        i for i, a in enumerate(anchors) if not a.repaired and a.number <= config.max_anchor_number
+    ]
+    length: dict[int, int] = {}
+    previous: dict[int, int | None] = {}
+    for i in candidates:
+        length[i], previous[i] = 1, None
+        for j in candidates:
+            if j >= i:
+                break
+            if anchors[j].number < anchors[i].number and length[j] + 1 > length[i]:
+                length[i], previous[i] = length[j] + 1, j
+    if not length:
+        return set()
+    end: int | None = max(length, key=lambda i: (length[i], -i))
+    run: set[int] = set()
+    while end is not None:
+        run.add(end)
+        end = previous[end]
+    return run

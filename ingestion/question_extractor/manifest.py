@@ -82,6 +82,14 @@ def _rect_entry(band: Band, provenance: SourceProvenance | None) -> dict:
     }
 
 
+def _straightened(page: int, straightened: dict[int, float] | None) -> dict:
+    """A page entry's ``straightened`` key, or nothing for a paper that was not straightened."""
+    if straightened is None:
+        return {}
+    angle = straightened.get(page)
+    return {"straightened": {"angle_deg": round(angle, 3)} if angle else None}
+
+
 def config_snapshot(config: ExtractConfig) -> dict:
     """The thresholds a run used, so its output can be reproduced or explained.
 
@@ -110,6 +118,7 @@ def build_manifest(
     config: ExtractConfig,
     warnings: list[str],
     provenance: SourceProvenance | None = None,
+    straightened: dict[int, float] | None = None,
 ) -> dict:
     """Assemble the manifest for one paper.
 
@@ -117,6 +126,13 @@ def build_manifest(
     given, names the document *that* was carved out of and is what every
     ``original_page`` is relative to; left out, not one provenance key is
     written.
+
+    ``straightened``, given for a scanned paper read off its straightened copy
+    (:mod:`.scanpaper`), maps each page to the rotation it was straightened by:
+    each page entry then carries ``straightened`` as a table's scanned page does
+    (``{"angle_deg": ...}``, ``None`` for a page left unrotated), saying its
+    rectangles are in the straightened page's points. Left out, no page carries
+    the key.
     """
     return {
         "paper": paper,
@@ -170,6 +186,7 @@ def build_manifest(
                 "needs_review": result.needs_review,
                 "review_reason": result.review_reason,
                 "skip_reason": result.skip_reason,
+                **_straightened(result.page, straightened),
             }
             for result in results
         ],
