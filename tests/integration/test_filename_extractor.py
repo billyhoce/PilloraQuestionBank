@@ -9,7 +9,9 @@ def test_informative_filename_resolves_ids(db_session, reference_data):
     rd = reference_data
     result = extract_metadata("Raffles Institution 2024 Math Sec 3 EOY P1.pdf", db=db_session)
 
-    assert set(result.keys()) == {"school_id", "subject_id", "level_id", "exam_type_id", "year", "paper_number"}
+    assert set(result.keys()) == {
+        "school_id", "subject_id", "level_id", "stream_id", "exam_type_id", "year", "paper_number", "extracted",
+    }
     assert result["school_id"] == rd["school"].id
     assert result["subject_id"] == rd["subject"].id
     assert result["level_id"] == rd["level"].id

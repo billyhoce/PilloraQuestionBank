@@ -1,19 +1,26 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
+    Enum,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     false,
     func,
     select,
+    text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.db import Base
@@ -254,6 +261,10 @@ class Paper(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Provenance: the auto-import job this paper came from (NULL for manual imports).
+    source_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="SET NULL"), nullable=True
+    )
 
     questions: Mapped[list["Question"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
 
@@ -262,6 +273,9 @@ class Paper(Base):
     level:     Mapped["Level"]     = relationship()
     school:    Mapped["School"]    = relationship()
     exam_type: Mapped["ExamType"]  = relationship()
+
+
+_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Question(Base):
@@ -279,6 +293,9 @@ class Question(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     paper_id: Mapped[int] = mapped_column(ForeignKey("paper.id", ondelete="CASCADE"), nullable=False)
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Provenance, written by an auto-import confirm; null for manual imports.
+    section: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proposal_question_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -308,6 +325,10 @@ class QuestionPage(Base):
     page_type: Mapped[str] = mapped_column(String(16), nullable=False)
     width_px: Mapped[int] = mapped_column(Integer, nullable=False)
     height_px: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Provenance, written by an auto-import confirm; null for manual imports. The booklet page
+    # and the rectangle (PDF points: {"x0","y0","x1","y1"}) this image was cropped from.
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_rect: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
 
     question: Mapped[Question] = relationship(back_populates="pages")
 
@@ -410,3 +431,243 @@ Question.total_marks = column_property(
     .correlate_except(QuestionPart)
     .scalar_subquery()
 )
+
+
+# ---------------------------------------------------------------------------
+# Auto-import jobs
+#
+# JSONB / INT[] are Postgres types; the unit tests build the schema on SQLite,
+# so each is a portable JSON type with a Postgres variant (as the migration
+# creates them).
+# ---------------------------------------------------------------------------
+
+_INT_ARRAY = JSON().with_variant(ARRAY(Integer()), "postgresql")
+
+INGEST_JOB_STATUSES = (
+    "awaiting_upload", "queued", "running", "review_ready", "failed", "confirmed", "cancelled", "expired",
+)
+INGEST_TASK_STATUSES = (
+    "pending", "ready", "running", "done", "skipped", "failed", "blocked",
+)
+
+
+class IngestJob(Base):
+    """One automatic import of a source PDF. See docs/features/auto-import.md."""
+
+    __tablename__ = "ingest_job"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Unknown until the worker's ``register`` task reads the PDF (null before, and forever for a
+    # PDF that failed validation).
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Enum(*INGEST_JOB_STATUSES, name="ingest_job_status"),
+        nullable=False,
+        default="queued",
+        server_default="queued",
+    )
+    proposal: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    proposal_edited: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    # Run report; the worker's ``segment`` task stores ``paper_metadata`` (by paper key) here;
+    # jobs from before that have ``filename_metadata``.
+    report: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    # Debug bundle copied at report time, once the scratch folder is gone: {"segments": <segments.json>,
+    # "ingest": <ingest.json>}. The only trace of the pipeline's artefacts a settled job keeps.
+    debug: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    confirmed_paper_ids: Mapped[list[int] | None] = mapped_column(_INT_ARRAY, nullable=True)
+
+    tasks: Mapped[list["IngestTask"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="IngestTask.id",
+    )
+
+
+INGEST_PAPER_STATUSES = ("pending", "confirmed", "skipped", "attached")
+INGEST_PAPER_ROLES = ("question", "answer_only")
+INGEST_METADATA_SOURCES = ("cover", "filename", "admin")
+
+
+class IngestPaper(Base):
+    """One paper proposed by an ingest job: a queryable mirror of the per-paper bits of the job's
+    proposal and report (role, metadata, outcome), so papers can be matched across jobs.
+    See docs/DATA_MODEL.md."""
+
+    __tablename__ = "ingest_paper"
+    __table_args__ = (UniqueConstraint("job_id", "paper_key", name="uq_ingest_paper_job_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # The proposal's key for the paper (``q1``, ``a1`` or ``paperN``; see ``paper_key``).
+    paper_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="question", server_default="question")
+    # The seven fields that identify a paper; NULL until known.
+    school_id: Mapped[int | None] = mapped_column(ForeignKey("school.id", ondelete="SET NULL"), nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    level_id: Mapped[int | None] = mapped_column(ForeignKey("level.id", ondelete="SET NULL"), nullable=True)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subject.id", ondelete="SET NULL"), nullable=True)
+    exam_type_id: Mapped[int | None] = mapped_column(ForeignKey("exam_type.id", ondelete="SET NULL"), nullable=True)
+    stream_id: Mapped[int | None] = mapped_column(ForeignKey("stream.id", ondelete="SET NULL"), nullable=True)
+    paper_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # A school the admin typed that is not in the reference list (``school_id`` is then NULL); the
+    # school is only created when a question paper carrying it is confirmed (#87).
+    new_school_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # On an answer-only paper linked to a pending question paper: which answers go onto which
+    # questions, ``{answer label: question label | null}`` (null: not placed). An answer missing
+    # from it, or a NULL map, goes onto the question with its number. Cleared whenever the link
+    # changes (#92).
+    answer_map: Mapped[dict | None] = mapped_column(_JSON, nullable=True)
+    # Where the metadata came from: ``cover``, ``filename`` or ``admin`` (NULL: nothing known).
+    metadata_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
+    matched_ingest_paper_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="SET NULL"), nullable=True
+    )
+    matched_ingest_paper: Mapped["IngestPaper | None"] = relationship(
+        "IngestPaper", foreign_keys=[matched_ingest_paper_id], remote_side="IngestPaper.id", post_update=True
+    )
+    # Automatic matching (app/services/ingest_matching.py): NULL (nothing to do), ``proposed`` (one
+    # confirmed paper, ``proposed_paper_id``), ``manual`` (several or only partial candidates) or
+    # ``auto`` (auto-linked to a pending paper); ``match_note`` says why. Pairs the admin turned down
+    # are in ``ingest_match_rejection``.
+    match_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    proposed_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
+    match_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class IngestMatchRejection(Base):
+    """A pair the admin turned down (Unmatch, or "Not this one" on a proposed paper), so automatic
+    matching never proposes it again. Exactly one of ``rejected_ingest_paper_id`` (a pending paper;
+    the pair counts in either direction) and ``rejected_paper_id`` (a bank paper) is set."""
+
+    __tablename__ = "ingest_match_rejection"
+    __table_args__ = (
+        CheckConstraint(
+            "(rejected_ingest_paper_id IS NULL) <> (rejected_paper_id IS NULL)",
+            name="ck_ingest_match_rejection_one_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingest_paper_id: Mapped[int] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rejected_ingest_paper_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    rejected_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class IngestEvent(Base):
+    """Append-only audit trail of an ingest job (created, claimed, finished, retried, ...).
+
+    Task rows are overwritten on claim and reopen; the history lives here and is kept forever.
+    ``kind`` is a free string (see ``app/services/ingest_events.py``); ``data`` holds its details."""
+
+    __tablename__ = "ingest_event"
+    __table_args__ = (Index("ix_ingest_event_job_id_id", "job_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # NULL only for reconciler findings about something with no job row (see app/worker/reconcile.py).
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=True
+    )
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_task.id", ondelete="SET NULL"), nullable=True
+    )
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
+    )
+    data: Mapped[dict] = mapped_column(_JSON, nullable=False, default=dict, server_default=text("'{}'"))
+
+
+class IngestTask(Base):
+    """One unit of work in a job; ``section`` is NULL for job-level stages."""
+
+    __tablename__ = "ingest_task"
+    __table_args__ = (
+        UniqueConstraint("job_id", "section", "stage", name="uq_ingest_task_job_section_stage"),
+        # A UNIQUE over a NULL ``section`` never conflicts in Postgres, so
+        # job-level tasks (section NULL) get their own partial unique index.
+        Index(
+            "uq_ingest_task_job_stage_jobwide",
+            "job_id",
+            "stage",
+            unique=True,
+            postgresql_where=text("section IS NULL"),
+            sqlite_where=text("section IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False
+    )
+    section: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    stage: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(
+        Enum(*INGEST_TASK_STATUSES, name="ingest_task_status"),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The last ~4 KB of the traceback of the exception a failed stage raised (shown on the job detail).
+    traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warnings: Mapped[list] = mapped_column(
+        _JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    job: Mapped[IngestJob] = relationship(back_populates="tasks")
+
+
+class WorkerHeartbeat(Base):
+    """Single row (``id = 1``) the ingest worker touches so the API can tell it is alive."""
+
+    __tablename__ = "worker_heartbeat"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_worker_heartbeat_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    current_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="SET NULL"), nullable=True
+    )
+    # When the daily expiry sweep last ran (claimed atomically by the worker).
+    last_sweep_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

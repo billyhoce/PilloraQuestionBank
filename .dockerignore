@@ -6,6 +6,13 @@ tests/
 pyproject.toml
 requirements-dev.txt
 
+# The ingestion package ships (pip-installed), but not its PDF corpus, OCR image or build output.
+ingestion/samples/
+ingestion/docker/
+ingestion/output/
+ingestion/*.egg-info/
+ingestion/build/
+
 # Local config / secrets — provided on the VM via /opt/pillora/.env.
 .env
 .env.example

@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.logging_setup import configure_logging
+from app.middleware import RequestIdMiddleware
 from app.db import DatabaseConnectionError
 from app.routes.auth import router as auth_router
 from app.routes.generate import router as generate_router
@@ -12,7 +14,10 @@ from app.routes.reference import router as reference_router
 from app.routes.site_config import router as site_config_router
 from app.routes.users import router as users_router
 
+configure_logging()
+
 app = FastAPI(title="PilloraQuestionBank")
+app.add_middleware(RequestIdMiddleware)
 
 
 @app.get("/api/health")

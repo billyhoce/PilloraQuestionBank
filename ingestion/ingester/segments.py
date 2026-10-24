@@ -1,0 +1,263 @@
+"""Segments, the plan that holds them, and ``segments.json``."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+SEGMENTS_NAME = "segments.json"
+
+KIND_PREFIXES = {"question": "q", "answer": "a"}
+PREFIX_KINDS = {prefix: kind for kind, prefix in KIND_PREFIXES.items()}
+
+# An answer section's shape; question sections carry none.
+TEMPLATES = ("table", "annotated_booklet")
+
+# How a `table` section's answers run when it has more than one column pair:
+# down each pair before the next, or across the pairs row by row.
+READING_ORDERS = ("down", "across")
+
+# No leading zeros, so each label has exactly one spelling.
+LABEL_RE = re.compile(r"^([qa])([1-9][0-9]*)$")
+
+SOURCE_MODEL = "model"
+SOURCE_HAND = "hand"
+
+
+def format_label(kind: str, index: int) -> str:
+    return f"{KIND_PREFIXES[kind]}{index}"
+
+
+def parse_label(label: str) -> tuple[str, int] | None:
+    match = LABEL_RE.match(label.strip()) if isinstance(label, str) else None
+    if match is None:
+        return None
+    return PREFIX_KINDS[match.group(1)], int(match.group(2))
+
+
+@dataclass(frozen=True)
+class Segment:
+    """A labelled page range; pages are 1-based PDF positions, inclusive."""
+
+    label: str
+    kind: str
+    index: int
+    first_page: int
+    last_page: int
+    note: str = ""
+    template: str | None = None
+    needs_review: bool = False
+    # `table` sections only: 0-based indices of the printed columns holding
+    # question numbers, and the reading order. A hint the table reader checks
+    # against the page, not a measurement; empty/None when not given.
+    question_columns: tuple[int, ...] = ()
+    reading_order: str | None = None
+    # 1-based pages of this paper's cover / instruction sheets: front matter that belongs
+    # to it but lies outside [first_page, last_page]. Empty when it has none (an answer
+    # booklet often has no cover).
+    cover_pages: tuple[int, ...] = ()
+
+    @property
+    def pages(self) -> list[int]:
+        return list(range(self.first_page, self.last_page + 1))
+
+    @property
+    def page_count(self) -> int:
+        return self.last_page - self.first_page + 1
+
+    def entry(self) -> dict:
+        return {
+            "label": self.label,
+            "kind": self.kind,
+            "index": self.index,
+            "first_page": self.first_page,
+            "last_page": self.last_page,
+            "note": self.note,
+            "template": self.template,
+            "needs_review": self.needs_review,
+            "question_columns": list(self.question_columns),
+            "reading_order": self.reading_order,
+            "cover_pages": list(self.cover_pages),
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict) -> "Segment":
+        return cls(
+            label=entry["label"],
+            kind=entry["kind"],
+            index=entry["index"],
+            first_page=entry["first_page"],
+            last_page=entry["last_page"],
+            note=entry.get("note", ""),
+            template=entry.get("template"),
+            needs_review=entry.get("needs_review", False),
+            question_columns=tuple(entry.get("question_columns") or ()),
+            reading_order=entry.get("reading_order"),
+            cover_pages=tuple(entry.get("cover_pages") or ()),
+        )
+
+
+def fill_cover_pages(segments: tuple[Segment, ...]) -> tuple[Segment, ...]:
+    """Give a segment with no cover pages the unclaimed run just before its first page.
+
+    The fallback for a model that reported none (absent, null or ``[]`` alike). It walks
+    back from ``first_page - 1`` while the page is unclaimed by any segment's range or
+    cover pages, so it never takes a neighbour's pages and stops at page 1. Segments are
+    handled in page order, so an earlier one's claim is respected. A segment that already
+    has cover pages is left as it is.
+    """
+    claimed: set[int] = set()
+    for segment in segments:
+        claimed.update(segment.pages)
+        claimed.update(segment.cover_pages)
+
+    filled: dict[str, tuple[int, ...]] = {}
+    for segment in sorted(segments, key=lambda s: (s.first_page, s.last_page)):
+        if segment.cover_pages:
+            continue
+        run: list[int] = []
+        page = segment.first_page - 1
+        while page >= 1 and page not in claimed:
+            run.append(page)
+            page -= 1
+        run.reverse()
+        claimed.update(run)
+        filled[segment.label] = tuple(run)
+    return tuple(
+        replace(segment, cover_pages=filled[segment.label])
+        if filled.get(segment.label)
+        else segment
+        for segment in segments
+    )
+
+
+def pair_segments(segments) -> list[tuple[Segment | None, Segment | None]]:
+    """The booklet's papers as ``(question, answer)`` segment pairs, in proposal order.
+
+    The one place that decides which segments make a paper, so the proposal and anything that
+    keys data per paper before the proposal exists (the webapp's per-paper metadata) agree.
+    An answer section takes the question section with the same ``index``; a question with no
+    such answer is ``(q, None)``, and an answer no question claimed is ``(None, a)`` (an
+    answer-only paper), after all the question papers.
+    """
+    questions = [s for s in segments if s.kind == "question"]
+    answers = [s for s in segments if s.kind == "answer"]
+    taken: set[str] = set()
+    pairs: list[tuple[Segment | None, Segment | None]] = []
+    for q in questions:
+        a = next((x for x in answers if x.index == q.index and x.label not in taken), None)
+        if a is not None:
+            taken.add(a.label)
+        pairs.append((q, a))
+    pairs.extend((None, a) for a in answers if a.label not in taken)
+    return pairs
+
+
+def paper_key(question: Segment | None, answer: Segment | None) -> str:
+    """A paper's key: its question label (``q1``), else its answer label (``a1``) when answer-only.
+    The proposal's ``label`` / ``answer_label`` give the same key (``app.services.ingest_confirm``)."""
+    return (question or answer).label
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One request to one model, and whether its answer was accepted."""
+
+    model: str
+    accepted: bool
+    problems: tuple[str, ...] = ()
+
+    def entry(self) -> dict:
+        return {
+            "model": self.model,
+            "accepted": self.accepted,
+            "problems": list(self.problems),
+        }
+
+
+@dataclass(frozen=True)
+class SegmentPlan:
+    pdf: Path
+    paper: str
+    page_count: int
+    segments: tuple[Segment, ...] = ()
+    model: str | None = None  # the model whose answer was accepted
+    source: str = SOURCE_MODEL
+    attempts: tuple[Attempt, ...] = ()
+    warnings: tuple[str, ...] = ()
+    config: dict | None = None
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
+
+    @property
+    def segmented(self) -> bool:
+        return bool(self.segments)
+
+    @property
+    def retried(self) -> bool:
+        return len(self.attempts) > 1
+
+    def of_kind(self, kind: str) -> list[Segment]:
+        return [segment for segment in self.segments if segment.kind == kind]
+
+    def entry(self) -> dict:
+        return {
+            # POSIX separators so fixtures don't differ by platform.
+            "pdf": Path(self.pdf).as_posix(),
+            "paper": self.paper,
+            "page_count": self.page_count,
+            "generated_at": self.generated_at,
+            "source": self.source,
+            "model": self.model,
+            "retried": self.retried,
+            "segmented": self.segmented,
+            "segments": [segment.entry() for segment in self.segments],
+            "attempts": [attempt.entry() for attempt in self.attempts],
+            "warnings": list(self.warnings),
+            "config": self.config,
+        }
+
+    @classmethod
+    def from_entry(cls, entry: dict, pdf: Path | None = None) -> "SegmentPlan":
+        """``pdf`` overrides the recorded path with where the PDF is now."""
+        return cls(
+            pdf=pdf if pdf is not None else Path(entry["pdf"]),
+            paper=entry["paper"],
+            page_count=entry["page_count"],
+            segments=tuple(Segment.from_entry(item) for item in entry["segments"]),
+            model=entry.get("model"),
+            source=entry.get("source", SOURCE_MODEL),
+            attempts=tuple(
+                Attempt(
+                    model=item["model"],
+                    accepted=item["accepted"],
+                    problems=tuple(item.get("problems", ())),
+                )
+                for item in entry.get("attempts", ())
+            ),
+            warnings=tuple(entry.get("warnings", ())),
+            config=entry.get("config"),
+            generated_at=entry.get("generated_at", ""),
+        )
+
+
+def write_plan_to(plan: SegmentPlan, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Write beside, then rename: a reader (or a crash) never sees half a plan.
+    partial = path.with_name(path.name + ".tmp")
+    partial.write_text(json.dumps(plan.entry(), indent=2) + "\n", encoding="utf-8")
+    os.replace(partial, path)
+    return path
+
+
+def write_plan(plan: SegmentPlan, out_dir: Path) -> Path:
+    return write_plan_to(plan, out_dir / SEGMENTS_NAME)
+
+
+def read_plan(path: Path, pdf: Path | None = None) -> SegmentPlan:
+    return SegmentPlan.from_entry(json.loads(path.read_text(encoding="utf-8")), pdf=pdf)
