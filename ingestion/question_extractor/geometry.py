@@ -247,6 +247,18 @@ class PageGeometry:
             for rect in self.image_rects
         )
 
+    def is_picture_page(self, max_chars: int, min_image_frac: float) -> bool:
+        """True when the page's text is a few numbers and images carry the rest:
+        a born-digital page whose question was pasted in as a screenshot."""
+        chars = sum(len("".join(line.text.split())) for line in self.lines)
+        if chars > max_chars:
+            return False
+        page_area = max(self.width * self.height, 1.0)
+        covered = sum(
+            (rect & self.rect).get_area() for rect in self.image_rects if not rect.is_infinite
+        )
+        return min(covered / page_area, 1.0) >= min_image_frac
+
 
 def _visible_spans(spans: list[dict]) -> list[dict]:
     """The spans on a line that carry visible text, ordered left to right."""

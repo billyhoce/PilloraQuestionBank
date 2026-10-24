@@ -108,15 +108,17 @@ Decides which pages are which and writes the plan (`segments.json`).
 
 **Code:** `ingestion/pipeline/stages/scan.py`, `locate.py`, `render.py`, `ingestion/question_extractor/` (`pipeline.py` and the modules it runs; `scanpaper.py`, `scanpage.py`, `ocr.py` for scans)
 
-- **Scan** gives a section with **no text layer on any page** (a scan) one: every page is deskewed
+- **Scan** gives a section with **no text layer on any page** (a scan), or **mostly picture pages**
+  (a few numbers of text, the questions pasted in as images), a text layer: every page is deskewed
   (tilt from its long rules, else from its text lines; 5° or more is not trusted, and the page is
   flagged instead) into a straightened copy of the section, and read by Tesseract, 8 pages a run.
-  `skipped` when any page has text; `failed` when Tesseract is missing, errors or times out.
+  `skipped` otherwise; `failed` when Tesseract is missing, errors or times out.
 - **Locate** finds each question by its gutter number and records the rectangle(s) it occupies; a
   question spanning pages gets one rectangle per page. Images are never split by part. A scan is
   located on its straightened copy and OCR text exactly as a digital paper is, with one warning
   ("check each question's number"); its rectangles are in the straightened frame.
-- If `scan` did not finish, a scan is `skipped` → reported `not_routed` with the OCR error, flagged.
+- If `scan` did not finish, a scan is `skipped` → reported `not_routed` with the OCR error, flagged;
+  a picture-page section is located off its own thin text layer.
 - Calibration counts every question number left of the content column as gutter (a scan's pages
   shift; some papers indent one number further). The numbering kept is the longest rising run, so a
   stray number (a graph's axis label) is dropped rather than shutting out every question after it.

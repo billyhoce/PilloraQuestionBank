@@ -322,6 +322,21 @@ class ExtractConfig:
     ``scan_dpi``, so a batch holds about 70 MB however long the section; each run
     costs half a second of container start-up on top of about 0.3s a page."""
 
+    # --- picture pages: born-digital pages whose questions are pasted images --
+    picture_page_max_chars: int = 20
+    """A page with at most this many non-space characters of text can be a picture page.
+
+    The pasted-screenshot sample (Clementi Town q1) carries only its page and question
+    numbers, 2-4 characters a page; the sparsest real question page of the other
+    samples has 59."""
+    picture_page_min_image_frac: float = 0.2
+    """...and its images must cover at least this fraction of the page (summed area).
+    The Clementi Town pages are 0.26-0.65 covered; a blank page has no image."""
+    picture_section_min_frac: float = 0.5
+    """A question section is OCR'd as a scan when at least this share of its pages are
+    picture pages. Clementi Town q1 is 6 of 7; a lone full-page graph question with
+    little text (Nan Hua P2 p9, WA1 p7) is 1 page of 18 and of 8."""
+
     # --- figures ---------------------------------------------------------
     figure_min_overlap: float = 0.25
     """Fraction of a figure's height that must fall inside the band."""

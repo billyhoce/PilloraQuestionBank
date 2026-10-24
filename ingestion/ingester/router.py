@@ -14,18 +14,19 @@ A split section goes to whichever pipeline can crop its shape:
 * an answer section with no template (the segmenter was unsure) -> nowhere,
   flagged for review, since guessing a pipeline would crop it as the wrong shape;
 * a question or ``annotated_booklet`` section none of whose pages carries
-  extractable text is a scan: it goes to the question extractor too, after the
+  extractable text, or mostly picture pages (a few numbers of text, the questions
+  pasted in as images), is OCR'd as a scan: it goes to the question extractor too, after the
   pipeline's ``scan`` stage has straightened its pages and read them by OCR. If
   that could not be done (Tesseract missing, say) it goes nowhere: the extractor
   would emit every page "for review", which reads as a result when it is not
   one. Text is read through :mod:`question_extractor.geometry`, the only module
-  that talks to PyMuPDF extraction. A section with *some* text pages is not
-  OCR'd; the extractor already flags a textless page inside an otherwise digital
-  paper.
+  that talks to PyMuPDF extraction. A section with only *some* textless or picture
+  pages is not OCR'd; the extractor already flags such a page inside an otherwise
+  digital paper.
 
-:func:`choose_route`, :func:`has_text` and :func:`table_layout` are what the
-``pipeline`` stages call (the fan-out chooses each section's chain with
-``choose_route``; ``scan`` and ``locate`` apply the text rule; ``questions`` reads the
+:func:`choose_route`, :func:`needs_ocr`, :func:`has_text` and :func:`table_layout` are
+what the ``pipeline`` stages call (the fan-out chooses each section's chain with
+``choose_route``; ``scan`` applies the OCR rule and ``locate`` the text rule; ``questions`` reads the
 table layout). The walk over a paper's sections that used to live here, ``ingest``, is
 ``pipeline``'s ``report`` stage: it writes ``<paper>/ingest.json`` -- every section
 with its label, range, template, route, status, question count, warnings and review
@@ -39,7 +40,7 @@ from pathlib import Path
 
 import pymupdf
 
-from question_extractor import TableLayout
+from question_extractor import ExtractConfig, TableLayout
 from question_extractor.geometry import extract_document
 
 from .segments import Segment
@@ -124,3 +125,17 @@ def has_text(pdf: Path) -> bool:
     """Whether any page of the PDF carries extractable text (``False`` for a scan)."""
     with pymupdf.open(pdf) as doc:
         return any(page.has_text for page in extract_document(doc))
+
+
+def needs_ocr(pdf: Path, config: ExtractConfig) -> bool:
+    """Whether a question section must be read by OCR: no page carries text (a scan), or
+    at least ``picture_section_min_frac`` of its pages are picture pages."""
+    with pymupdf.open(pdf) as doc:
+        pages = extract_document(doc)
+    if not any(page.has_text for page in pages):
+        return True
+    pictures = sum(
+        page.is_picture_page(config.picture_page_max_chars, config.picture_page_min_image_frac)
+        for page in pages
+    )
+    return pictures >= config.picture_section_min_frac * len(pages)

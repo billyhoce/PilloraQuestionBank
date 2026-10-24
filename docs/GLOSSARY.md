@@ -47,6 +47,8 @@ paper's metadata from them.
 **Scan** — A page that is one page-sized image with no text layer. Scans are deskewed and OCR'd:
 tables cell by cell, question and annotated sections page by page (the `scan` stage). Their
 rectangles and review images are in the straightened frame (`straightened_deg` on the proposal page).
+A question section of mostly **picture pages** (born-digital, but the questions pasted in as images)
+is OCR'd the same way.
 
 **Flag / needs review** — A page or section a human should check, with a reason. Raised instead of
 guessing or raising an error ("warn, never raise").

@@ -125,7 +125,8 @@ Notes:
 ### Ingestion sample corpus
 
 `python -m pipeline ingest samples --recursive --debug --output-dir <dir>` over the 13 sample PDFs
-gives **13 papers, 27 sections**, every one `extracted` (the two scanned EOY papers' q1/q2 by OCR).
+gives **13 papers, 27 sections**, every one `extracted` (the two scanned EOY papers' q1/q2 and
+Clementi Town's picture-page q1 by OCR).
 
 | Sample | Expected |
 |---|---|
@@ -141,6 +142,7 @@ gives **13 papers, 27 sections**, every one `extracted` (the two scanned EOY pap
 | `2024 S2 M (G3) EOY - Yuying` q1/q2 (scanned, OCR'd) | Q1–Q11 and Q12–Q18, nothing flagged; q2 p4's graph axis labels dropped as out of sequence |
 | `coverpage_formulae_blankpageinmiddle_endofpaper` q2 (scan with its own OCR layer) | Q3, Q4, Q6, Q7, Q8, Q10, Q11; p2's stray `7` dropped and p2 flagged |
 | `2024 S2 M WA1 Nan Hua` a1 (table, `[0,2]` across) | 7 questions; blank pair-2 cells join none |
+| `2026 S1 M WA3 Prac 2 Clementi Town - Chap 4,5,6,7` q1 (picture pages, OCR'd) | Q1–Q10; p1 flagged (the title block above Q1) |
 | `2026 S1 M WA3 Prac 2 Clementi Town - Chap 4,5,6,7` a1 (table, `[0]` down) | 10 questions; Q5 split across the page break |
 | `answer_tables/two_pairs_column_break` (table, `[0,2]` down) | 15 questions; Q4 split across the column break; p2 flagged (reads across), p4 flagged (borderless) |
 

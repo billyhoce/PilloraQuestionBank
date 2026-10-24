@@ -11,12 +11,13 @@ the section, key for key. Splitting the writes this way is what lets the review 
 read rectangles as soon as ``locate`` is done and lets ``render`` be rerun (say, with
 debug on) without detecting again.
 
-A scanned section (no text on any page) is read off what ``scan`` left instead: the
+A section ``scan`` OCR'd (a scan, or mostly picture pages) is read off what it left: the
 straightened copy of the PDF and the OCR'd text (``_scan/<label>.pdf`` and ``.json``).
 Its rectangles are in the straightened pages' points, which the manifest records per
 page (``straightened``), and a page ``scan`` could not straighten is flagged. When
-``scan`` did not finish (Tesseract missing, say), the section ends as ``skipped`` with
-why: the question extractor cannot crop a page it cannot read. The section's folder
+``scan`` did not finish (Tesseract missing, say), a section with no text ends as
+``skipped`` with why: the question extractor cannot crop a page it cannot read. A
+picture-page section is then located off its own thin text layer. The section's folder
 is rebuilt from nothing each time, so a previous run's rectangles never linger.
 """
 
