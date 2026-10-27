@@ -141,6 +141,24 @@ describe('ReviewPage', () => {
     expect(await screen.findByText('This job has no proposal to review yet')).toBeInTheDocument()
   })
 
+  it('lists the pages the pipeline left out, greyed with why, and opens on the first question', async () => {
+    const [p] = REVIEW.proposal.papers
+    api.import.review.mockResolvedValue({
+      ...REVIEW,
+      proposal: { ...REVIEW.proposal, papers: [{ ...p, pages: [page(1, { excluded_reason: 'cover page' }), ...p.pages] }] },
+    })
+    renderPage()
+    expect(await screen.findByAltText('Page 2')).toBeInTheDocument()  // not the cover
+    const cover = screen.getByRole('button', { name: /p1/ })
+    expect(cover).toHaveAttribute('data-excluded', 'true')
+    expect(cover).toHaveAttribute('title', 'cover page')
+    expect(cover).toHaveTextContent('cover page')
+    expect(screen.queryByText(/Not used by the pipeline/)).not.toBeInTheDocument()
+    await userEvent.click(cover)
+    expect(screen.getByAltText('Page 1')).toBeInTheDocument()
+    expect(screen.getByText('Not used by the pipeline: cover page. Draw boxes here if it holds questions.')).toBeInTheDocument()
+  })
+
   describe('editing', () => {
     beforeEach(() => {
       api.import.saveProposal.mockResolvedValue({ saved: true })
@@ -217,11 +235,20 @@ describe('ReviewPage', () => {
       return api.import.saveProposal.mock.calls.at(-1)[1].papers[0]
     }
 
-    it('draws a box that becomes a new question when none is selected', async () => {
+    function drag(svg, [x0, y0], [x1, y1]) {
+      fireEvent.pointerDown(svg, { clientX: x0, clientY: y0, pointerId: 1 })
+      fireEvent.pointerMove(svg, { clientX: x1, clientY: y1, pointerId: 1 })
+      fireEvent.pointerUp(svg, { clientX: x1, clientY: y1, pointerId: 1 })
+    }
+
+    it('asks for the question number before drawing, pre-filled with the next free one', async () => {
       renderPage()
       await screen.findByAltText('Page 2')
       await userEvent.click(screen.getByRole('button', { name: 'Draw question box' }))
-      expect(screen.getByRole('status')).toHaveTextContent('It becomes a new question.')
+      expect(screen.getByLabelText('Question number for the new box')).toHaveValue('3')
+      expect(screen.getByTestId('overlay')).not.toHaveAttribute('data-drawing')  // not until a number is given
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Drag on the page to draw a question box for question 3.')
       const svg = overlayAtOneToOne()
       fireEvent.pointerDown(svg, { clientX: 120, clientY: 380, pointerId: 1 })
       fireEvent.pointerMove(svg, { clientX: 20, clientY: 300, pointerId: 1 })
@@ -235,18 +262,84 @@ describe('ReviewPage', () => {
       })
     })
 
-    it('draws an answer box onto the selected question', async () => {
+    it('takes digits only, and slots a new number into the sorted question list', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: 'Draw question box' }))
+      const field = screen.getByLabelText('Question number for the new box')
+      await userEvent.clear(field)
+      await userEvent.type(field, '1x.5-')
+      expect(field).toHaveValue('15')
+      await userEvent.clear(field)
+      await userEvent.type(field, '0')
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      expect(screen.getByRole('alert')).toHaveTextContent('A question number must be a positive whole number')
+      await userEvent.clear(field)
+      await userEvent.type(field, '1')
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      // An existing number: the box joins question 1, placed by its position on the page.
+      drag(overlayAtOneToOne(), [20, 0], [100, 30])
+      const saved = await lastSaved()
+      expect(saved.questions.map(q => q.number)).toEqual([1, 2])
+      expect(saved.questions[0].question_rects).toEqual([
+        { page: 2, x0: 10, y0: 0, x1: 50, y1: 15 }, { page: 2, x0: 10, y0: 20, x1: 60, y1: 120 },
+      ])
+    })
+
+    it('draws an answer box for the selected question, pre-filled with its number', async () => {
       renderPage()
       await screen.findByAltText('Page 2')
       await userEvent.click(screen.getByText('Question 2'))
       await userEvent.click(screen.getByRole('button', { name: 'Draw answer box' }))
-      expect(screen.getByRole('status')).toHaveTextContent('It is added to the answers of question 2.')
-      const svg = overlayAtOneToOne()
-      fireEvent.pointerDown(svg, { clientX: 0, clientY: 200, pointerId: 1 })
-      fireEvent.pointerMove(svg, { clientX: 100, clientY: 260, pointerId: 1 })
-      fireEvent.pointerUp(svg, { clientX: 100, clientY: 260, pointerId: 1 })
+      expect(screen.getByLabelText('Question number for the new box')).toHaveValue('2')
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Drag on the page to draw an answer box for question 2.')
+      drag(overlayAtOneToOne(), [0, 200], [100, 260])
       const saved = await lastSaved()
       expect(saved.questions[1].answer_rects).toEqual([{ page: 3, x0: 0, y0: 100, x1: 50, y1: 130 }])
+    })
+
+    it('refuses an answer box for a question that does not exist, and Esc cancels', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByRole('button', { name: 'Draw answer box' }))
+      const field = screen.getByLabelText('Question number for the new box')
+      expect(field).toHaveValue('')  // no selection: no guess
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      expect(screen.getByRole('alert')).toHaveTextContent('Enter a question number')
+      await userEvent.type(field, '7')
+      await userEvent.click(screen.getByRole('button', { name: 'Start drawing' }))
+      expect(screen.getByRole('alert')).toHaveTextContent("Question 7 doesn't exist. Draw its question box first.")
+      expect(screen.getByTestId('overlay')).not.toHaveAttribute('data-drawing')
+      await userEvent.type(field, '{Escape}')
+      expect(screen.queryByLabelText('Question number for the new box')).not.toBeInTheDocument()
+      expect(api.import.saveProposal).not.toHaveBeenCalled()
+    })
+
+    it('lists questions by number and shows boxes in document order, without saving', async () => {
+      const [p] = REVIEW.proposal.papers
+      api.import.review.mockResolvedValue({
+        ...REVIEW, proposal: { ...REVIEW.proposal, papers: [{ ...p, questions: [p.questions[1], p.questions[0]] }] },
+      })
+      renderPage()
+      await screen.findByAltText('Page 2')
+      const items = within(screen.getByRole('complementary', { name: 'Questions' })).getAllByRole('listitem')
+      expect(items.map(li => li.textContent)).toEqual([expect.stringMatching(/^Question 1/), expect.stringMatching(/^Question 2/)])
+      expect(api.import.saveProposal).not.toHaveBeenCalled()
+    })
+
+    it('renumbering re-sorts the list and keeps the question selected', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(screen.getByText('Question 1'))
+      const field = screen.getByLabelText('Number of question 1')
+      await userEvent.clear(field)
+      await userEvent.type(field, '9{Enter}')
+      const items = within(screen.getByRole('complementary', { name: 'Questions' })).getAllByRole('listitem')
+      expect(items[1]).toHaveTextContent('Question 9')
+      expect(within(items[1]).getByRole('button', { pressed: true })).toBeInTheDocument()
+      const saved = await lastSaved()
+      expect(saved.questions.map(q => q.number)).toEqual([2, 9])
     })
 
     it('drags the selected box to move it', async () => {

@@ -5,8 +5,8 @@ import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
 import { clientToPt, firstPageOf, rectToPx } from './reviewGeometry'
 import {
-  addRect, assignAnswer, deleteRect, getRect, mergeWithPrevious, moveRect, renumber, renumberError, resizeRect, splitBetween,
-  splitThrough, toEditPayload,
+  addRect, assignAnswer, deleteRect, drawError, followSelection, getRect, mergeWithPrevious, moveRect, nextNumber, normalise,
+  renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 import { partlyAnsweredWarning } from './answerCoverage'
 import { startManualImport } from './manualHandoff'
@@ -40,7 +40,7 @@ const HANDLES = [
 
 const sameSel = (a, b) => a && b && a.list === b.list && a.i === b.i && (a.list === 'orphan' || a.q === b.q)
 
-function Overlay({ page, paper, sel, onSelect, onResize, onMove, drawKind, onDraw }) {
+function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, drawKind, onDraw }) {
   const svgRef = useRef(null)
   const drag = useRef(null)
   // The box being drawn, in points: { x0, y0, x1, y1 } (corners in drawing order).
@@ -65,7 +65,11 @@ function Overlay({ page, paper, sel, onSelect, onResize, onMove, drawKind, onDra
     if (d.edge) onResize(d.sel, { [d.edge]: d.edge[0] === 'x' ? pt.x : pt.y })
     else onMove(d.sel, d.rect.x0 + pt.x - d.start.x, d.rect.y0 + pt.y - d.start.y)
   }
-  const endDrag = () => { drag.current = null }
+  // A drag keeps the box's index while it lasts; the box takes its place in order when it ends.
+  const endDrag = () => {
+    if (drag.current) onDragEnd()
+    drag.current = null
+  }
 
   // Drawing: press on the page, drag, release.
   function drawStart(e) {
@@ -200,33 +204,61 @@ function SelectionPanel({ paper, sel, onDelete, onAssign }) {
   )
 }
 
-// The drawing tools: one press draws one box. Where it goes is said up front.
-function DrawToolbar({ answerOnly, drawKind, onDrawKind, target }) {
+// The drawing tools: one press draws one box, for a question number asked for first.
+// `prompt` is the open number field ({ kind, text, error }); `drawing` the box being drawn
+// ({ kind, number }) once the number is accepted.
+function DrawToolbar({ answerOnly, prompt, drawing, onOpen, onText, onStart, onCancel }) {
   const tools = answerOnly ? [['answer', 'Draw answer box']] : [['question', 'Draw question box'], ['answer', 'Draw answer box']]
-  const where = drawKind === 'question'
-    ? (target != null ? `It is added to question ${target}.` : 'It becomes a new question.')
-    : drawKind === 'answer'
-      ? (target != null ? `It is added to the answers of question ${target}.` : answerOnly ? 'It becomes a new answer.' : 'It is left unmatched; assign it to a question afterwards.')
-      : null
+  const active = prompt?.kind ?? drawing?.kind ?? null
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-      {tools.map(([kind, label]) => (
-        <button
-          key={kind}
-          type="button"
-          aria-pressed={drawKind === kind}
-          onClick={() => onDrawKind(drawKind === kind ? null : kind)}
-          className={`rounded border px-2 py-1 font-medium ${
-            drawKind === kind ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-          }`}
+    <div className="mb-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        {tools.map(([kind, label]) => (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={active === kind}
+            onClick={() => (active === kind ? onCancel() : onOpen(kind))}
+            className={`rounded border px-2 py-1 font-medium ${
+              active === kind ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {drawing ? (
+          <span role="status" className="text-gray-600">
+            Drag on the page to draw {drawing.kind === 'question' ? 'a question' : 'an answer'} box for {answerOnly ? 'answer' : 'question'} {drawing.number}. Esc cancels.
+          </span>
+        ) : !prompt && (
+          <span className="text-gray-500">Click a box to select it, or draw a new box.</span>
+        )}
+      </div>
+      {prompt && (
+        <form
+          className="mt-1 flex flex-wrap items-center gap-2"
+          onSubmit={e => { e.preventDefault(); onStart() }}
         >
-          {label}
-        </button>
-      ))}
-      {drawKind ? (
-        <span role="status" className="text-gray-600">Drag on the page to draw. {where} Esc cancels.</span>
-      ) : (
-        <span className="text-gray-500">Click a box to select it; select a question first to add boxes to it.</span>
+          <label className="flex items-center gap-1 text-gray-700">
+            {prompt.kind === 'question' ? 'Question box for question' : `Answer box for ${answerOnly ? 'answer' : 'question'}`}
+            <input
+              type="text"
+              inputMode="numeric"
+              autoFocus
+              aria-label="Question number for the new box"
+              aria-invalid={prompt.error ? 'true' : undefined}
+              value={prompt.text}
+              onChange={e => onText(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={e => { if (e.key === 'Escape') onCancel() }}
+              className="w-14 border border-gray-300 rounded px-1 text-sm"
+            />
+          </label>
+          <button type="submit" className="rounded border border-blue-600 px-2 py-1 font-medium text-blue-700 hover:bg-blue-50">
+            Start drawing
+          </button>
+          <button type="button" onClick={onCancel} className="text-gray-600 hover:underline">Cancel</button>
+          {prompt.error && <span role="alert" className="w-full text-red-600">{prompt.error}</span>}
+        </form>
       )}
     </div>
   )
@@ -272,8 +304,10 @@ export default function ReviewPage() {
   const nextJob = (reviewQueue?.jobs ?? [])
     .filter(j => j.id !== jobId)
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0] ?? null
-  // Drawing a new box: null, 'question' or 'answer' (one box per press of the tool).
-  const [drawKind, setDrawKind] = useState(null)
+  // Drawing a new box (one per press of a tool): the number field first, `prompt`
+  // ({ kind, text, error }), then `drawing` ({ kind, number }) once its number is accepted.
+  const [prompt, setPrompt] = useState(null)
+  const [drawing, setDrawing] = useState(null)
   const [review, setReview] = useState(null)
   const [error, setError] = useState(null)
   const [paperIdx, setPaperIdx] = useState(0)
@@ -300,7 +334,9 @@ export default function ReviewPage() {
     api.import.review(jobId)
       .then(r => {
         if (!live) return
-        setReview(r)
+        // Shown in canonical order (questions by number, boxes in document order); saved so only
+        // with the first edit.
+        setReview({ ...r, proposal: { ...r.proposal, papers: r.proposal.papers.map(normalise) } })
         setMatches(r.matches ?? {})
         setProposals(r.proposals ?? {})
         // Open on the first paper still undecided.
@@ -363,13 +399,43 @@ export default function ReviewPage() {
   // answer boxes plus a linked answer paper's, as the pair's mapping places them) is warned
   // about, never blocked.
   const unansweredText = paper && !answerOnly ? partlyAnsweredWarning(paper, matches[paper.key]?.answer_numbers ?? []) : null
-  const page = paper ? (paper.pages.find(p => p.page === pageNo) ?? paper.pages[0]) : null
+  // Every booklet page is listed; with none chosen the page shown is the first question's, else
+  // the paper's own first page.
+  const firstPage = paper && (firstPageOf(paper.questions[0] ?? {}) ?? paper.pages.find(p => !p.excluded_reason)?.page)
+  const page = paper
+    ? (paper.pages.find(p => p.page === (pageNo ?? firstPage)) ?? paper.pages[0])
+    : null
+  const selectedNumber = paper && sel && sel.list !== 'orphan' ? paper.questions[sel.q]?.number ?? null : null
 
   function choosePaper(i) {
     setPaperIdx(i)
     setPageNo(null)
     setSel(null)
-    setDrawKind(null)
+    cancelDraw()
+  }
+
+  function cancelDraw() {
+    setPrompt(null)
+    setDrawing(null)
+  }
+
+  // A drawing tool asks for its question number first: the selected question's, else for a
+  // question box the next free number (an answer box has no sensible guess, so none).
+  function openDraw(kind) {
+    const guess = selectedNumber ?? (kind === 'question' ? nextNumber(paper) : null)
+    setDrawing(null)
+    setPrompt({ kind, text: guess == null ? '' : String(guess), error: null })
+  }
+
+  function startDraw() {
+    const number = prompt.text === '' ? null : Number(prompt.text)
+    const err = drawError(paper, prompt.kind, number)
+    if (err) {
+      setPrompt({ ...prompt, error: err })
+      return
+    }
+    setPrompt(null)
+    setDrawing({ kind: prompt.kind, number })
   }
 
   function chooseQuestion(k) {
@@ -379,10 +445,12 @@ export default function ReviewPage() {
   }
 
   // Apply a pure edit to the current paper and queue a debounced save. `nextSel` is the
-  // selection afterwards (default: cleared, since indexes may have shifted).
+  // selection afterwards, or a function of the edited paper giving it (default: cleared, since
+  // indexes may have shifted).
   function edit(fn, nextSel = null) {
     const next = fn(paper)
     if (next === paper) return
+    if (typeof nextSel === 'function') nextSel = nextSel(next)
     setReview(r => ({
       ...r,
       edited: true,
@@ -396,13 +464,14 @@ export default function ReviewPage() {
 
   const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s)
   const onMove = (s, x0, y0) => edit(p => moveRect(p, s, x0, y0), s)
+  const onDragEnd = () => edit(normalise, next => followSelection(paper, next, sel))
+  // The selected box, wherever an edit's re-sort put it.
+  const followSel = next => followSelection(paper, next, sel)
 
-  // A drawn box goes to the selected question if there is one, else starts a new question (or,
-  // for an answer box in a question paper, an unmatched answer). The new box is selected.
+  // A drawn box goes to the question whose number was given before drawing; it is selected.
   function onDraw(drawn) {
-    const q = sel && sel.list !== 'orphan' ? sel.q : null
-    const { paper: next, sel: nextSel } = addRect(paper, drawKind, q, drawn)
-    setDrawKind(null)
+    const { paper: next, sel: nextSel } = addRect(paper, drawing.kind, drawing.number, drawn)
+    setDrawing(null)
     if (next !== paper) edit(() => next, nextSel)
   }
 
@@ -416,7 +485,7 @@ export default function ReviewPage() {
       const t = e.target
       if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
       if (e.key === 'Escape') {
-        if (drawKind) setDrawKind(null)
+        if (prompt || drawing) cancelDraw()
         else setSel(null)
         return
       }
@@ -557,6 +626,7 @@ export default function ReviewPage() {
 
   const unrouted = review.proposal.unrouted ?? []
   const flaggedPage = p => p.needs_review
+  const excludedPage = p => Boolean(p.excluded_reason)
 
   return (
     <div className="px-4 py-4">
@@ -627,15 +697,17 @@ export default function ReviewPage() {
                 key={p.page}
                 type="button"
                 data-flagged={flaggedPage(p) || undefined}
+                data-excluded={excludedPage(p) || undefined}
                 aria-current={page && p.page === page.page ? 'page' : undefined}
-                title={p.review_reason || undefined}
+                title={p.excluded_reason || p.review_reason || undefined}
                 onClick={() => setPageNo(p.page)}
                 className={`block w-full border-2 rounded text-xs ${
                   page && p.page === page.page ? 'border-blue-600' : flaggedPage(p) ? 'border-amber-400' : 'border-gray-200'
-                }`}
+                } ${excludedPage(p) ? 'bg-gray-100 text-gray-400' : ''}`}
               >
-                {p.url && <img src={p.url} alt={`Page ${p.page} thumbnail`} className="w-full" />}
+                {p.url && <img src={p.url} alt={`Page ${p.page} thumbnail`} className={`w-full ${excludedPage(p) ? 'opacity-40' : ''}`} />}
                 <span className="block py-0.5">p{p.page}{flaggedPage(p) ? ' !' : ''}</span>
+                {excludedPage(p) && <span className="block pb-0.5 leading-tight">{p.excluded_reason}</span>}
               </button>
             ))}
           </nav>
@@ -646,13 +718,21 @@ export default function ReviewPage() {
                 {!paper.outcome && (
                   <DrawToolbar
                     answerOnly={answerOnly}
-                    drawKind={drawKind}
-                    onDrawKind={setDrawKind}
-                    target={sel && sel.list !== 'orphan' ? paper.questions[sel.q]?.number : null}
+                    prompt={prompt}
+                    drawing={drawing}
+                    onOpen={openDraw}
+                    onText={text => setPrompt(p => ({ ...p, text, error: null }))}
+                    onStart={startDraw}
+                    onCancel={cancelDraw}
                   />
                 )}
-                {!paper.outcome && sel && !drawKind && (
+                {!paper.outcome && sel && !prompt && !drawing && (
                   <SelectionPanel paper={paper} sel={sel} onDelete={() => edit(p => deleteRect(p, sel))} onAssign={onAssign} />
+                )}
+                {excludedPage(page) && (
+                  <p className="mb-2 text-sm text-gray-700 bg-gray-100 border border-gray-300 rounded px-3 py-1">
+                    Not used by the pipeline: {page.excluded_reason}. Draw boxes here if it holds questions.
+                  </p>
                 )}
                 {flaggedPage(page) && (
                   <p className="mb-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-1">
@@ -670,7 +750,7 @@ export default function ReviewPage() {
                   )}
                   <Overlay
                     page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} onMove={onMove}
-                    drawKind={paper.outcome ? null : drawKind} onDraw={onDraw}
+                    onDragEnd={onDragEnd} drawKind={paper.outcome ? null : drawing?.kind} onDraw={onDraw}
                   />
                 </div>
               </>
@@ -692,7 +772,7 @@ export default function ReviewPage() {
                   const onQuestionRect = active && sel.list === 'question'
                   const rect = onQuestionRect ? getRect(paper, sel) : null
                   return (
-                    <li key={k} className={`rounded border px-2 py-1 ${
+                    <li key={q.number} className={`rounded border px-2 py-1 ${
                       active ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
                     }`}>
                       <div className="flex items-center gap-2">
@@ -714,7 +794,7 @@ export default function ReviewPage() {
                             <span key={f} className="block text-xs text-amber-800">{f}</span>
                           ))}
                         </button>
-                        <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), sel)} />
+                        <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), followSel)} />
                       </div>
                       {active && (
                         <div className="mt-1 flex flex-wrap gap-1 text-xs">
