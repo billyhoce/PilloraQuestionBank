@@ -7,12 +7,18 @@
 // i the index within that list.
 //
 // Rules (documented in docs/features/auto-import.md):
+// - order: every edit returns the paper normalised (see normalise): questions by number, each
+//   list of rectangles in source-document order. A selection is an index, so after an edit the
+//   caller finds its rectangle again with followSelection / selectionOf. Moving and resizing are
+//   the exception: they keep the rectangle's index so a drag can go on, and the caller
+//   normalises when the drag ends.
 // - delete: removing a question's last question rectangle deletes the question; its answer
 //   rectangles are kept as orphan answers.
-// - merge with previous: the previous question keeps its number; question rects, answer rects
-//   and flags are concatenated.
+// - merge with previous: the question with the next-lower number keeps its number; question
+//   rects, answer rects and flags are joined.
 // - split: the first part keeps the number and all answer rects; the second part gets
 //   max(number) + 1 and no answers.
+// - draw: a box is drawn for a question number chosen first (see drawError).
 
 export const MIN_SIZE_PT = 4
 
@@ -35,6 +41,67 @@ function withRects(paper, sel, rects) {
 
 export function getRect(paper, sel) {
   return sel ? rectsOf(paper, sel)?.[sel.i] : undefined
+}
+
+// Source-document order: by page, then top edge, then left edge.
+const byPosition = (a, b) => a.page - b.page || a.y0 - b.y0 || a.x0 - b.x0
+
+// `list` sorted (stably), or `list` itself when it already is.
+function sortedOrSame(list, compare) {
+  const sorted = [...list].sort(compare)
+  return sorted.every((x, k) => x === list[k]) ? list : sorted
+}
+
+// The paper in canonical order: questions by number (stable), and each question's
+// question_rects and answer_rects, and the orphan answers, by (page, y0, x0). Rectangle objects
+// are kept, not copied, so a caller can find one again (selectionOf). The paper itself is
+// returned when nothing moves.
+export function normalise(paper) {
+  let moved = false
+  const questions = paper.questions.map(q => {
+    const question_rects = sortedOrSame(q.question_rects, byPosition)
+    const answer_rects = sortedOrSame(q.answer_rects, byPosition)
+    if (question_rects === q.question_rects && answer_rects === q.answer_rects) return q
+    moved = true
+    return { ...q, question_rects, answer_rects }
+  })
+  const ordered = sortedOrSame(questions, (a, b) => a.number - b.number)
+  const orphans = paper.orphan_answers ?? []
+  const orphan_answers = sortedOrSame(orphans, byPosition)
+  if (!moved && ordered === questions && orphan_answers === orphans) return paper
+  return { ...paper, questions: ordered, orphan_answers }
+}
+
+// Where rectangle object `rect` sits in `paper`, as a selection; null when it is not there.
+export function selectionOf(paper, rect) {
+  if (!rect) return null
+  for (let q = 0; q < paper.questions.length; q++) {
+    const { question_rects, answer_rects } = paper.questions[q]
+    if (question_rects.includes(rect)) return { list: 'question', q, i: question_rects.indexOf(rect) }
+    if (answer_rects.includes(rect)) return { list: 'answer', q, i: answer_rects.indexOf(rect) }
+  }
+  const i = (paper.orphan_answers ?? []).indexOf(rect)
+  return i >= 0 ? { list: 'orphan', q: null, i } : null
+}
+
+// The selection `sel` (of `before`) after an edit produced `after`: its rectangle wherever the
+// re-sort put it, or, when the edit replaced that rectangle (moved, resized), the one rectangle
+// `after` has that `before` did not. Null when it cannot be told.
+export function followSelection(before, after, sel) {
+  const rect = getRect(before, sel)
+  if (!rect) return null
+  const same = selectionOf(after, rect)
+  if (same) return same
+  const old = new Set(allRects(before))
+  const fresh = allRects(after).filter(r => !old.has(r))
+  return fresh.length === 1 ? selectionOf(after, fresh[0]) : null
+}
+
+function allRects(paper) {
+  return [
+    ...paper.questions.flatMap(q => [...q.question_rects, ...q.answer_rects]),
+    ...(paper.orphan_answers ?? []),
+  ]
 }
 
 export function pageOf(paper, pageNumber) {
@@ -67,13 +134,13 @@ export function deleteRect(paper, sel) {
   const rest = rects.filter((_, k) => k !== sel.i)
   if (sel.list === 'question' && rest.length === 0) {
     const q = paper.questions[sel.q]
-    return {
+    return normalise({
       ...paper,
       questions: paper.questions.filter((_, k) => k !== sel.q),
       orphan_answers: [...paper.orphan_answers, ...q.answer_rects],
-    }
+    })
   }
-  return withRects(paper, sel, rest)
+  return normalise(withRects(paper, sel, rest))
 }
 
 // A number must be a positive whole number not used by another question of the paper.
@@ -85,9 +152,10 @@ export function renumberError(paper, q, number) {
 
 export function renumber(paper, q, number) {
   if (!paper.questions[q] || renumberError(paper, q, number) || paper.questions[q].number === number) return paper
-  return { ...paper, questions: paper.questions.map((o, k) => (k === q ? { ...o, number } : o)) }
+  return normalise({ ...paper, questions: paper.questions.map((o, k) => (k === q ? { ...o, number } : o)) })
 }
 
+// Question q joins question q - 1: in a normalised paper, the one with the next-lower number.
 export function mergeWithPrevious(paper, q) {
   if (q < 1 || !paper.questions[q]) return paper
   const prev = paper.questions[q - 1]
@@ -98,17 +166,17 @@ export function mergeWithPrevious(paper, q) {
     answer_rects: [...prev.answer_rects, ...cur.answer_rects],
     flags: [...prev.flags, ...cur.flags.filter(f => !prev.flags.includes(f))],
   }
-  return {
+  return normalise({
     ...paper,
     questions: [...paper.questions.slice(0, q - 1), merged, ...paper.questions.slice(q + 1)],
-  }
+  })
 }
 
 function splitInto(paper, q, firstRects, secondRects) {
   const cur = paper.questions[q]
   const first = { ...cur, question_rects: firstRects }
   const second = { number: nextNumber(paper), question_rects: secondRects, answer_rects: [], flags: [...cur.flags] }
-  return { ...paper, questions: [...paper.questions.slice(0, q), first, second, ...paper.questions.slice(q + 1)] }
+  return normalise({ ...paper, questions: [...paper.questions.slice(0, q), first, second, ...paper.questions.slice(q + 1)] })
 }
 
 // Split question q between its rectangles: rectangles [0, at) stay, [at, n) become a new question.
@@ -167,36 +235,42 @@ export function normaliseRect(paper, { page, x0, y0, x1, y1 }) {
   return r.x1 - r.x0 >= MIN_SIZE_PT && r.y1 - r.y0 >= MIN_SIZE_PT ? r : null
 }
 
-// Add a drawn rectangle. `kind` is 'question' or 'answer'; `q` the question it goes to, or null:
-// - a question box with no question becomes a new question (numbered max + 1); in an
-//   answer-only paper an answer box with no question does too (its answers are its questions);
-// - an answer box with no question becomes an orphan answer.
-// Returns { paper, sel } with the new rectangle selected ({ paper } unchanged if refused).
-export function addRect(paper, kind, q, drawn) {
+// Why a box of `kind` ('question' or 'answer') cannot be drawn for question `number` (null or
+// NaN when the field is blank), or null when it can. Checked before drawing starts:
+// - a question box may name any positive number: an existing question gets the box, a new
+//   number starts a question;
+// - an answer box must name an existing question, except in an answer-only paper, where a new
+//   number starts a new answer (its answers are its questions).
+export function drawError(paper, kind, number) {
+  if (number == null || Number.isNaN(number)) return 'Enter a question number'
+  if (!Number.isInteger(number) || number < 1) return 'A question number must be a positive whole number'
+  if (kind === 'answer' && paper.role !== 'answer_only' && !paper.questions.some(q => q.number === number)) {
+    return `Question ${number} doesn't exist. Draw its question box first.`
+  }
+  return null
+}
+
+// Add a drawn rectangle of `kind` to question `number` (see drawError): to that question at its
+// place in document order, or as a new question in number order. Returns { paper, sel, error }
+// with the new rectangle selected; a refused draw returns the paper unchanged, with the reason
+// in `error` (null for a box too small or off the paper's pages).
+export function addRect(paper, kind, number, drawn) {
+  const error = drawError(paper, kind, number)
+  if (error) return { paper, sel: null, error }
   const rect = normaliseRect(paper, drawn)
-  if (!rect) return { paper, sel: null }
-  if (q != null && paper.questions[q]) {
-    const list = kind === 'answer' ? 'answer' : 'question'
-    const sel = { list, q, i: rectsOf(paper, { list, q }).length }
-    return { paper: withRects(paper, sel, [...rectsOf(paper, sel), rect]), sel }
-  }
-  const answerOnly = paper.role === 'answer_only'
-  if (kind === 'answer' && !answerOnly) {
-    return {
-      paper: { ...paper, orphan_answers: [...paper.orphan_answers, rect] },
-      sel: { list: 'orphan', q: null, i: paper.orphan_answers.length },
-    }
-  }
-  const question = {
-    number: nextNumber(paper),
-    question_rects: kind === 'answer' ? [] : [rect],
-    answer_rects: kind === 'answer' ? [rect] : [],
-    flags: [],
-  }
-  return {
-    paper: { ...paper, questions: [...paper.questions, question] },
-    sel: { list: kind === 'answer' ? 'answer' : 'question', q: paper.questions.length, i: 0 },
-  }
+  if (!rect) return { paper, sel: null, error: null }
+  const key = kind === 'answer' ? 'answer_rects' : 'question_rects'
+  const at = paper.questions.findIndex(q => q.number === number)
+  const questions = at >= 0
+    ? paper.questions.map((q, k) => (k === at ? { ...q, [key]: [...q[key], rect] } : q))
+    : [...paper.questions, {
+        number,
+        question_rects: kind === 'answer' ? [] : [rect],
+        answer_rects: kind === 'answer' ? [rect] : [],
+        flags: [],
+      }]
+  const next = normalise({ ...paper, questions })
+  return { paper: next, sel: selectionOf(next, rect), error: null }
 }
 
 // Give an answer rectangle (a question's, or an orphan) to question `toQ`, or make it an orphan
@@ -208,13 +282,9 @@ export function assignAnswer(paper, sel, toQ) {
   if (toQ == null && sel.list === 'orphan') return { paper, sel }
   if (toQ != null && (!paper.questions[toQ] || (sel.list === 'answer' && sel.q === toQ))) return { paper, sel }
   const without = withRects(paper, sel, rectsOf(paper, sel).filter((_, k) => k !== sel.i))
-  if (toQ == null) {
-    return {
-      paper: { ...without, orphan_answers: [...without.orphan_answers, rect] },
-      sel: { list: 'orphan', q: null, i: without.orphan_answers.length },
-    }
-  }
   const target = { list: 'answer', q: toQ }
-  const i = rectsOf(without, target).length
-  return { paper: withRects(without, target, [...rectsOf(without, target), rect]), sel: { ...target, i } }
+  const next = normalise(toQ == null
+    ? { ...without, orphan_answers: [...without.orphan_answers, rect] }
+    : withRects(without, target, [...rectsOf(without, target), rect]))
+  return { paper: next, sel: selectionOf(next, rect) }
 }

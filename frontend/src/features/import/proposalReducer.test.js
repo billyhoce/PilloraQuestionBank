@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  addRect, assignAnswer, deleteRect, mergeWithPrevious, moveRect, renumber, renumberError, resizeRect, splitBetween, splitThrough,
-  toEditPayload,
+  addRect, assignAnswer, deleteRect, drawError, followSelection, mergeWithPrevious, moveRect, normalise, renumber, renumberError,
+  resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 
 const r = (page, y0, y1, x0 = 10, x1 = 90) => ({ page, x0, y0, x1, y1 })
@@ -54,12 +54,12 @@ describe('proposalReducer', () => {
   it("deleting a question's last rectangle deletes the question and orphans its answers", () => {
     const a = deleteRect(paper(), { list: 'question', q: 0, i: 0 })
     expect(a.questions.map(q => q.number)).toEqual([2])
-    expect(a.orphan_answers).toEqual([r(3, 100, 120), r(3, 0, 20)])
+    expect(a.orphan_answers).toEqual([r(3, 0, 20), r(3, 100, 120)])  // in document order
   })
 
   it('renumbers, refusing duplicates and non-positive or non-integer numbers', () => {
     const p = paper()
-    expect(renumber(p, 0, 5).questions[0].number).toBe(5)
+    expect(renumber(p, 0, 5).questions.map(q => q.number)).toEqual([2, 5])  // re-sorted by number
     expect(renumber(p, 0, 2)).toBe(p)
     expect(renumber(p, 0, 0)).toBe(p)
     expect(renumber(p, 0, 1.5)).toBe(p)
@@ -101,6 +101,50 @@ describe('proposalReducer', () => {
     expect(splitThrough(p, 1, 0, 500)).toBe(p)
   })
 
+  it('keeps questions sorted by number and every box list in document order', () => {
+    const p = {
+      ...paper(),
+      questions: [
+        { number: 3, question_rects: [r(3, 10, 20), r(2, 50, 60), r(2, 50, 60, 0, 5)], answer_rects: [], flags: [] },
+        { number: 1, question_rects: [r(2, 0, 5)], answer_rects: [r(3, 40, 50), r(3, 0, 10)], flags: [] },
+      ],
+      orphan_answers: [r(3, 90, 100), r(2, 0, 10)],
+    }
+    const n = normalise(p)
+    expect(n.questions.map(q => q.number)).toEqual([1, 3])
+    expect(n.questions[1].question_rects).toEqual([r(2, 50, 60, 0, 5), r(2, 50, 60), r(3, 10, 20)])  // page, top, left
+    expect(n.questions[0].answer_rects).toEqual([r(3, 0, 10), r(3, 40, 50)])
+    expect(n.orphan_answers).toEqual([r(2, 0, 10), r(3, 90, 100)])
+    expect(normalise(n)).toBe(n)  // already in order: the same paper
+  })
+
+  it('merges into the next-lower number and keeps the merged boxes in document order', () => {
+    const p = {
+      ...paper(),
+      questions: [
+        { number: 1, question_rects: [r(3, 100, 150)], answer_rects: [], flags: [] },
+        { number: 2, question_rects: [r(2, 10, 60)], answer_rects: [], flags: [] },
+      ],
+    }
+    expect(mergeWithPrevious(p, 1).questions[0].question_rects).toEqual([r(2, 10, 60), r(3, 100, 150)])
+  })
+
+  it('follows the selected box through a re-sort, even when the edit replaced it', () => {
+    const p = paper()
+    const sel = { list: 'question', q: 1, i: 1 }  // Q2's box on page 3
+    const moved = moveRect(p, sel, 10, 0)
+    expect(followSelection(p, moved, sel)).toEqual(sel)
+    const renumbered = renumber(p, 0, 9)  // Q1 becomes Q9 and moves to the end
+    expect(followSelection(p, renumbered, { list: 'answer', q: 0, i: 0 })).toEqual({ list: 'answer', q: 1, i: 0 })
+    // A box dragged above its question's other box on the same page becomes its first.
+    const two = { ...p, questions: [p.questions[0], { ...p.questions[1], question_rects: [r(2, 70, 120), r(2, 150, 160)] }] }
+    const moved2 = moveRect(two, { list: 'question', q: 1, i: 1 }, 10, 0)
+    expect(moved2.questions[1].question_rects[1]).toMatchObject({ y0: 0 })  // kept in place while dragging
+    const dragged = normalise(moved2)  // the drag ends
+    expect(dragged.questions[1].question_rects[0]).toMatchObject({ y0: 0, y1: 10 })
+    expect(followSelection(two, dragged, { list: 'question', q: 1, i: 1 })).toEqual({ list: 'question', q: 1, i: 0 })
+  })
+
   it('builds the PUT payload from the editable parts only', () => {
     const body = toEditPayload([paper()])
     expect(Object.keys(body.papers[0]).sort()).toEqual(['orphan_answers', 'questions'])
@@ -124,30 +168,57 @@ describe('moving, drawing and reassigning boxes', () => {
     expect(moveRect(same, { list: 'question', q: 0, i: 0 }, 10, 10)).toBe(same)
   })
 
-  it('adds a drawn question box to the selected question, or as a new question', () => {
+  it('adds a drawn question box to the numbered question, in document order', () => {
     const drawn = { page: 1, x0: 300, y0: 400, x1: 200, y1: 300 }
-    const toQ2 = addRect(base(), 'question', 1, drawn)
+    const toQ2 = addRect(base(), 'question', 2, drawn)
     expect(toQ2.paper.questions[1].question_rects[1]).toEqual({ page: 1, x0: 200, y0: 300, x1: 300, y1: 400 })
     expect(toQ2.sel).toEqual({ list: 'question', q: 1, i: 1 })
-    const fresh = addRect(base(), 'question', null, drawn)
-    expect(fresh.paper.questions[2]).toMatchObject({ number: 3, answer_rects: [], flags: [] })
-    expect(fresh.sel).toEqual({ list: 'question', q: 2, i: 0 })
+    // Above Q2's box on the same page, or on an earlier page: it goes first.
+    const above = addRect(base(), 'question', 2, { page: 1, x0: 10, y0: 70, x1: 110, y1: 90 })
+    expect(above.paper.questions[1].question_rects[0]).toMatchObject({ page: 1, y0: 70 })
+    expect(above.sel).toEqual({ list: 'question', q: 1, i: 0 })
+    const p = { ...base(), questions: [base().questions[0], { ...base().questions[1], question_rects: [{ page: 2, x0: 10, y0: 10, x1: 110, y1: 60 }] }] }
+    const earlier = addRect(p, 'question', 2, { page: 1, x0: 10, y0: 700, x1: 110, y1: 760 })
+    expect(earlier.paper.questions[1].question_rects.map(x => x.page)).toEqual([1, 2])
   })
 
-  it('adds an answer box to a question, as an orphan, or as a new answer in an answer-only paper', () => {
+  it('starts a new question at its place in number order', () => {
+    const drawn = { page: 1, x0: 10, y0: 300, x1: 100, y1: 360 }
+    const ten = addRect(base(), 'question', 10, drawn)
+    expect(ten.paper.questions.map(q => q.number)).toEqual([1, 2, 10])
+    expect(ten.paper.questions[2]).toMatchObject({ question_rects: [{ page: 1, y0: 300 }], answer_rects: [], flags: [] })
+    const p = { ...base(), questions: [base().questions[0], { ...base().questions[1], number: 5 }] }
+    const three = addRect(p, 'question', 3, drawn)
+    expect(three.paper.questions.map(q => q.number)).toEqual([1, 3, 5])
+    expect(three.sel).toEqual({ list: 'question', q: 1, i: 0 })
+  })
+
+  it('adds an answer box only to an existing question, except in an answer-only paper', () => {
     const drawn = { page: 2, x0: 10, y0: 200, x1: 100, y1: 260 }
-    expect(addRect(base(), 'answer', 1, drawn).paper.questions[1].answer_rects).toHaveLength(1)
-    const orphan = addRect(base(), 'answer', null, drawn)
-    expect(orphan.paper.orphan_answers).toHaveLength(2)
-    expect(orphan.sel).toEqual({ list: 'orphan', q: null, i: 1 })
-    const answerOnly = addRect({ ...base(), role: 'answer_only' }, 'answer', null, drawn)
-    expect(answerOnly.paper.questions[2]).toMatchObject({ number: 3, question_rects: [], answer_rects: [{ page: 2 }] })
+    const toQ2 = addRect(base(), 'answer', 2, drawn)
+    expect(toQ2.paper.questions[1].answer_rects).toHaveLength(1)
+    expect(toQ2.sel).toEqual({ list: 'answer', q: 1, i: 0 })
+    const p = base()
+    const missing = addRect(p, 'answer', 7, drawn)
+    expect(missing.paper).toBe(p)
+    expect(missing.error).toBe("Question 7 doesn't exist. Draw its question box first.")
+    const answerOnly = addRect({ ...base(), role: 'answer_only' }, 'answer', 7, drawn)
+    expect(answerOnly.paper.questions[2]).toMatchObject({ number: 7, question_rects: [], answer_rects: [{ page: 2 }] })
+  })
+
+  it('says why a number cannot be drawn for', () => {
+    const p = base()
+    expect(drawError(p, 'question', null)).toBe('Enter a question number')
+    expect(drawError(p, 'question', 0)).toMatch(/positive whole number/)
+    expect(drawError(p, 'question', 9)).toBeNull()
+    expect(drawError(p, 'answer', 9)).toMatch(/doesn't exist/)
+    expect(drawError(p, 'answer', 1)).toBeNull()
   })
 
   it('refuses a box that is too small or on a page the paper does not have', () => {
     const p = base()
-    expect(addRect(p, 'question', null, { page: 1, x0: 10, y0: 10, x1: 12, y1: 100 }).paper).toBe(p)
-    expect(addRect(p, 'question', null, { page: 9, x0: 10, y0: 10, x1: 100, y1: 100 }).paper).toBe(p)
+    expect(addRect(p, 'question', 3, { page: 1, x0: 10, y0: 10, x1: 12, y1: 100 })).toEqual({ paper: p, sel: null, error: null })
+    expect(addRect(p, 'question', 3, { page: 9, x0: 10, y0: 10, x1: 100, y1: 100 }).paper).toBe(p)
   })
 
   it('assigns an orphan answer to a question, moves an answer between questions, and back to orphan', () => {
