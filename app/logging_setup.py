@@ -1,7 +1,8 @@
 """One log setup for the API and the worker: JSON lines on stdout from the root logger.
 
-Docker's ``json-file`` driver keeps the history, so ``docker logs <container> | grep <job id>``
-finds every line of a job from either container. Called from ``app/main.py`` and
+In production Docker hands the lines to the host's journald, so
+``journalctl -t pillora-worker -o cat | grep <job id>`` finds every line of a job (see
+docs/DEPLOYMENT.md, Observability). Called from ``app/main.py`` and
 ``app/worker/main.py``; idempotent.
 """
 

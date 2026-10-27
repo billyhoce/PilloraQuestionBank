@@ -4,7 +4,7 @@ Hosting, environments, CI/CD, configuration, one-time provisioning, backups, rol
 observability.
 
 **Code:** `Dockerfile`, `deploy/docker-compose.prod.yml`, `deploy/nginx/pillora.conf`,
-`deploy/scripts/backup_db.sh`, `deploy/systemd/`, `deploy/pillora.env.example`,
+`deploy/scripts/backup_db.sh`, `deploy/systemd/`, `deploy/journald/`, `deploy/pillora.env.example`,
 `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`
 
 ## Hosting
@@ -43,7 +43,8 @@ flowchart LR
 - `worker`: `python -m app.worker`, no ports, capped at 1 CPU / 6 GB (an 80-page booklet fits),
   leaving the other core and 6 GB to the API, Nginx and the OS. Check with `docker stats` after a
   large booklet.
-- Both restart `unless-stopped` and read `/opt/pillora/.env`.
+- Both restart `unless-stopped`, read `/opt/pillora/.env` and log to the host's journald (see
+  [Observability](#observability)).
 - Same-origin SPA and API, so the API needs no CORS. The only cross-origin request is the browser's
   direct PDF upload to S3, which needs the bucket CORS rule (provisioning step 6).
 
@@ -133,7 +134,7 @@ in the gitignored `.env` (template `.env.example`). Both containers and the back
    ```bash
    sudo apt update
    sudo apt install -y docker.io docker-compose-v2 nginx postgresql-client git curl unzip
-   sudo usermod -aG docker "$USER"   # log out and in again
+   sudo usermod -aG docker,systemd-journal "$USER"   # log out and in again; journal = read logs
    ```
    AWS CLI v2 (not available via apt):
    ```bash
@@ -224,7 +225,13 @@ in the gitignored `.env` (template `.env.example`). Both containers and the back
    sudo cp /opt/pillora/repo/deploy/systemd/pillora-backup.* /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now pillora-backup.timer
    ```
-10. **First deploy** — push to `main` (or re-run the workflow). Migrations create the schema and
+10. **Persistent logs** — keep the journal on disk with a 2 GB cap:
+    ```bash
+    sudo mkdir -p /etc/systemd/journald.conf.d
+    sudo cp /opt/pillora/repo/deploy/journald/pillora.conf /etc/systemd/journald.conf.d/
+    sudo systemctl restart systemd-journald
+    ```
+11. **First deploy** — push to `main` (or re-run the workflow). Migrations create the schema and
     seed reference data and an admin account, `admin@pillora.com`. There is no in-app password
     change, so sign in with Google on a real admin address or promote a real account to admin.
 
@@ -282,12 +289,16 @@ Rotating the secret: console, `.env` edit, container restart. No redeploy.
 
 - **Logs:** both containers log one JSON object per line to stdout (`ts`, `level`, `logger`, `msg`,
   `job_id`, `section`, `stage`, `request_id`, `user_id`, `task_attempt`, plus structured fields such
-  as `seconds` or `cost_usd`). Docker's `json-file` driver keeps 5 × 10 MB per container across
-  restarts:
-  ```bash
-  docker logs pillora-api-1 2>&1 | grep <job-id>      # same for the worker container
-  docker compose -f deploy/docker-compose.prod.yml logs -f
-  ```
+  as `seconds` or `cost_usd`).
+  - Docker's `journald` driver hands each line to the **VM's journal**, tagged `pillora-api` or
+    `pillora-worker` (migration runs log as `pillora-api` too). The history belongs to the VM, not
+    the container, so deploys, rollbacks and restarts keep it (`json-file` logs vanished with every
+    recreated container, i.e. every deploy).
+  - Retention: the whole journal is capped at 2 GB and survives reboots (`deploy/journald/`,
+    provisioning step 10); the oldest lines go first. Check usage with `journalctl --disk-usage`.
+  - Nothing is copied off the VM: losing the VM loses its logs. Durable job history is in
+    `ingest_event` (below), and the reading commands are under [Reading the logs](#reading-the-logs).
+
 - **Request ids:** every API response carries `X-Request-ID`; quote it to find the request's log
   lines.
 - **Health:** `/api/health` (no database hit) — used by the container healthcheck and the deploy.
@@ -301,3 +312,34 @@ Rotating the secret: console, `.env` edit, container restart. No redeploy.
   audit events.
 - Errors to watch: PDF generation failures, Claude call errors, auth failures, database-unavailable
   responses. No error tracker (e.g. Sentry) is wired in.
+
+### Reading the logs
+
+The logs live only on the VM, so reading them **needs SSH** — the same access the deploy uses (a key
+in the deploy user's `authorized_keys`; that user must be in `systemd-journal` or `adm`, or use
+`sudo`). There is no log viewer in the app or a hosted service.
+
+No interactive session is needed: run `journalctl` over SSH from your machine and filter locally.
+`-o cat` prints just the JSON line.
+
+```bash
+VM=<user>@<DEPLOY_HOST>
+
+# One auto-import job, both containers, from the last week
+ssh $VM "journalctl -t pillora-worker -t pillora-api --since -7d -o cat" | grep <job-id>
+
+# One API request, by the X-Request-ID the user quotes
+ssh $VM "journalctl -t pillora-api --since today -o cat" | grep <request-id>
+
+# Follow the worker live; last 200 lines; errors only (pretty-printed with jq)
+ssh $VM "journalctl -t pillora-worker -f -o cat"
+ssh $VM "journalctl -t pillora-api -n 200 -o cat"
+ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | jq -c 'select(.level == "ERROR")'
+
+# Save a day to a file
+ssh $VM "journalctl -t pillora-worker --since 2026-10-26 --until 2026-10-27 -o cat" > worker.jsonl
+```
+
+- `--since`/`--until` take dates, `today`, `yesterday` or relative times such as `-2h`.
+- On the VM, `docker compose -f docker-compose.prod.yml logs -f` (from `/opt/pillora/repo/deploy`)
+  also works, but shows only the current containers, i.e. since the last deploy.

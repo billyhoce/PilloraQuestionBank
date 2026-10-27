@@ -382,7 +382,7 @@ database.
 
 - **Logs:** JSON lines on stdout from both containers. Every line logged while working on a job
   carries its `job_id` (plus section, stage and attempt inside a task); API lines carry a request id.
-  Grepping the logs for a job's UUID finds its whole history ([DEPLOYMENT.md](../DEPLOYMENT.md)).
+  Grepping the logs for a job's UUID finds its whole history ([DEPLOYMENT.md](../DEPLOYMENT.md#reading-the-logs)).
 - **Lifecycle lines** (INFO, one each): job created, registered (hash, page count), paper metadata
   read, task claimed / finished (status, duration), proposal stored, scratch released, proposal
   saved, paper confirmed / skipped / attached / deleted, retry, cancelled. Stage failures log at
