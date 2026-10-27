@@ -162,8 +162,18 @@ def render_outputs(
     return written
 
 
-def _write_review(page: pymupdf.Page, path: Path, config: ExtractConfig) -> None:
-    """The page, clean, at ``review_zoom``: no rectangles.
+def write_review_image(page: pymupdf.Page, path: Path, config: ExtractConfig) -> bool:
+    """Write ``page``'s clean review image to ``path`` as the render stages write theirs.
+
+    For a booklet page no section drew (a cover, a page between papers), which the
+    review page still shows. False, logged, when it could not be written.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _write_review(page, path, config)
+
+
+def _write_review(page: pymupdf.Page, path: Path, config: ExtractConfig) -> bool:
+    """The page, clean, at ``review_zoom``: no rectangles. False if not written.
 
     The admin review page lays an SVG of the manifest's rectangles over this, in
     the page's points scaled by image width over page width, so it is the page in
@@ -173,8 +183,10 @@ def _write_review(page: pymupdf.Page, path: Path, config: ExtractConfig) -> None
     """
     try:
         write_webp(rasterise_page(page, config.review_zoom), path, config.review_webp_quality)
+        return True
     except Exception as exc:  # keep the paper going; the review page just lacks this image
         log.warning("%s: review image not written (%s)", path.name, exc)
+        return False
 
 
 def _boxes_draw(result: PageResult, segment_totals: dict[int, int]) -> Draw:

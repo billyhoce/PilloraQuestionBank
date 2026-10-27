@@ -2,7 +2,8 @@
 
 ``report`` builds it (``proposal.json``) from what the section stages left: the segment
 plan (which answer section belongs to which question section), each section's
-``manifest.json`` and split PDF, and the review WebPs the render stages wrote. This
+``manifest.json`` and split PDF, and the review WebPs the render stages wrote (a booklet
+page no section drew is drawn here, from the booklet). This
 module is the one place that knows its shape (at the end of this docstring); the
 behaviour is in docs/features/ingestion-pipeline.md.
 
@@ -29,8 +30,12 @@ Shape::
 
     {"papers": [{
         "label": "q1", "role": "question", "answer_label": "a1", "answer_template": "table",
-        "pages": [{"page": 7, "image": "pages/p07.webp", "width_pt": 595.3, "height_pt": 841.9,
-                   "straightened_deg": null, "needs_review": false, "review_reason": null}],
+        "pages": [{"page": 1, "image": "pages/p01.webp", "width_pt": 595.3, "height_pt": 841.9,
+                   "straightened_deg": null, "needs_review": false, "review_reason": null,
+                   "excluded_reason": "cover page"},
+                  {"page": 7, "image": "pages/p07.webp", "width_pt": 595.3, "height_pt": 841.9,
+                   "straightened_deg": null, "needs_review": false, "review_reason": null,
+                   "excluded_reason": null}],
         "questions": [{"number": 1,
                        "question_rects": [{"page": 7, "x0": 72.0, "y0": 100.0, "x1": 523.0, "y1": 160.0}],
                        "answer_rects": [{"page": 23, "x0": 72.0, "y0": 100.0, "x1": 290.0, "y1": 160.0}],
@@ -44,10 +49,18 @@ Shape::
 - Pairing: a question section and the answer section with the same segment ``index``
   form one paper. ``answer_label`` is null when there is no such answer section;
   ``answer_template`` is that section's template.
-- Pages: the question and answer sections' rendered pages, each once, sorted by booklet
-  page. ``width_pt``/``height_pt`` are the size as the review image shows it (rotation
-  applied); the image is ``review_zoom`` times that in pixels. ``image`` is null (with a
-  paper warning) if the WebP could not be written.
+- Pages: every booklet page, 1 to the plan's page count, in order, in every paper, so
+  the review page can show (and an admin draw on) a page the pipeline did not use. The
+  paper's own pages (its sections' manifest pages) have ``excluded_reason`` null; any
+  other page says why it is not the paper's: ``cover page``, ``belongs to q2`` (another
+  paper's section), ``section a2 not extracted``, ``before the first question in a1``
+  (its own section's pages the extractor started after) or ``not in any section``. An
+  excluded page is never flagged (``needs_review`` false). Each image is written once and
+  shared by every paper: a page some section drew keeps that image, its size and its
+  ``straightened_deg``; any other page is drawn from the booklet as filed. ``width_pt``/
+  ``height_pt`` are the size as the review image shows it (rotation applied); the image
+  is ``review_zoom`` times that in pixels. ``image`` is null (with a paper warning) if
+  the WebP could not be written.
 - Straightened scans: a scanned page that was straightened has ``straightened_deg``, the
   rotation (counter-clockwise as seen, about the page centre, the page keeping its size)
   its review image and every rectangle on it were made after; a cropper rotates the page
@@ -72,7 +85,8 @@ from pathlib import Path
 import pymupdf
 from ingester.router import EXTRACTED, SectionReport
 from ingester.segments import SegmentPlan, pair_segments
-from question_extractor.render import REVIEW_SUBDIR, review_filename
+from question_extractor import ExtractConfig
+from question_extractor.render import REVIEW_SUBDIR, review_filename, write_review_image
 
 from . import artefacts
 
@@ -102,13 +116,16 @@ def build(
     split: dict,
     reports: list[SectionReport],
     tolerance: float,
+    booklet: Path,
+    config: ExtractConfig,
 ) -> dict:
     """The proposal for a job, copying each review image to ``pages/`` as it goes.
 
     ``split`` is ``split.json``'s sections/skipped/warnings (see ``report._read_split``);
     ``reports`` are the section rows ``report`` decided; ``tolerance`` is how far (points)
     a rectangle may stick out of its page before that is warned about (it is clipped
-    either way).
+    either way). ``booklet`` is the booklet PDF, which the pages no section drew are
+    drawn from at ``config``'s review zoom and quality.
     """
     warnings: list[str] = []
     by_label = {r.label: r for r in reports}
@@ -146,6 +163,9 @@ def build(
                 continue
             warnings.append(f"{a.label}: answer section has no question section with index {a.index}")
             papers.append(_paper(job_dir, staging, None, a, loaded, by_label, tolerance))
+
+    if papers:  # papers come from the plan, so there is one
+        _show_every_page(papers, booklet, plan.page_count, segments, loaded, staging, config)
 
     unrouted = [
         {
@@ -249,6 +269,85 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
         "orphan_answers": orphans,
         "warnings": warnings,
     }
+
+
+def _show_every_page(papers, booklet, page_count, segments, loaded, staging, config) -> None:
+    """Give every paper an entry for every booklet page (the module docstring's Pages).
+
+    A page some section drew keeps that image (and frame), whichever paper it is in; the
+    rest are drawn from the booklet once, for all papers.
+    """
+    drawn = {p["page"]: p for paper in papers for p in paper["pages"] if p["image"] is not None}
+    rendered = _render_pages(
+        booklet, [n for n in range(1, page_count + 1) if n not in drawn], staging, config
+    )
+    for paper in papers:
+        own = {p["page"]: p for p in paper["pages"]}
+        labels = {paper["label"], paper["answer_label"]} - {None}
+        pages: list[dict] = []
+        unimaged: list[int] = []
+        for number in sorted(set(range(1, page_count + 1)) | set(own)):
+            if number in own:
+                pages.append({**own[number], "excluded_reason": None})
+                continue
+            image = drawn.get(number) or rendered.get(number) or {}
+            if image.get("image") is None:
+                unimaged.append(number)
+            pages.append({
+                "page": number,
+                "image": image.get("image"),
+                "width_pt": image.get("width_pt"),
+                "height_pt": image.get("height_pt"),
+                "straightened_deg": image.get("straightened_deg"),
+                "needs_review": False,
+                "review_reason": None,
+                "excluded_reason": _excluded_reason(number, labels, segments, loaded),
+            })
+        if unimaged:
+            listed = ", ".join(str(n) for n in unimaged)
+            paper["warnings"].append(f"booklet page(s) {listed}: no review image")
+        paper["pages"] = pages
+
+
+def _excluded_reason(page: int, labels: set[str], segments, loaded) -> str:
+    """Why booklet ``page`` is not one of the paper (with section ``labels``)'s pages."""
+    for segment in segments:
+        if segment.first_page <= page <= segment.last_page:
+            if segment.label not in loaded:
+                return f"section {segment.label} not extracted"
+            if segment.label in labels:  # the extractor starts at a section's first question
+                return f"before the first question in {segment.label}"
+            return f"belongs to {segment.label}"
+    if any(page in segment.cover_pages for segment in segments):
+        return "cover page"
+    return "not in any section"
+
+
+def _render_pages(
+    booklet: Path, numbers: list[int], staging: Path, config: ExtractConfig
+) -> dict[int, dict]:
+    """Each of booklet pages ``numbers``' review image (``image`` null if not written) and
+    size, drawn from the booklet as filed; a page that could not be read is left out, and
+    every page when the booklet cannot be opened."""
+    out: dict[int, dict] = {}
+    if not numbers:
+        return out
+    try:
+        with pymupdf.open(booklet) as doc:
+            for number in numbers:
+                try:
+                    page = doc[number - 1]
+                    written = write_review_image(page, staging / review_filename(number), config)
+                    out[number] = {
+                        "image": page_image(number) if written else None,
+                        "width_pt": round(page.rect.width, 2),
+                        "height_pt": round(page.rect.height, 2),
+                    }
+                except Exception:  # one unreadable page: listed without an image
+                    continue
+    except Exception:  # an unreadable booklet: its pages are listed without images
+        pass
+    return out
 
 
 def _missing(report: SectionReport | None, label: str) -> str:

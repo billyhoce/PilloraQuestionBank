@@ -20,7 +20,8 @@ A task that is another stage's soft need (``ocr``) is not required: its failure 
 already in the manifest's warnings, as the extractor's own is.
 
 It also writes ``proposal.json`` and the ``pages/`` review images (see
-:mod:`pipeline.proposal`): the document the admin review page reads. ``report`` below is
+:mod:`pipeline.proposal`): the document the admin review page reads, with every booklet
+page (the pages no section drew are drawn here from the booklet). ``report`` below is
 the one place that reads the artefacts, ``_section_report`` the one row.
 """
 
@@ -41,6 +42,7 @@ from ingester.segments import SegmentPlan, read_plan
 from question_extractor.pipeline import paper_name
 
 from .. import artefacts, proposal
+from ..fingerprint import source_input
 from ..outcome import Outcome, StageContext, TaskSummary, done
 from ..registry import CPU, JOB, Stage
 from ..sections import load_section
@@ -91,7 +93,13 @@ def run(ctx: StageContext) -> Outcome:
     artefacts.write_json(
         ctx.path(artefacts.PROPOSAL_NAME),
         proposal.build(
-            ctx.job_dir, plan, split, sections, ctx.config.proposal_tolerance_pt
+            ctx.job_dir,
+            plan,
+            split,
+            sections,
+            ctx.config.proposal_tolerance_pt,
+            ctx.source,
+            ctx.config.extract,
         ),
     )
     return done(needs_review=needs_review)
@@ -191,8 +199,9 @@ def _first(tasks: list[TaskSummary], status: str) -> TaskSummary | None:
 
 
 def _inputs(ctx: StageContext) -> list:
-    """What the report is built from: the plan, the split map, every section's manifest and
-    how each other task ended (the report says what became of every section)."""
+    """What the report is built from: the booklet (pages no section drew are drawn from
+    it), the plan, the split map, every section's manifest and how each other task ended
+    (the report says what became of every section)."""
     split = ctx.path(artefacts.SPLIT_DIR, artefacts.SPLIT_NAME)
     manifests = sorted(ctx.job_dir.glob("*/manifest.json")) if ctx.job_dir.is_dir() else []
     ended = sorted(
@@ -202,7 +211,9 @@ def _inputs(ctx: StageContext) -> list:
         if t.stage != STAGE.name
     )
     reviews = sorted(ctx.job_dir.glob("*/review")) if ctx.job_dir.is_dir() else []
-    return [ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *reviews, *ended]
+    return [
+        source_input(ctx), ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *reviews, *ended,
+    ]
 
 
 STAGE = Stage(
@@ -213,13 +224,18 @@ STAGE = Stage(
     soft_needs=("register", "segment", "split"),
     after_sections=True,
     inputs=_inputs,
-    settings=lambda ctx: {"proposal_tolerance_pt": ctx.config.proposal_tolerance_pt},
+    settings=lambda ctx: {
+        "proposal_tolerance_pt": ctx.config.proposal_tolerance_pt,
+        "review_zoom": ctx.config.extract.review_zoom,
+        "review_webp_quality": ctx.config.extract.review_webp_quality,
+    },
     outputs=lambda ctx: [
         ctx.path(artefacts.REPORT_NAME),
         ctx.path(artefacts.PROPOSAL_NAME),
         ctx.path(proposal.PAGES_DIR),
     ],
     # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range;
-    # v4: a straightened scan's rectangles stay straightened, its pages carry straightened_deg
-    version=4,
+    # v4: a straightened scan's rectangles stay straightened, its pages carry straightened_deg;
+    # v5: every paper lists every booklet page, with excluded_reason; pages no section drew are drawn
+    version=5,
 )
