@@ -168,6 +168,13 @@ Runs once every section has settled, even if `register`, `segment` or `split` fa
 - **`proposal.json`** is the document the admin review page reads and edits, with a review image per
   booklet page (`pages/pNN.webp`). Everything is in booklet terms: booklet page numbers, PDF points on
   that page.
+- **Every page in every paper.** Each paper lists every booklet page, so the admin can box a page the
+  pipeline left out. A paper's own pages (its sections' pages) have no `excluded_reason`; any other
+  page says why: `cover page`, `belongs to q2`, `section a2 not extracted`, `before the first
+  question in q1`, or `not in any section`. Excluded pages are never flagged.
+  - A page some section drew keeps that image (a scan's straightened one, with its
+    `straightened_deg`); any other page is drawn here from the booklet as filed, at the same zoom
+    and quality. A page that cannot be drawn is listed without an image and warned.
 - **Papers and pairing.** One paper per question section, paired with the answer section of the same
   segment index (`q1`↔`a1`). Each paper has a `role`:
   - `question` — a question section, with or without answers. No answer section → a warning on the

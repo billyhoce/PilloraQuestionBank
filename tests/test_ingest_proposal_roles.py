@@ -63,3 +63,14 @@ def test_paired_paper_is_a_question_paper_without_the_warning(paired):
     assert paper["role"] == "question"
     assert not any("no answer section" in w for w in paper["warnings"] + paired["warnings"])
     assert all(q["question_rects"] for q in paper["questions"])
+
+
+def test_every_paper_lists_every_booklet_page_with_why_it_is_excluded(paired):
+    (paper,) = paired["papers"]
+    pages = paper["pages"]
+    assert [p["page"] for p in pages] == list(range(1, 11))  # q1 is pages 2-9, a1 page 10
+    cover = pages[0]
+    assert cover["excluded_reason"] == "cover page"
+    assert cover["image"] == "pages/p01.webp" and cover["width_pt"] and cover["height_pt"]
+    assert not cover["needs_review"] and cover["straightened_deg"] is None
+    assert all(p["excluded_reason"] is None and p["image"] for p in pages[1:])

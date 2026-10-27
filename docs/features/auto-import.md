@@ -221,12 +221,18 @@ paper.
 
 - **Paper tabs** when the booklet holds several papers (`q1 / a1`, or "Answers a1" for an
   answer-only paper), each showing its outcome once decided.
-- **Page strip:** thumbnails; a page flagged by the pipeline has an amber border and its reason as a
-  tooltip and banner.
+- **Page strip:** every page of the booklet, in every paper's tab, so a page the pipeline cut wrongly
+  can still be boxed.
+  - A page flagged by the pipeline has an amber border and its reason as a tooltip and banner.
+  - A page the pipeline left out of this paper (cover page, not in any section, another paper's
+    page, a section not extracted, before the section's first question) is greyed with that
+    reason, and opening it shows "Not used by the pipeline: … Draw boxes here if it holds
+    questions." Boxes drawn there are cropped and imported like any other.
+  - The page shown first is the first question's.
 - **Page view:** question rectangles in blue, answer rectangles in green, unmatched answers (orphans)
   in grey dashed.
-- **Question list:** each question with its number, flags, and "(no answer)" when it has no answer
-  box. Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
+- **Question list:** always sorted by question number; each question with its number, flags, and
+  "(no answer)" when it has no answer box. Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
   boxes are counted with "They are not imported."
 - **Sections not extracted** (failed or unroutable sections) are listed with reason and page range.
   **Handle manually** cuts that page range out of the booklet into the
@@ -245,15 +251,26 @@ sections not extracted and warnings cannot be changed.
 - The **Selected box** bar names the box, offers **Delete box**, and for an answer box a **Belongs
   to** menu: move it to another question, or to "No question" (an orphan, not imported). An orphan
   can be given to a question the same way. Delete/Backspace deletes; Esc deselects.
-- **Draw question box** / **Draw answer box** (answer-only papers have only the latter), then drag on
-  the page. One box per press; Esc cancels. Where it goes is shown first:
-  - with a question selected: added to that question
-  - otherwise a question box starts a new question numbered max + 1; an answer box becomes an orphan
-    (in an answer-only paper, a new answer numbered max + 1)
+- **Draw question box** / **Draw answer box** (answer-only papers have only the latter) first asks
+  which question the box belongs to, then the admin drags on the page. One box per press; Esc
+  cancels.
+  - The number field takes digits only, pre-filled with the selected question's number, else (for a
+    question box) max + 1; an answer box with nothing selected starts blank.
+  - A question box for an existing number joins that question; a new number starts a question,
+    placed in number order.
+  - An answer box must name an existing question, else it is refused ("Question 12 doesn't exist.
+    Draw its question box first."). In an answer-only paper a new number starts a new answer.
+  - Blank or 0 is refused with the reason.
+- **Order:** a question's boxes (question and answer boxes alike, and unmatched answers) are always
+  in source-document order: by page, then top edge, then left edge. A drawn box is inserted at its
+  place; a moved or resized box takes its place when the drag ends; merging re-orders the joined
+  boxes. The order is also applied when the page opens, without saving until the first edit.
 - **Number field:** a duplicate, blank or non-positive number is refused with the reason.
-- **Merge with previous:** joins the question into the one above, keeping that one's number.
+- **Merge with previous:** joins the question into the one above (the next-lower number), keeping
+  that one's number.
 - **Split before the selected rectangle**, or **split the selected rectangle in half**: the first
-  part keeps the number and all answer boxes; the second gets max + 1 and no answers.
+  part keeps the number and all answer boxes; the second gets max + 1 and no answers, and moves to
+  its place in the list. Renumbering a question moves it the same way.
 - Deleting a question's last question box deletes the question; its answer boxes become orphans.
 - **Saving:** edits save automatically 800 ms after the last change and on leaving the page. The
   header shows Saving… / Saved / Not saved (with the reason) and "edited". The generated proposal is

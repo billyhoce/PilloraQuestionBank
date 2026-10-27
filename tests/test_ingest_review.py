@@ -187,6 +187,18 @@ def test_put_persists_and_get_returns_it(admin_client, db_session, admin_user, f
     assert body["proposal"]["unrouted"][0]["label"] == "q2"
 
 
+def test_put_accepts_a_box_on_a_page_the_pipeline_excluded(admin_client, db_session, admin_user, fake_object_store):
+    cover = {**page(1), "excluded_reason": "cover page"}
+    proposal = {**PROPOSAL, "papers": [{**PROPOSAL["papers"][0], "pages": [cover, *PROPOSAL["papers"][0]["pages"]]}]}
+    job = make_job(db_session, admin_user, proposal=proposal)
+    q = {"number": 1, "question_rects": [rect(1), rect(2)], "answer_rects": [], "flags": []}
+    r = admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q]}))
+    assert r.status_code == 200
+    db_session.refresh(job)
+    assert job.proposal_edited["papers"][0]["questions"][0]["question_rects"][0]["page"] == 1
+    assert job.proposal_edited["papers"][0]["pages"][0]["excluded_reason"] == "cover page"
+
+
 def test_put_cannot_rewrite_non_editable_fields(admin_client, db_session, admin_user, fake_object_store):
     job = make_job(db_session, admin_user)
     body = edit_body()
