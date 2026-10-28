@@ -128,14 +128,14 @@ class Reconciler:
     def _record(self) -> None:
         """Log every finding (with the job context when it has one) and write its ``ingest_event``."""
         for f in self.findings:
-            fields = dict(
-                kind=f.kind, key_or_path=f.key_or_path, age_seconds=int(f.age.total_seconds()),
-                action=f.action, dry_run=not self.delete,
+            said = (
+                f"reconcile ({'dry run' if not self.delete else 'delete mode'}): {f.kind} {f.key_or_path},"
+                f" {int(f.age.total_seconds())}s old: {f.action}"
             )
             if f.job_id is not None:
-                log_job_event(f.job_id, "reconcile", logging.WARNING, **fields)
+                log_job_event(f.job_id, said, logging.WARNING)
             else:
-                log_event("ingest_reconcile", f.kind, logging.WARNING, **fields)
+                log_event(said, logging.WARNING)
         if not self.findings:
             return
         with self.factory() as db:

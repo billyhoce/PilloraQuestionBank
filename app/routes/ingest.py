@@ -152,11 +152,8 @@ def upload_pdf(
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
-    with Timer() as t:
-        pdf_bytes = file.file.read()
-        result = upload_pages(pdf_bytes, file.filename or "", db)
-    log_event("upload_pdf", "total", seconds=t.s)
-    return result
+    pdf_bytes = file.file.read()
+    return upload_pages(pdf_bytes, file.filename or "", db)
 
 
 def _serialize_paper_questions(paper: Paper) -> list[dict]:
@@ -228,7 +225,6 @@ def ai_topics(
                 .filter(Question.id == payload.question_id)
                 .first()
             )
-        log_event("ai_topics", "db_query", seconds=t_db.s)
 
         if question is None:
             raise HTTPException(status_code=404, detail="Question not found")
@@ -242,7 +238,6 @@ def ai_topics(
                 .order_by(Topic.topic_number)
                 .all()
             )
-        log_event("ai_topics", "db_topics", seconds=t_topics.s)
 
         topics = [
             {
@@ -263,7 +258,6 @@ def ai_topics(
             with Timer() as _t:
                 raw_list.append(fetch_bytes(p.image_key))
             t_s3 += _t.elapsed
-        log_event("ai_topics", "s3_fetch", seconds=round(t_s3, 3), pages=n)
 
         t_ds = 0.0
         image_bytes_list = []
@@ -271,32 +265,34 @@ def ai_topics(
             with Timer() as _t:
                 image_bytes_list.append(downscale_for_ai(raw))
             t_ds += _t.elapsed
-        log_event("ai_topics", "downscale", seconds=round(t_ds, 3), pages=n)
 
         try:
             with Timer() as t_label:
                 result = label_question(question, topics, image_bytes_list)
-            log_event("ai_topics", "ai_label", seconds=t_label.s)
         except TruncatedResponseError as e:
-            log.error("ai_topics/truncated question_id=%s: %s", payload.question_id, e)
+            log.error("AI labelling of question %s was cut off: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=502,
                 detail="The AI response was cut off — please retry this question.",
             )
         except anthropic.RateLimitError as e:
-            log.error("ai_topics/rate_limit question_id=%s: %s", payload.question_id, e)
+            log.error("AI labelling of question %s was rate limited: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=429,
                 detail="AI topic labeling is rate limited — please retry in a moment.",
             )
         except anthropic.APIError as e:
-            log.error("ai_topics/api_error question_id=%s: %s", payload.question_id, e)
+            log.error("AI labelling of question %s failed: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=503,
                 detail="AI topic labeling is temporarily unavailable — please retry.",
             )
 
-    log_event("ai_topics", "total", seconds=t_total.s)
+    log_event(
+        f"AI labelled question {payload.question_id} ({n} page(s)) in {t_total.elapsed:.1f}s: "
+        f"database {t_db.elapsed + t_topics.elapsed:.2f}s, images {t_s3:.2f}s, "
+        f"downscale {t_ds:.2f}s, Claude {t_label.elapsed:.1f}s"
+    )
     return {"parts": result["parts"]}
 
 
@@ -579,7 +575,7 @@ def cancel_ingest_job(
     try:
         store.delete_prefix(prefix)
     except Exception:
-        log.error("cancel_ingest_job/s3_delete failed prefix=%s", prefix)
+        log.error("could not delete the cancelled job's S3 files under %s", prefix)
     return None
 
 
@@ -621,7 +617,7 @@ def save_proposal(
         raise HTTPException(status_code=422, detail=str(e))
     add_event(db, job.id, "proposal_edited", actor_user_id=current_user.id)
     db.commit()
-    log_job_event(job.id, "proposal_saved", edited=True)
+    log_job_event(job.id, "review edits saved")
     return {"saved": True}
 
 

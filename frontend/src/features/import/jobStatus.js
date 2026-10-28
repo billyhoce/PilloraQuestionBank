@@ -17,6 +17,12 @@ export const ACTIVE = ['queued', 'running']
 export const CANCELLABLE = ['awaiting_upload', 'queued', 'running', 'review_ready', 'failed']
 // Jobs retry applies to (the server refuses cancelled/confirmed/expired).
 export const RETRYABLE = ['queued', 'running', 'review_ready', 'failed']
+
+// Whether Retry would do anything: it reopens only failed and blocked tasks, so a job with none
+// (most queued, running and review-ready jobs) has nothing to retry and shows no button.
+export function canRetry(job) {
+  return RETRYABLE.includes(job.status) && (job.tasks_failed ?? 0) > 0
+}
 // Jobs still in the pipeline, or stopped in it: what the Auto import board shows.
 export const IN_PIPELINE = ['awaiting_upload', 'queued', 'running', 'failed']
 export const SETTLED = ['confirmed', 'cancelled', 'expired']

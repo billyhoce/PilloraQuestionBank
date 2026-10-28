@@ -99,6 +99,17 @@ describe('ReviewPage', () => {
     expect(within(list).getByRole('button', { name: /Question 2/ })).toHaveAttribute('data-flagged', 'true')
   })
 
+  it('marks an answered question with a green dot and warns on one with no answer', async () => {
+    renderPage()
+    const list = await screen.findByRole('complementary', { name: 'Questions' })
+    const answered = within(list).getByRole('button', { name: /Question 1/ })
+    expect(within(answered).getByRole('img', { name: 'has an answer' })).toBeInTheDocument()
+    expect(within(answered).queryByText('No answer')).not.toBeInTheDocument()
+    const unanswered = within(list).getByRole('button', { name: /Question 2/ })
+    expect(within(unanswered).getByText('No answer')).toBeInTheDocument()
+    expect(within(unanswered).queryByRole('img', { name: 'has an answer' })).not.toBeInTheDocument()
+  })
+
   it('highlights flagged pages and jumps to a question\'s page', async () => {
     renderPage()
     await screen.findByAltText('Page 2')

@@ -437,10 +437,13 @@ def test_list_and_detail_report_progress(admin_client, db_session, fake_object_s
     reg.status, reg.warnings, reg.finished_at = "done", ["w1", "w2"], datetime(2026, 1, 1, tzinfo=UTC)
     job.tasks.append(IngestTask(section=None, stage="segment", status="running"))
     job.tasks.append(IngestTask(section=None, stage="split", status="pending", needs_review=True))
+    job.tasks.append(IngestTask(section="q1", stage="locate", status="failed"))
+    job.tasks.append(IngestTask(section="q1", stage="render", status="blocked"))
     db_session.flush()
     row = admin_client.get("/api/import/jobs").json()["data"][0]
     assert row["stage"] == "segment"  # the running task
-    assert (row["tasks_done"], row["tasks_total"], row["warnings_count"], row["needs_review"]) == (1, 3, 2, True)
+    assert (row["tasks_done"], row["tasks_total"], row["warnings_count"], row["needs_review"]) == (1, 5, 2, True)
+    assert row["tasks_failed"] == 2  # failed and blocked: what Retry would reopen
 
     job.tasks[1].status = "done"
     job.tasks[1].finished_at = datetime(2026, 1, 2, tzinfo=UTC)
@@ -500,7 +503,7 @@ def test_record_usage_accumulates_cost_across_calls_and_logs_request_id(
     assert cost["input_tokens"] == 2000 and cost["output_tokens"] == 400 and cost["cache_hit"] == 100
     assert cost["cost_usd"] == pytest.approx(2 * (1000 * 1.0 + 50 * 0.1 + 200 * 5.0) / 1e6)
     assert job.report["filename_metadata"] == {"a": 1}
-    logged = {r.fields["anthropic_request_id"]: r for r in caplog.records if hasattr(r, "fields") and "anthropic_request_id" in r.fields}
+    logged = {rid: r for r in caplog.records for rid in ("req_a", "req_b", "req_c") if rid in r.getMessage()}
     assert set(logged) == {"req_a", "req_b", "req_c"}
     assert logged["req_a"].job_id == str(job.id)
 

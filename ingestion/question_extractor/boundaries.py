@@ -415,7 +415,8 @@ def build_questions(
     previous question, so its leading band is appended to that question rather
     than starting a new one. A page whose first part label is ``(a)``/``(i)``
     falls out of the same test, since the part label is content and there is no
-    anchor above it.
+    anchor above it. With no question open, content above the first anchor is a
+    preamble (the "Answer all the questions." line over Q1) and is left out.
 
     An anchorless page is only a continuation if it carries content: a page
     printed ``BLANK PAGE``, or one whose body band is empty, is padding and is
@@ -520,13 +521,23 @@ def build_questions(
             if first_boundary is not None
             else True
         )
-        if is_continuation:
-            result.continuation_note = _continuation_note(geom, furniture)
-
         page_bands: list[Band] = []
         continuation_bottom: float | None = None
 
-        if is_continuation:
+        if is_continuation and previous_number is None and anchors:
+            # Nothing is open, so the content above the first question number is
+            # a preamble ("Answer all the questions.", a section heading) rather
+            # than a question's tail. It is kept out of every band, as a tail
+            # would be, but the page is not flagged: no question lost anything.
+            log.debug(
+                "page %d: content above question %d with no question open; "
+                "leaving it out as a preamble",
+                geom.number,
+                anchors[0].number,
+            )
+            continuation_bottom = first_boundary
+        elif is_continuation:
+            result.continuation_note = _continuation_note(geom, furniture)
             bottom = (
                 first_boundary
                 if first_boundary is not None

@@ -16,6 +16,7 @@ from pathlib import Path
 from ingester import IngestConfig
 from question_extractor import ExtractConfig
 from question_extractor.cli import find_pdfs
+from question_extractor.logcontext import ContextLabel
 from question_extractor.pipeline import paper_name
 
 from . import artefacts
@@ -127,8 +128,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(levelname)-8s %(message)s",
+        format="%(levelname)-8s %(context)s%(message)s",
     )
+    for handler in logging.getLogger().handlers:  # the runner's lines name their task only here
+        handler.addFilter(ContextLabel())
     if args.command == "ingest":
         return _ingest(args)
     args.root.mkdir(parents=True, exist_ok=True)

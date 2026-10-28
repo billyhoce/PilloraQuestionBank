@@ -237,5 +237,6 @@ STAGE = Stage(
     # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range;
     # v4: a straightened scan's rectangles stay straightened, its pages carry straightened_deg;
     # v5: every paper lists every booklet page, with excluded_reason; pages no section drew are drawn
-    version=5,
+    # v6: answer pages' reasons no longer flag the questions they answer
+    version=6,
 )

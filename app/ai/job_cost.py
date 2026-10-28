@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy import select
 
 from app.log_context import current_context  # noqa: F401  (re-exported for callers/tests)
-from app.logger import log_tokens
+from app.logger import log_claude_call
 
 log = logging.getLogger("pillora")
 
@@ -23,7 +23,7 @@ def session_factory():
 
 
 def add_cost(job_id, fields: dict, factory=None) -> None:
-    """Add one call's ``fields`` (from ``log_tokens``) to the job's ``report["cost"]``.
+    """Add one call's ``fields`` (from ``log_claude_call``) to the job's ``report["cost"]``.
 
     Runs in its own short transaction and locks the job row (``SELECT ... FOR UPDATE``) while it
     reads and rewrites the report, so calls from concurrent tasks of one job cannot lose each
@@ -51,13 +51,14 @@ def add_cost(job_id, fields: dict, factory=None) -> None:
         log.exception("could not record job cost")
 
 
-def record_usage(func: str, model: str, usage, request_id: str | None = None) -> None:
-    """Log a call's request id, model and tokens, and add it to the current job's cost.
+def record_usage(purpose: str, model: str, usage, request_id: str | None = None, **call) -> None:
+    """Log a call (:func:`~app.logger.log_claude_call`, ``call`` its reply, seconds and stop
+    reason) and add it to the current job's cost.
 
     The job is the one in the log context (set by the runner per task); a call outside a job
-    (the question labeller) is only logged.
+    is only logged.
     """
-    fields = log_tokens(func, model, usage, request_id)
+    fields = log_claude_call(purpose, model, usage, request_id, **call)
     job_id = current_context().get("job_id")
     if job_id:
         add_cost(job_id, fields)

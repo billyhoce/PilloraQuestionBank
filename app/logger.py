@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 
@@ -6,16 +7,15 @@ from app.log_context import log_context
 log = logging.getLogger("pillora")
 
 
-def log_event(func: str, step: str, level: int = logging.INFO, **fields) -> None:
-    """One structured line: ``msg`` is ``func/step`` and the fields ride as JSON keys."""
-    log.log(level, "%s/%s", func, step, extra={"fields": {"func": func, "step": step, **fields}})
+def log_event(message: str, level: int = logging.INFO, **fields) -> None:
+    """One line: ``message`` for a human, then ``fields`` (``None`` ones left out) as ``key=value``."""
+    log.log(level, "%s", message, extra={"fields": fields})
 
 
-def log_job_event(job_id, step: str, level: int = logging.INFO, **fields) -> None:
-    """A lifecycle event of an ingest job (``ingest_job/<step>``), stamped with the job id."""
-    job_id = str(job_id)
-    with log_context(job_id=job_id):
-        log_event("ingest_job", step, level, job_id=job_id, **fields)
+def log_job_event(job_id, message: str, level: int = logging.INFO, **fields) -> None:
+    """A lifecycle event of an ingest job, logged under the job's context (its id leads the line)."""
+    with log_context(job_id=str(job_id)):
+        log_event(message, level, **fields)
 
 
 class Timer:
@@ -89,14 +89,45 @@ def usage_fields(model: str, usage) -> dict:
     return fields
 
 
-def log_tokens(func: str, model: str, usage, request_id: str | None = None) -> dict:
-    """Log one call's tokens/cost (with Anthropic's request id as ``anthropic_request_id``).
+# A logged reply is cut here: Docker splits a log line past 16 KB into separate journald
+# entries, and a segment reply (the largest) is a few KB.
+MAX_REPLY_CHARS = 12_000
 
-    Returns the logged fields. ``request_id`` is not the log context's ``request_id`` (the API
-    request), hence the distinct key.
-    """
+
+def _compact(reply) -> str:
+    """The reply on one line: JSON re-dumped compactly, other text with its newlines escaped."""
+    if not isinstance(reply, str):
+        return json.dumps(reply, default=str, ensure_ascii=False)
+    try:
+        return json.dumps(json.loads(reply), ensure_ascii=False)
+    except ValueError:
+        return reply.replace("\n", "\\n")
+
+
+def log_claude_call(
+    purpose: str, model: str, usage, request_id: str | None = None, reply=None,
+    seconds: float | None = None, stop_reason: str | None = None,
+) -> dict:
+    """One line per Messages API call: what it was for, model, time, tokens, cost, Anthropic's
+    request id and the reply (text, or a tool call's input). Returns :func:`usage_fields`."""
     fields = usage_fields(model, usage)
-    if request_id:
-        fields["anthropic_request_id"] = request_id
-    log_event(func, "tokens", **fields)
+    said = f"Claude call ({purpose}): {model}"
+    if seconds is not None:
+        said += f", {seconds:.1f}s"
+    said += f", {fields['input_tokens']:,} in"
+    if fields.get("cache_hit"):
+        said += f" (+{fields['cache_hit']:,} cached)"
+    said += f" / {fields['output_tokens']:,} out tokens"
+    if "cost_usd" in fields:
+        said += f", ${fields['cost_usd']:.4f}"
+    if isinstance(request_id, str):
+        said += f", {request_id}"
+    if isinstance(stop_reason, str) and stop_reason not in ("end_turn", "tool_use"):
+        said += f", stopped on {stop_reason}"
+    if reply is not None:
+        text = _compact(reply)
+        if len(text) > MAX_REPLY_CHARS:
+            text = f"{text[:MAX_REPLY_CHARS]}… ({len(text) - MAX_REPLY_CHARS:,} more chars)"
+        said += f". Reply: {text}"
+    log.info("%s", said)
     return fields

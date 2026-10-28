@@ -103,7 +103,7 @@ def segment_into(
         plan = _segment(pdf, config)
 
     path = write_plan(plan, out_dir)
-    log.info(
+    log.debug(
         "%s: %d section(s) from %s -> %s",
         plan.paper,
         len(plan.segments),
@@ -112,7 +112,7 @@ def segment_into(
     )
     if write_fixture:
         fixture = write_plan_to(plan, fixture_path(pdf))
-        log.info("%s: wrote fixture %s", plan.paper, fixture)
+        log.debug("%s: wrote fixture %s", plan.paper, fixture)
     return plan
 
 
@@ -120,7 +120,7 @@ def find_plan(pdf: Path, out_dir: Path) -> SegmentPlan | None:
     """The plan in ``out_dir``, else the committed fixture (copied there), else ``None``."""
     cached = out_dir / SEGMENTS_NAME
     if cached.exists():
-        log.info("%s: reusing %s", paper_name(pdf), cached)
+        log.debug("%s: reusing %s", paper_name(pdf), cached)
         return read_plan(cached, pdf=pdf)
 
     fixture = fixture_path(pdf)

@@ -784,12 +784,20 @@ export default function ReviewPage() {
                           className="flex-1 text-left text-sm"
                         >
                           <span className="font-medium">{answerOnly ? 'Answer' : 'Question'} {q.number}</span>
+                          {!answerOnly && q.answer_rects.length > 0 && (
+                            <span
+                              role="img" aria-label="has an answer" title="Has an answer"
+                              className="ml-1.5 inline-block h-2 w-2 rounded-full bg-green-600 align-middle"
+                            />
+                          )}
                           {answerOnly && (
                             <span className="text-xs text-gray-500">
                               {' '}({q.answer_rects.length} rectangle{q.answer_rects.length === 1 ? '' : 's'})
                             </span>
                           )}
-                          {!answerOnly && q.answer_rects.length === 0 && <span className="text-xs text-gray-500"> (no answer)</span>}
+                          {!answerOnly && q.answer_rects.length === 0 && (
+                            <span className="block text-xs text-amber-800">No answer</span>
+                          )}
                           {q.flags.map(f => (
                             <span key={f} className="block text-xs text-amber-800">{f}</span>
                           ))}

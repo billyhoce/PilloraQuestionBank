@@ -195,7 +195,7 @@ def _drop_job_objects(source_key: str, store: ObjectStore) -> None:
     try:
         store.delete_prefix(prefix)
     except Exception:
-        log.error("confirm_job_paper/s3_delete failed prefix=%s", prefix)
+        log.error("could not delete the job's S3 files under %s", prefix)
 
 
 def _linked_answers(db: Any, job: IngestJob, key: str):
@@ -279,7 +279,8 @@ def confirm_job_paper(
         raise ReviewActionError(422, f"Paper {key!r} has no questions to import; skip it instead")
     if partner is not None and not _answers_usable(db, job, key, partner, partner_job):
         log.warning(
-            "confirm_job_paper/linked_answers_unavailable job=%s key=%s answer_job=%s", job.id, key, partner_job.id
+            "job %s: the answers linked to paper %s (job %s) are unavailable; confirming without them",
+            job.id, key, partner_job.id,
         )
         partner = partner_job = None
     try:  # a school typed as new is created now, in the confirm's transaction (#87)
@@ -342,15 +343,15 @@ def confirm_job_paper(
         _delete_quietly(temp_keys)
         raise
     log_job_event(
-        job_id, "paper_confirmed", paper_id=paper.id, paper_label=key, job_settled=settled,
+        job_id, f"paper {key} confirmed as paper {paper.id}" + ("; job settled" if settled else ""),
         answers_from_job=str(partner_job_id) if partner_job_id else None,
     )
     if settled:
         _drop_job_objects(source_key, store)
     if partner_job_id is not None:
         log_job_event(
-            partner_job_id, "paper_attached", paper_id=paper.id, paper_label=partner_key, attached=attached,
-            unmatched=[str(n) for n in unmatched], job_settled=answers_settled, via_job=str(job_id),
+            partner_job_id, f"answers {partner_key} attached to paper {paper.id}" + ("; job settled" if answers_settled else ""),
+            attached=attached, unmatched=[str(n) for n in unmatched] or None, via_job=str(job_id),
         )
         if answers_settled and not same_job:
             _drop_job_objects(partner_source, store)
@@ -391,7 +392,7 @@ def skip_job_paper(job: IngestJob, key: str, db: Any, store: ObjectStore, admin:
     _release_link(db, job, key)
     add_event(db, job_id, "paper_skipped", actor_user_id=getattr(admin, "id", None), paper_label=key, job_settled=settled)
     db.commit()
-    log_job_event(job_id, "paper_skipped", paper_label=key, job_settled=settled)
+    log_job_event(job_id, f"paper {key} skipped" + ("; job settled" if settled else ""))
     if settled:
         _drop_job_objects(source_key, store)
     return settled
@@ -523,8 +524,8 @@ def attach_answers(
         _delete_quietly(temp_keys)
         raise
     log_job_event(
-        job_id, "paper_attached", paper_id=paper_id, paper_label=key, attached=numbers,
-        unmatched=[str(n) for n in unmatched], job_settled=settled,
+        job_id, f"answers {key} attached to paper {paper_id}" + ("; job settled" if settled else ""),
+        attached=numbers, unmatched=[str(n) for n in unmatched] or None,
     )
     if settled:
         _drop_job_objects(source_key, store)

@@ -6,7 +6,7 @@ import Spinner from '../../components/Spinner'
 import AgeBadge from './AgeBadge'
 import JobDetail from './JobDetail'
 import { AWAITING_QUERY } from './jobAge'
-import { CANCELLABLE, RETRYABLE, STATUS_LABELS, formatCreated } from './jobStatus'
+import { CANCELLABLE, STATUS_LABELS, canRetry, formatCreated } from './jobStatus'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -145,7 +145,7 @@ export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
                         Review
                       </Link>
                     )}
-                    {RETRYABLE.includes(job.status) && (
+                    {canRetry(job) && (
                       <button type="button" onClick={() => onRetry(job)} className="text-blue-600 hover:underline mr-3">
                         Retry
                       </button>

@@ -78,9 +78,6 @@ def upload_pages(
             i += 1
 
         n = len(pages)
-        log_event("upload_pages", "rasterize", seconds=round(t_raster, 3), pages=n)
-        log_event("upload_pages", "img_proc", seconds=round(t_proc, 3), pages=n)
-        log_event("upload_pages", "s3_upload", seconds=round(t_s3, 3), pages=n)
 
         with Timer() as t_meta:
             suggested = (
@@ -88,9 +85,11 @@ def upload_pages(
                 if suggested_metadata is not None
                 else extract_metadata(filename, db)
             )
-        log_event("upload_pages", "ai_extract", seconds=t_meta.s)
 
-    log_event("upload_pages", "total", seconds=t_total.s)
+    log_event(
+        f"manual import: {n} page(s) prepared in {t_total.elapsed:.1f}s: render {t_raster:.1f}s, "
+        f"process {t_proc:.1f}s, S3 {t_s3:.1f}s, metadata {t_meta.elapsed:.1f}s"
+    )
     return {"pages": pages, "suggested_metadata": suggested}
 
 
@@ -187,7 +186,7 @@ def confirm_import(
         try:
             delete_object(temp_key)
         except Exception:
-            log.warning("confirm_import/temp_delete_failed key=%s", temp_key, exc_info=True)
+            log.warning("could not delete the temporary image %s", temp_key, exc_info=True)
 
     return paper
 
@@ -223,6 +222,9 @@ def delete_paper(paper_id: int, db: Any, actor: Any = None) -> list[str]:
     db.flush()
     for job_id in sorted(job_ids, key=str):
         add_event(db, job_id, "paper_deleted", actor_user_id=getattr(actor, "id", None), **details)
-        log_job_event(job_id, "paper_deleted", user_id=getattr(actor, "id", None), **details)
+        log_job_event(
+            job_id, f"bank paper {paper_id} deleted by user {getattr(actor, 'id', None)}",  # no request context names them
+            **{k: v for k, v in details.items() if k != "paper_id"},
+        )
     db.flush()
     return image_keys

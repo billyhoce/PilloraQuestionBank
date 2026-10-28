@@ -114,7 +114,7 @@ def finish_upload(job: IngestJob, admin: Any, db: Session, store: ObjectStore) -
         db, job.id, "created", actor_user_id=admin.id, filename=job.filename, size=head.size,
     )
     db.flush()
-    log_job_event(job.id, "created", filename=job.filename, size=head.size, user_id=admin.id)
+    log_job_event(job.id, f"job created for {job.filename!r} ({head.size / 1e6:.1f} MB)")  # the user is in the context
     return job
 
 
@@ -125,7 +125,7 @@ def extract_paper_metadata_safely(extract_metadata, filename: str, db: Session, 
         try:
             return extract_metadata(filename, db, cover=attempt)
         except Exception:
-            log.exception("paper metadata extraction failed (cover=%s)", attempt is not None)
+            log.exception("paper metadata extraction failed (%s)", "from the cover" if attempt is not None else "from the filename")
     return {}
 
 
@@ -151,7 +151,7 @@ def cancel_job(job: IngestJob, db: Session | None = None, actor: Any = None) -> 
     job.status = "cancelled"
     if db is not None:
         add_event(db, job.id, "cancelled", actor_user_id=getattr(actor, "id", None), previous_status=previous)
-    log_job_event(job.id, "cancelled", previous_status=previous)
+    log_job_event(job.id, f"job cancelled (was {previous})")
     return job_prefix(job.source_key)
 
 
@@ -183,8 +183,9 @@ def job_progress(job: IngestJob) -> dict:
     """Progress of a job from its tasks.
 
     ``done``/``total`` count tasks (``done`` = done or skipped; ``total`` grows as the job's
-    sections fan out). ``stage`` is the stage of the running task, else of the task that
-    finished most recently, else ``None`` before anything has started."""
+    sections fan out). ``tasks_failed`` counts failed and blocked tasks: what Retry reopens, so a
+    job with none has nothing to retry. ``stage`` is the stage of the running task, else of the
+    task that finished most recently, else ``None`` before anything has started."""
     tasks = list(job.tasks)
     running = next((t for t in tasks if t.status == "running"), None)
     if running is not None:
@@ -197,6 +198,7 @@ def job_progress(job: IngestJob) -> dict:
         "stage": stage,
         "tasks_done": sum(1 for t in tasks if t.status in _SETTLED),
         "tasks_total": len(tasks),
+        "tasks_failed": sum(1 for t in tasks if t.status in ("failed", "blocked")),
         "warnings_count": sum(len(t.warnings or ()) for t in tasks),
         "needs_review": any(t.needs_review for t in tasks),
     }
@@ -229,7 +231,7 @@ def retry_job(job: IngestJob, db: Session, actor: Any = None) -> int:
         reopened=len(reopened), tasks=[f"{t.stage}:{t.section or '-'}" for t in reopened],
     )
     db.commit()  # the reopen committed in the store; the event is its own small transaction
-    log_job_event(job.id, "retry", reopened=len(reopened), tasks=[f"{t.stage}:{t.section or '-'}" for t in reopened])
+    log_job_event(job.id, f"retry: {len(reopened)} task(s) reopened")  # each logs its own "back to the queue"
     return len(reopened)
 
 

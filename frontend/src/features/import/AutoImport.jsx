@@ -9,7 +9,7 @@ import JobHistory from './JobHistory'
 import PdfDropZone from './PdfDropZone'
 import PipelineStepper from './PipelineStepper'
 import { jobPhase, phaseCaption } from './pipelinePhases'
-import { ACTIVE, CANCELLABLE, IN_PIPELINE } from './jobStatus'
+import { ACTIVE, CANCELLABLE, IN_PIPELINE, canRetry } from './jobStatus'
 import { useUploadQueue } from './uploadQueueContext'
 import usePoll from './usePoll'
 
@@ -92,7 +92,7 @@ function JobRow({ job, workerAlive, open, onToggle, onRetry, onCancel, version }
         </div>
         <PipelineStepper current={phase.current} state={phase.state} label={`Steps of ${job.filename}`} />
         <div className="text-right whitespace-nowrap space-x-3">
-          {job.status === 'failed' && (
+          {canRetry(job) && (
             <button type="button" onClick={() => onRetry(job)} className={`${linkBtn} text-blue-600`}>Retry</button>
           )}
           {CANCELLABLE.includes(job.status) && (

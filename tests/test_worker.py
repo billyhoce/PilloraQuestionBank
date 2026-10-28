@@ -39,6 +39,7 @@ class Fake:
         self.raise_in_segment = False
         self.seen: list[tuple[str, str]] = []
         self.on_report = None
+        self.report_reads_segments = False  # as the real report does: it cannot run without them
         self.plan = PLAN
         self.proposal = PROPOSAL
 
@@ -66,6 +67,8 @@ class Fake:
 
         def report(ctx):
             self.seen.append(("report", self._status(ctx)))
+            if self.report_reads_segments and not (ctx.job_dir / "segments.json").is_file():
+                return failed("segments.json is missing")
             (ctx.job_dir / "pages").mkdir(exist_ok=True)
             (ctx.job_dir / "pages" / "p01.webp").write_bytes(b"webp")
             (ctx.job_dir / "proposal.json").write_text(json.dumps(self.proposal))
@@ -78,7 +81,7 @@ class Fake:
         return Registry(
             [
                 Stage("register", JOB, CPU, register),
-                Stage("segment", JOB, CPU, segment, needs=("register",)),
+                Stage("segment", JOB, CPU, segment, needs=("register",), outputs=lambda ctx: [ctx.job_dir / "segments.json"]),
                 Stage("split", JOB, CPU, split, needs=("segment",), fan_out=True),
                 Stage("report", JOB, CPU, report, soft_needs=("register", "segment", "split"), after_sections=True),
             ]
@@ -298,6 +301,34 @@ def test_retry_drops_saved_edits_only_when_the_proposal_changes(setup, regenerat
     assert row.proposal_edited == (edited if edit_kept else None)
 
 
+@pytest.mark.parametrize("scratch", ["released", "lost_in_a_restart"])
+def test_retry_rebuilds_a_scratch_folder_that_is_gone(setup, scratch):
+    """A retried task runs after the tasks whose artefacts went with the job's scratch folder:
+    released once `report` was done, or lost with the worker's container."""
+    from app.services.ingest_jobs import retry_job
+
+    factory, job, _, _, fake, make_worker, tmp_path = setup
+    fake.report_reads_segments = True
+    worker = make_worker()
+    worker.start()
+    drain(worker)
+    assert not (tmp_path / "scratch" / str(job)).exists()  # released with the proposal stored
+    with factory() as db:
+        report = db.scalars(select(IngestTask).where(IngestTask.job_id == job, IngestTask.stage == "report")).one()
+        report.status, report.fingerprint = "failed", None
+        db.commit()
+    if scratch == "lost_in_a_restart":
+        worker = make_worker()
+        worker.start()
+
+    with factory() as db:
+        assert retry_job(db.get(IngestJob, job), db) == 1
+    fake.seen.clear()
+    drain(worker)
+    assert [s for s, _ in fake.seen] == ["segment", "report"]  # segment rebuilt what report reads
+    assert job_row(factory, job).status == "review_ready"
+
+
 def test_sigterm_finishes_the_current_task_then_exits(setup):
     factory, job, _, _, fake, make_worker, _ = setup
     worker = make_worker()
@@ -335,23 +366,28 @@ def test_settings_come_from_the_environment():
     assert (s.pipeline.ingest.model, s.pipeline.ingest.retry_model) == ("m1", "m2")
 
 
-def test_segment_usage_is_logged_with_prices(caplog):
+def test_segment_call_is_handed_out_with_its_reply_and_logged_with_prices(caplog):
     from ingester import request as segment_request
 
-    from app.logger import _PRICES, log, log_tokens
+    from app.logger import _PRICES, log_claude_call
 
     assert "claude-haiku-4-5" in _PRICES
     seen = []
-    segment_request.usage_listener = lambda model, usage, rid: seen.append((model, usage, rid))
+    segment_request.usage_listener = lambda *call: seen.append(call)
     try:
         usage = type("U", (), {"input_tokens": 10, "output_tokens": 5})()
-        segment_request._report_usage("claude-haiku-4-5", type("R", (), {"usage": usage, "_request_id": "req_1"})())
-        assert seen == [("claude-haiku-4-5", usage, "req_1")]
-        segment_request.usage_listener = lambda model, usage, rid: 1 / 0  # a bad listener cannot fail a request
+        thinking = type("B", (), {"type": "thinking", "thinking": "hmm"})()
+        text = type("B", (), {"type": "text", "text": '{"segments": []}'})()
+        response = type("R", (), {"usage": usage, "_request_id": "req_1", "content": [thinking, text]})()
+        segment_request._report_usage("claude-haiku-4-5", response, 2.5)
+        assert seen == [("claude-haiku-4-5", usage, "req_1", '{"segments": []}', 2.5)]
+        segment_request.usage_listener = lambda *call: 1 / 0  # a bad listener cannot fail a request
         segment_request._report_usage("claude-haiku-4-5", type("R", (), {"usage": usage})())
     finally:
         segment_request.usage_listener = None
-    log_tokens("ingest_segment", "claude-haiku-4-5", usage)  # does not raise
+    with caplog.at_level("INFO", logger="pillora"):
+        log_claude_call("find the papers in the booklet", "claude-haiku-4-5", usage, "req_1", reply='{"segments": []}')
+    assert "$0.0000" in caplog.text and 'Reply: {"segments": []}' in caplog.text
 
 
 def test_register_fills_in_page_count_and_sha256(setup):

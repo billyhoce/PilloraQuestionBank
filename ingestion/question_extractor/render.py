@@ -158,7 +158,7 @@ def render_outputs(
             if sheet is not None:
                 sheet.close()
 
-    log.info("rendered %d page(s) to %s", len(written), out_dir)
+    log.debug("rendered %d page(s) to %s", len(written), out_dir)
     return written
 
 

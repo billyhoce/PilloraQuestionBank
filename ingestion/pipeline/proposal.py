@@ -66,9 +66,10 @@ Shape::
   its review image and every rectangle on it were made after; a cropper rotates the page
   as filed by it first. ``null`` for a page in its own frame; a proposal from before the
   key existed has every rectangle in the page's own frame.
-- Flags: per question, without repetition, ``page N: <reason>`` for each flagged page it
-  touches (answer pages' reasons go to the question they answer), ``pixel_ink`` and
-  ``grid_page``.
+- Flags: per question, without repetition, ``page N: <reason>`` for each flagged page its
+  question rectangles touch, ``pixel_ink`` and ``grid_page``. An answer rectangle adds no
+  flag to the question it answers (its page carries the reason); in an answer-only paper
+  the answers are the questions, so theirs are kept.
 - Unrouted: every section not extracted, with its reason and booklet page range. A question
   section not extracted whose answer section was still gets a paper with no ``questions``
   and the answers in ``orphan_answers``. An answer-only upload is a paper with
@@ -245,8 +246,9 @@ def _paper(job_dir, staging, q_label, answer, loaded, by_label, tolerance) -> di
                 elif target is None:
                     orphans.extend(rects)
                 else:
+                    # Its flags stay off the question: an answer page's reason is shown on
+                    # the page, and repeated on every question it answers it is only noise.
                     target["answer_rects"].extend(rects)
-                    target["flags"].extend(f for f in flags if f not in target["flags"])
             else:
                 questions[number] = {
                     "number": number, "question_rects": rects, "answer_rects": [], "flags": flags,

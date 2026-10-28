@@ -10,6 +10,7 @@ override outer ones).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -21,6 +22,29 @@ _fields: ContextVar[Mapping[str, object]] = ContextVar("log_fields", default=Map
 def current_context() -> Mapping[str, object]:
     """The fields of the innermost open context (empty outside any)."""
     return _fields.get()
+
+
+def describe(fields: Mapping[str, object]) -> str:
+    """The context as a line prefix: ``job <id> q1 locate attempt 2`` (attempt only past the first).
+
+    The one place the prefix is spelled, so a message never repeats the job or task itself."""
+    parts = []
+    if fields.get("job_id"):
+        parts.append(f"job {fields['job_id']}")
+    parts += [str(fields[k]) for k in ("section", "stage") if fields.get(k)]
+    attempt = fields.get("task_attempt")
+    if isinstance(attempt, int) and attempt > 1:
+        parts.append(f"attempt {attempt}")
+    return " ".join(parts)
+
+
+class ContextLabel(logging.Filter):
+    """Sets ``record.context`` to ``[<describe()>] `` (or ``""``) for a ``%(context)s`` format."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        label = describe(current_context())
+        record.context = f"[{label}] " if label else ""
+        return True
 
 
 def set_context(**fields: object) -> None:

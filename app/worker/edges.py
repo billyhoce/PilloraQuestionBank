@@ -109,7 +109,7 @@ class Edges:
         folder.mkdir(parents=True, exist_ok=True)
         source = folder / SOURCE_NAME
         if not source.is_file():
-            log.info("job %s: fetching the source PDF into %s", job_id, folder)
+            log.debug("fetching the source PDF into %s", folder)
             artefacts.write_bytes(source, self._objects.get(self._source_key(job_id)))
         if self._fixtures is not None:
             self._place_fixture(job_id, folder)
@@ -139,7 +139,7 @@ class Edges:
         reason = check_pdf(ctx.source)
         if reason is None:
             return None
-        log.warning("job %s: rejected source PDF: %s", ctx.job_id, reason)
+        log.warning("rejected the source PDF: %s", reason)
         return failed(reason, needs_review=False)
 
     def after_register(self, ctx: StageContext, outcome: Outcome) -> Outcome:
@@ -162,7 +162,7 @@ class Edges:
         info = artefacts.read_json(path)
         job.page_count = info.get("page_count")
         job.sha256 = info.get("sha256")
-        log_job_event(job.id, "registered", sha256=job.sha256, page_count=job.page_count)
+        log_job_event(job.id, f"booklet read: {job.page_count} page(s)", sha256=job.sha256)
 
     def after_segment(self, ctx: StageContext, outcome: Outcome) -> Outcome:
         """Read each paper's metadata from its own cover and store it by paper key."""
@@ -172,7 +172,7 @@ class Edges:
         try:
             plan = read_plan(path, pdf=ctx.source)
         except (OSError, ValueError, KeyError):
-            log.warning("job %s: unreadable segments.json; no paper metadata", ctx.job_id)
+            log.warning("unreadable segments.json; no paper metadata")
             return outcome
         job_uuid = uuid.UUID(ctx.job_id)
         with self._factory() as db:
@@ -185,10 +185,9 @@ class Edges:
                 key = paper_key(question, answer)
                 cover = self._cover_pdf(source, question or answer, job_uuid)
                 papers[key] = extract_paper_metadata_safely(self._extract_metadata, job.filename, db, cover)
-                log_job_event(
-                    job_uuid, "paper_metadata", paper=key, cover=cover is not None,
-                    fields=sorted(k for k, v in papers[key].items() if v is not None),
-                )
+                found = sorted(k for k, v in papers[key].items() if v is not None and k != "extracted")
+                # Whether the cover or the filename was read is on the Claude call's own line.
+                log_job_event(job_uuid, f"paper {key} metadata: {', '.join(found) or 'none found'}")
             if papers:
                 record_paper_metadata(job, db, papers)
         return outcome
@@ -200,7 +199,7 @@ class Edges:
         try:
             return extract_pages(source, pages)
         except Exception:
-            log.warning("job %s: could not cut the cover of %s", job_uuid, section.label)
+            log.warning("could not cut the cover of %s; reading the filename only", section.label)
             return None
 
     def after_report(self, ctx: StageContext, outcome: Outcome) -> Outcome:
@@ -228,7 +227,7 @@ class Edges:
             sync_job_papers(db, job)  # same transaction as the proposal
             match_job(db, job)  # propose answer-only papers' confirmed papers
             db.commit()
-        log_job_event(job_uuid, "proposal_stored", papers=len(proposal.get("papers", [])))
+        log_job_event(job_uuid, f"proposal stored: {len(proposal.get('papers', []))} paper(s)")
         return outcome
 
     @staticmethod
@@ -242,7 +241,7 @@ class Edges:
                 try:
                     bundle[name] = artefacts.read_json(path)
                 except (OSError, ValueError):
-                    log.warning("job %s: could not read %s for the debug bundle", ctx.job_id, filename)
+                    log.warning("could not read %s for the debug bundle", filename)
         return bundle
 
     def release_scratch(self, job_id: str) -> bool:
@@ -268,7 +267,7 @@ class Edges:
             if job is None or job.proposal is None or job.status in FAILED_JOB_STATUSES:
                 return False
         shutil.rmtree(self._scratch / str(job_id), ignore_errors=True)
-        log_job_event(job_uuid, "scratch_released")
+        log.debug("job %s: scratch folder released", job_id)
         return True
 
     def _summary(self, job_id: str, outcome: Outcome) -> dict:

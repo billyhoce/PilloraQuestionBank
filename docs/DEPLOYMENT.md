@@ -320,7 +320,14 @@ in the deploy user's `authorized_keys`; that user must be in `systemd-journal` o
 `sudo`). There is no log viewer in the app or a hosted service.
 
 No interactive session is needed: run `journalctl` over SSH from your machine and filter locally.
-`-o cat` prints just the JSON line.
+`-o cat` prints just the app's own line:
+
+```text
+2026-10-28 15:36:11.769 WARNING [job 139b2f78-… q1 locate] page 9: ignoring out-of-sequence question number 8
+```
+
+The bracket is the context: the job, section, stage (and attempt after the first) in the worker; the
+request id and user in the API. Every line of a traceback repeats it, so a grep keeps the traceback.
 
 ```bash
 VM=<user>@<DEPLOY_HOST>
@@ -331,15 +338,19 @@ ssh $VM "journalctl -t pillora-worker -t pillora-api --since -7d -o cat" | grep 
 # One API request, by the X-Request-ID the user quotes
 ssh $VM "journalctl -t pillora-api --since today -o cat" | grep <request-id>
 
-# Follow the worker live; last 200 lines; errors only (pretty-printed with jq)
+# Follow the worker live; last 200 lines; errors only; every Claude call (with its reply)
 ssh $VM "journalctl -t pillora-worker -f -o cat"
 ssh $VM "journalctl -t pillora-api -n 200 -o cat"
-ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | jq -c 'select(.level == "ERROR")'
+ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | grep ' ERROR '
+ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | grep 'Claude call'
 
 # Save a day to a file
-ssh $VM "journalctl -t pillora-worker --since 2026-10-26 --until 2026-10-27 -o cat" > worker.jsonl
+ssh $VM "journalctl -t pillora-worker --since 2026-10-26 --until 2026-10-27 -o cat" > worker.log
 ```
 
 - `--since`/`--until` take dates, `today`, `yesterday` or relative times such as `-2h`.
 - On the VM, `docker compose -f docker-compose.prod.yml logs -f` (from `/opt/pillora/repo/deploy`)
   also works, but shows only the current containers, i.e. since the last deploy.
+- Locally the lines go to the terminal running the API or worker; a worker in the compose profile
+  is read with `docker compose logs worker --no-log-prefix` (lost when the container is recreated).
+- `LOG_LEVEL=DEBUG` adds the ingestion stages' routine progress (calibration, renders, scratch paths).

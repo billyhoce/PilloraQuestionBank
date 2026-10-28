@@ -55,7 +55,7 @@ describe('AutoImport', () => {
 
   it('shows a failed job\'s reason and step on the board, with Retry', async () => {
     api.import.listJobs.mockResolvedValue(listing([
-      { id: 'f', filename: 'locked.pdf', status: 'failed', error: 'register failed: The PDF is password protected', created_at: daysAgo(1) },
+      { id: 'f', filename: 'locked.pdf', status: 'failed', tasks_failed: 1, error: 'register failed: The PDF is password protected', created_at: daysAgo(1) },
     ]))
     renderPage()
     await screen.findAllByText('locked.pdf')
@@ -195,6 +195,23 @@ describe('AutoImport', () => {
     renderPage()
     await screen.findByText('r.pdf')
     expect(within(history()).getByRole('link', { name: 'Review' })).toHaveAttribute('href', '/admin/import/jobs/j9/review')
+  })
+
+  it('offers Retry in the history only on jobs with a failed or blocked task', async () => {
+    api.import.listJobs.mockResolvedValue(listing([
+      { id: 'q', filename: 'queued.pdf', status: 'queued', tasks_failed: 0, created_at: daysAgo(1) },
+      { id: 'r', filename: 'ready.pdf', status: 'review_ready', tasks_failed: 0, created_at: daysAgo(1) },
+      { id: 's', filename: 'section.pdf', status: 'review_ready', tasks_failed: 2, created_at: daysAgo(1) },
+      { id: 'f', filename: 'failed.pdf', status: 'failed', tasks_failed: 1, created_at: daysAgo(1) },
+    ]))
+    renderPage()
+    await screen.findAllByText('section.pdf')
+    const row = name => within(history()).getByText(name).closest('tr')
+    expect(within(row('queued.pdf')).queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(within(row('ready.pdf')).queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(within(row('failed.pdf')).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    await userEvent.click(within(row('section.pdf')).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(api.import.retryJob).toHaveBeenCalledWith('s'))
   })
 
   describe('the upload queue', () => {

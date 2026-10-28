@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,20 +15,29 @@ from .segments import READING_ORDERS, TEMPLATES, Segment
 
 log = logging.getLogger(__name__)
 
-# A caller that wants the Messages API's token usage (the webapp's worker logs it with its
-# prices) sets this: ``listener(model, usage, request_id)`` after every request, where
-# ``request_id`` is Anthropic's id for the call (``None`` if the response carries none). The ingester knows no
-# prices and never imports the app, so the usage is handed out instead of logged here.
-usage_listener: Callable[[str, object, str | None], None] | None = None
+# A caller that wants each Messages API call (the webapp's worker logs it with its prices) sets
+# this: ``listener(model, usage, request_id, reply, seconds)`` after every request, where
+# ``request_id`` is Anthropic's id for the call (``None`` if the response carries none) and
+# ``reply`` the text the model answered (``None`` without a text block). The ingester knows no
+# prices and never imports the app, so the call is handed out instead of logged here.
+usage_listener: Callable[[str, object, str | None, str | None, float], None] | None = None
 
 
-def _report_usage(model: str, response: object) -> None:
+def reply_text(response: object) -> str | None:
+    """The response's first text block (thinking blocks are left out)."""
+    content = getattr(response, "content", None) or []
+    return next((block.text for block in content if getattr(block, "type", None) == "text"), None)
+
+
+def _report_usage(model: str, response: object, seconds: float = 0.0) -> None:
     usage = getattr(response, "usage", None)
     request_id = getattr(response, "_request_id", None) or getattr(response, "id", None)
+    reply = reply_text(response)
+    log.debug("%s replied in %.1fs: %s", model, seconds, reply)
     if usage_listener is None or usage is None:
         return
     try:
-        usage_listener(model, usage, request_id)
+        usage_listener(model, usage, request_id, reply, seconds)
     except Exception:  # a logging hook must never fail a segmentation
         log.debug("usage listener failed", exc_info=True)
 
@@ -277,13 +287,14 @@ def ask(model: str, pdf_b64: str, page_count: int, config: IngestConfig) -> Mode
         )
 
     request = build_request(model, pdf_b64, page_count, config)
+    started = time.perf_counter()
     try:
         client = anthropic.Anthropic()
         response = client.messages.create(**request)
     except Exception as exc:  # the SDK's whole error tree, plus a missing key
         return ModelAnswer(model=model, error=f"{type(exc).__name__}: {exc}")
 
-    _report_usage(model, response)
+    _report_usage(model, response, time.perf_counter() - started)
     if response.stop_reason == "refusal":
         return ModelAnswer(model=model, error="the request was refused by the model")
     if response.stop_reason == "max_tokens":
@@ -295,7 +306,7 @@ def ask(model: str, pdf_b64: str, page_count: int, config: IngestConfig) -> Mode
             ),
         )
 
-    body = next((block.text for block in response.content if block.type == "text"), None)
+    body = reply_text(response)
     if body is None:
         return ModelAnswer(model=model, error="the reply carried no text block")
     return parse_answer(model, body)

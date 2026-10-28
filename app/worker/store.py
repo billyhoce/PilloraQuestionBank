@@ -362,6 +362,14 @@ class SqlStore:
             ).scalars().all()
             return [self._job(row) for row in rows]
 
+    def claimable_job_ids(self) -> list[str]:
+        """The ids of :meth:`jobs`, without loading the rows (the worker asks every poll)."""
+        with self._session() as db:
+            ids = db.execute(
+                select(IngestJob.id).where(IngestJob.status.in_(CLAIMABLE_JOB_STATUSES))
+            ).scalars().all()
+            return [str(job_id) for job_id in ids]
+
     def tasks(self, job_id: str | None = None) -> list[Task]:
         with self._session() as db:
             query = select(IngestTask).order_by(IngestTask.id)

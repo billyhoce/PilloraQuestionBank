@@ -156,7 +156,7 @@ def grid_pages(
     is still unread (:func:`read_labels`).
     """
     name = paper_name(pdf_path)
-    log.info("processing %s as an answer table", pdf_path.name)
+    log.debug("processing %s as an answer table", pdf_path.name)
     scan_config = replace(config, table_rule_pos_tol=config.scan_rule_pos_tol)
 
     try:

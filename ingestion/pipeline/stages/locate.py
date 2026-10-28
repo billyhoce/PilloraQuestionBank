@@ -116,5 +116,5 @@ STAGE = Stage(
         ctx.path(ctx.section, "manifest.json"),
         ctx.path(ctx.section, DETECTIONS_NAME),
     ],
-    version=2,  # v2: a scanned section is read off scan's straightened copy and OCR
+    version=3,  # v3: content above the first question with none open is a preamble, not flagged
 )

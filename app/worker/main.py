@@ -25,6 +25,7 @@ from pipeline.config import PipelineConfig
 from question_extractor import ExtractConfig
 
 from app.ai.job_cost import record_usage
+from app.log_context import log_context
 from app.logging_setup import configure_logging
 from app.worker.edges import Edges
 from app.worker.store import REPORT_STAGE, SqlStore
@@ -110,6 +111,8 @@ class Worker:
         self._session_factory = session_factory
         self._objects = object_store
         self._sweep_checked: datetime | None = None
+        # Jobs revalidated since their scratch folder was last known to be complete.
+        self._validated: set[str] = set()
 
     # --- lifecycle ----------------------------------------------------------
     def request_stop(self, *_args) -> None:
@@ -125,14 +128,27 @@ class Worker:
         the finished tasks of unfinished jobs whose artefacts are gone (a lost scratch folder)."""
         self.store.touch_worker()
         for task in self.store.reset_stale(self.settings.pipeline.retry_limit):
-            log.warning("task %s %s of job %s: lease expired, %s",
-                        task.stage, task.section or "-", task.job_id, task.status)
+            with log_context(job_id=task.job_id, section=task.section, stage=task.stage):
+                log.warning("lease expired; task is now %s", task.status)
         for job in self.store.jobs():
             self.store.set_job_status(job.id, job.status)
+        self._revalidate_new_jobs()
+
+    def _revalidate_new_jobs(self) -> None:
+        """Revalidate each queued/running job once before any of its tasks runs here.
+
+        Not only at start: a Retry puts a ``failed`` or ``review_ready`` job back in the queue
+        while the worker runs, and its scratch folder may be gone (released after ``report``, or
+        lost with a restart). Revalidating first reopens the tasks whose artefacts went with it,
+        so the retried task finds its inputs instead of failing again for want of them."""
+        for job_id in self.store.claimable_job_ids():
+            if job_id in self._validated:
+                continue
+            self._validated.add(job_id)  # once, even if it fails: the error is logged, not repeated
             try:
-                self.runner.revalidate(job.id)
+                self.runner.revalidate(job_id)
             except Exception:
-                log.exception("job %s: could not revalidate its tasks", job.id)
+                log.exception("job %s: could not revalidate its tasks", job_id)
 
     def sweep(self) -> None:
         """The daily expiry sweep, when due (see :mod:`app.worker.sweep`); never raises."""
@@ -153,6 +169,7 @@ class Worker:
         self.store.touch_worker()
         self.sweep()
         try:
+            self._revalidate_new_jobs()
             task = self.runner.run_one()
             if task is not None and task.section is None and task.stage == REPORT_STAGE:
                 self._release_scratch(task.job_id)
@@ -165,7 +182,8 @@ class Worker:
 
     def _release_scratch(self, job_id: str) -> None:
         try:
-            self.edges.release_scratch(job_id)
+            if self.edges.release_scratch(job_id):
+                self._validated.discard(str(job_id))  # a retry must rebuild what was deleted
         except Exception:
             log.exception("job %s: could not release its scratch folder", job_id)
 
@@ -201,10 +219,10 @@ def main() -> int:
     from app.deps import get_metadata_extractor, get_object_store, get_pipeline_runner
 
     configure_logging()
-    # The segment stage's Messages API usage goes to the app log with the others' (and prices),
+    # The segment stage's Messages API calls go to the app log with the others' (and prices),
     # and into the job's report["cost"].
-    segment_request.usage_listener = lambda model, usage, request_id: record_usage(
-        "ingest_segment", model, usage, request_id
+    segment_request.usage_listener = lambda model, usage, request_id, reply, seconds: record_usage(
+        "find the papers in the booklet", model, usage, request_id, reply=reply, seconds=seconds
     )
 
     settings = load_settings()

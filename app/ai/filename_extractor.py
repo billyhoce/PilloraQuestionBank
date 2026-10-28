@@ -3,7 +3,7 @@ import base64
 import anthropic
 
 from app.ai.job_cost import record_usage
-from app.logger import Timer, log_event
+from app.logger import Timer, log
 from app.models.orm import ExamType, Level, School, Stream, Subject
 
 _EMPTY: dict = {
@@ -196,9 +196,13 @@ def _call(client, ref_data: dict, filename: str, cover: bytes | None) -> dict:
             tool_choice={"type": "tool", "name": "extract_paper_metadata"},
             messages=[{"role": "user", "content": _user_content(filename, cover)}],
         )
-    log_event("extract_metadata", "haiku", seconds=t_call.s, cover=cover is not None)
-    record_usage("extract_metadata", MODEL, resp.usage, getattr(resp, "_request_id", None))
-    return resp.content[0].input  # dict, no JSON parsing needed
+    tool_input = resp.content[0].input  # dict, no JSON parsing needed
+    record_usage(
+        "read paper metadata from the cover" if cover is not None else "read paper metadata from the filename",
+        MODEL, resp.usage, getattr(resp, "_request_id", None),
+        reply=tool_input, seconds=t_call.s, stop_reason=resp.stop_reason,
+    )
+    return tool_input
 
 
 def extract_paper_metadata(filename: str, db, cover: bytes | None = None) -> dict:
@@ -210,21 +214,21 @@ def extract_paper_metadata(filename: str, db, cover: bytes | None = None) -> dic
     retried once on the filename alone; a failure there gives empty metadata (no ``extracted``).
     Never raises.
     """
-    with Timer() as t_total:
+    try:
+        ref_data = _fetch_reference_data(db)
+        client = anthropic.Anthropic()
         try:
-            ref_data = _fetch_reference_data(db)
-            client = anthropic.Anthropic()
-            try:
-                extracted = _call(client, ref_data, filename, cover)
-            except Exception:
-                if cover is None:
-                    raise
-                extracted = _call(client, ref_data, filename, None)
-            result = {**resolve_metadata(extracted, ref_data), "extracted": _raw_names(extracted)}
-        except Exception:
-            result = dict(_EMPTY)
-    log_event("extract_metadata", "total", seconds=t_total.s)
-    return result
+            extracted = _call(client, ref_data, filename, cover)
+        except Exception as e:
+            if cover is None:
+                raise
+            log.warning("reading metadata from the cover failed (%s: %s); retrying on the filename alone",
+                        type(e).__name__, e)
+            extracted = _call(client, ref_data, filename, None)
+        return {**resolve_metadata(extracted, ref_data), "extracted": _raw_names(extracted)}
+    except Exception as e:
+        log.warning("could not read paper metadata (%s: %s); leaving it blank", type(e).__name__, e)
+        return dict(_EMPTY)
 
 
 # The Manual import flow reads a filename only.

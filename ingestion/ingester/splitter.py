@@ -98,7 +98,7 @@ def split_into(pdf: Path, paper_dir: Path, work_dir: Path) -> SplitResult:
     if replaced:
         path = work_dir / SPLIT_NAME
         path.write_text(json.dumps(result.entry(), indent=2) + "\n", encoding="utf-8")
-        log.info("%s: %d section PDF(s) -> %s", result.paper, len(sections), work_dir)
+        log.debug("%s: %d section PDF(s) -> %s", result.paper, len(sections), work_dir)
     return result
 
 

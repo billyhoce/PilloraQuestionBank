@@ -125,7 +125,9 @@ Decides which pages are which and writes the plan (`segments.json`).
 - Header and footer: besides text repeating at one height, a page's first and last rows inside the
   margin are furniture when their text repeats on 3+ pages; on a scan, the rows stacked inside them
   are peeled the same way (its header and footer drift from page to page).
-- Not flagged: blank pages and pages after an end-of-paper marker (skipped with a reason).
+- Not flagged: blank pages and pages after an end-of-paper marker (skipped with a reason), and a
+  preamble above the first question with none open ("Answer all the questions.", a section
+  heading), which is left out of every rectangle.
 - Flagged `needs_review`: a textless page inside a digital paper, a content page with no question
   number and no open question, a paper with no question numbers at all (every page left for review).
 - Per-rectangle flags: `pixel_ink` (bounds measured from pixels, not text) and `grid_page` (a
@@ -188,8 +190,9 @@ Runs once every section has settled, even if `register`, `segment` or `split` fa
   review image and rectangles are in that frame, and confirm rotates the page by it before cropping
   ([auto-import.md](./auto-import.md)). A rectangle overhanging its page by more than 2 pt is clipped
   and warned.
-- **Question flags** combine the page's review reason (an answer page's reasons go to the question
-  it answers), `pixel_ink` and `grid_page`.
+- **Question flags** combine the review reason of each question page it touches, `pixel_ink` and
+  `grid_page`. An answer page's reason stays on that page and never flags the questions it answers
+  (an answer-only paper's answers are its questions, so they keep theirs).
 - **Unrouted.** Every section not extracted is listed with its reason and booklet page range (what
   "handle manually" opens). A question section that failed while its answers were read still gets a
   paper: no questions, answers in `orphan_answers`, and a warning. A paper with nothing extracted is

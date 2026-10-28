@@ -189,7 +189,7 @@ def locate_questions(
     scope.
     """
     name = paper_name(pdf_path)
-    log.info("processing %s", pdf_path.name)
+    log.debug("processing %s", pdf_path.name)
 
     try:
         with pymupdf.open(pdf_path) as doc:

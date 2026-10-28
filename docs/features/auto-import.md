@@ -97,7 +97,11 @@ stateDiagram-v2
 
 - **Retry** returns the job's failed and blocked tasks, plus everything downstream of them, to the
   queue with their attempt counts reset. Tasks whose inputs are unchanged are not re-run.
-- Allowed on `queued`, `running`, `review_ready` and `failed` jobs.
+- Allowed on `queued`, `running`, `review_ready` and `failed` jobs; the pages offer it only on a job
+  with a failed or blocked task (`tasks_failed`), since otherwise there is nothing to reopen.
+- The worker checks a retried job's artefacts before running it: tasks whose output went with the
+  scratch folder (deleted after Assemble, or lost in a restart) run again first, so the retried
+  task has its inputs.
 - Refused on `awaiting_upload`, `confirmed`, `cancelled`, `expired`, and on any job with a paper
   already decided (a new proposal would orphan that decision).
 - A rejected PDF (see Rules) fails the same way again on Retry.
@@ -140,7 +144,7 @@ Internals of each stage: [ingestion-pipeline.md](./ingestion-pipeline.md).
     cancelled meanwhile
 - **Scratch folder** (local disk, per job) is a cache. It is deleted once Assemble is done; review,
   confirm and "Handle manually" read only S3 and the database. A `failed` job keeps its folder so
-  Retry re-runs only what failed.
+  Retry re-runs only what failed; a job whose folder is gone rebuilds what its retried tasks need.
 
 ## Auto import page
 
@@ -173,7 +177,7 @@ import, or Manual import when one is in progress in this tab.
   - a caption ("Extract questions · 5/9 tasks", "Waiting for the worker", "Failed at Read PDF"),
     a progress bar while running, and the failure reason
   - "Worker offline" on an active job when the heartbeat is stale; a banner says the same
-  - **Retry** (failed jobs) and **Cancel** (asks first)
+  - **Retry** (jobs with a failed or blocked task) and **Cancel** (asks first)
   - "Upload not finished" for an `awaiting_upload` job started in another tab or session
 - **Finished while you were here:** jobs that reached `review_ready` while the page was open, each
   with a Review link; dismissable.
@@ -182,7 +186,8 @@ import, or Manual import when one is in progress in this tab.
 
 **All jobs**
 - Every job, settled ones included, newest first: filename, status, failure reason, created time,
-  age badge, and **Review** (`review_ready`), **Retry**, **Cancel** where allowed.
+  age badge, and **Review** (`review_ready`), **Retry** (a failed or blocked task to reopen),
+  **Cancel** where allowed.
 - **Age badge** on unsettled jobs: "waiting N days" / "waiting today" since upload; amber after
   **14 days**.
 - Filters, combinable: **Awaiting review** (`review_ready` + `failed`), **Unmatched answers** (a
@@ -231,8 +236,9 @@ paper.
   - The page shown first is the first question's.
 - **Page view:** question rectangles in blue, answer rectangles in green, unmatched answers (orphans)
   in grey dashed.
-- **Question list:** always sorted by question number; each question with its number, flags, and
-  "(no answer)" when it has no answer box. Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
+- **Question list:** always sorted by question number; each question with its number, its flags,
+  and a green dot when it has an answer box or an amber "No answer" when it has none (answer pages'
+  problems show on the page, not on each question). Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
   boxes are counted with "They are not imported."
 - **Sections not extracted** (failed or unroutable sections) are listed with reason and page range.
   **Handle manually** cuts that page range out of the booklet into the
@@ -380,13 +386,16 @@ Compares the database with S3 and the scratch disk. **Report-only** until
 Nothing below is shown in the UI except task details in the job detail; read it from the logs or the
 database.
 
-- **Logs:** JSON lines on stdout from both containers. Every line logged while working on a job
-  carries its `job_id` (plus section, stage and attempt inside a task); API lines carry a request id.
-  Grepping the logs for a job's UUID finds its whole history ([DEPLOYMENT.md](../DEPLOYMENT.md#reading-the-logs)).
-- **Lifecycle lines** (INFO, one each): job created, registered (hash, page count), paper metadata
-  read, task claimed / finished (status, duration), proposal stored, scratch released, proposal
-  saved, paper confirmed / skipped / attached / deleted, retry, cancelled. Stage failures log at
-  ERROR.
+- **Logs:** one plain-English line per event on stdout from both containers, led by its context
+  (job id, section, stage; or request id and user) and never repeating it in the message. Grepping
+  the logs for a job's UUID finds its whole history ([DEPLOYMENT.md](../DEPLOYMENT.md#reading-the-logs)).
+  Library chatter (HTTP requests, S3 credentials) is kept to warnings.
+- **Lifecycle lines** (INFO, one each): job created (filename, size), booklet read (page count,
+  hash), each paper's metadata fields found, task started / done / skipped / failed (duration),
+  proposal stored, review edits saved, paper confirmed / skipped / attached / deleted, retry,
+  cancelled. A crashed stage logs at ERROR with its traceback; a reported failure logs its reason.
+- **Claude calls:** one INFO line each: purpose, model, seconds, tokens, cost, Anthropic request id
+  and the reply (text or tool input, cut at 12,000 characters).
 - **Tracebacks:** the last 4 KB of a crashed stage's traceback is kept on its task (shown in the job
   detail) until the task is re-run. A failure a stage reports, rather than crashes on, has none.
 - **Event history:** one event row per transition, written with the change itself: created, task

@@ -119,7 +119,7 @@ def trim_bands(
         for band in result.bands
         if band.partition is not None and band.rect != band.partition
     )
-    log.info("trimmed %d band rectangle(s) onto their ink", trimmed)
+    log.debug("trimmed %d band rectangle(s) onto their ink", trimmed)
 
 
 def _trim(

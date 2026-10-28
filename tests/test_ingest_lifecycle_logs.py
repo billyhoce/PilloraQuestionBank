@@ -1,4 +1,4 @@
-"""Each ingest-job lifecycle event is one INFO record carrying the job id."""
+"""Each ingest-job lifecycle event is one INFO sentence logged under the job's context."""
 
 import logging
 import uuid
@@ -23,7 +23,7 @@ class _Collect(logging.Handler):
     def __init__(self):
         super().__init__(logging.INFO)
         self.records = []
-        self.addFilter(ContextFilter())  # what the JSON handler does in production
+        self.addFilter(ContextFilter())  # what the stdout handler does in production
 
     def emit(self, record):
         self.records.append(record)
@@ -40,48 +40,44 @@ def records():
     root.setLevel(previous)
 
 
-def events(records, job_id, func="ingest_job"):
-    """{step: record} of the lifecycle records stamped with ``job_id``."""
-    found = {}
-    for r in records:
-        fields = getattr(r, "fields", None) or {}
-        if fields.get("func") == func and r.job_id == str(job_id):
-            assert r.levelno == logging.INFO
-            found.setdefault(fields["step"], []).append(r)
+def events(records, job_id, starting):
+    """The INFO records of ``job_id`` whose message starts with ``starting``; none repeats the id."""
+    found = [r for r in records if r.job_id == str(job_id) and r.getMessage().startswith(starting)]
+    for r in found:
+        assert r.levelno == logging.INFO and str(job_id) not in r.getMessage()
     return found
 
 
 def test_created_cancelled_retried(admin_client, db_session, admin_user, fake_object_store, records):
     job_id = upload(admin_client).json()["job_id"]
-    [created] = events(records, job_id)["created"]
-    assert created.fields["filename"] == "RI_2024_Math_P1.pdf"
-    assert created.fields["size"] > 0 and created.fields["user_id"] == admin_user.id
-    assert "sha256" not in created.fields and "page_count" not in created.fields
+    [created] = events(records, job_id, "job created")
+    assert created.getMessage().startswith("job created for 'RI_2024_Math_P1.pdf' (")
+    assert created.user_id == str(admin_user.id)  # from the request context, not the message
 
     _seed_failed_job(db_session, job_id)
     assert admin_client.post(f"/api/import/jobs/{job_id}/retry").status_code == 200
-    [retry] = events(records, job_id)["retry"]
-    assert retry.fields["reopened"] == 3
+    [retry] = events(records, job_id, "retry")
+    assert retry.getMessage() == "retry: 3 task(s) reopened"
 
     assert admin_client.delete(f"/api/import/jobs/{job_id}").status_code == 204
-    assert len(events(records, job_id)["cancelled"]) == 1
+    assert [r.getMessage() for r in events(records, job_id, "job cancelled")] == ["job cancelled (was running)"]
 
 
 def test_confirmed_and_skipped(admin_client, db_session, env, records):  # noqa: F811
     setup, meta = env
     job = setup(prop=proposal(paper("q1"), paper("q2", "a2")))
     assert admin_client.post(f"/api/import/jobs/{job.id}/confirm", json={**meta, "paper_label": "q1"}).status_code == 201
-    [confirmed] = events(records, job.id)["paper_confirmed"]
-    assert confirmed.fields["paper_id"] and confirmed.fields["paper_label"] == "q1"
+    [confirmed] = events(records, job.id, "paper q1 confirmed as paper ")
+    assert "job settled" not in confirmed.getMessage()
     assert admin_client.post(f"/api/import/jobs/{job.id}/skip", json={"paper_label": "q2"}).status_code == 200
-    assert len(events(records, job.id)["paper_skipped"]) == 1
+    assert [r.getMessage() for r in events(records, job.id, "paper q2")] == ["paper q2 skipped; job settled"]
 
 
 def test_proposal_saved_event(admin_client, db_session, admin_user, fake_object_store, records):
     job = make_job(db_session, admin_user)
     q = {"number": 7, "question_rects": [rect(2, 50, 90)], "answer_rects": [], "flags": []}
     assert admin_client.put(f"/api/import/jobs/{job.id}/proposal", json=edit_body({"questions": [q]})).status_code == 200
-    assert len(events(records, job.id)["proposal_saved"]) == 1
+    assert len(events(records, job.id, "review edits saved")) == 1
 
 
 # --- the worker: runner events, proposal stored, traceback ---------------------------------
@@ -108,11 +104,11 @@ def test_worker_logs_claim_finish_and_proposal(worker_env, records):
     worker = make_worker()
     worker.start()
     drain(worker)
-    tasks = events(records, job, func="ingest_task")
-    assert len(tasks["claimed"]) == 4 and len(tasks["finished"]) == 4
-    finished = tasks["finished"][0].fields
-    assert finished["status"] == "done" and finished["duration_s"] >= 0
-    assert len(events(records, job)["proposal_stored"]) == 1
+    started = events(records, job, "task started")
+    finished = events(records, job, "task done in ")
+    assert len(started) == 4 and len(finished) == 4
+    assert {r.stage for r in finished} == {r.stage for r in started}  # the stage rides in the context
+    assert len(events(records, job, "proposal stored: ")) == 1
 
 
 def test_failing_stage_stores_truncated_traceback_and_logs_error(worker_env, records):

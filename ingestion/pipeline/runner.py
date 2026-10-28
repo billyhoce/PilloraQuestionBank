@@ -171,17 +171,15 @@ class Runner:
     def run_one(self) -> Task | None:
         """Claim one ready task, run it, record it. ``None`` when nothing is ready."""
         for stale in self.store.reset_stale(self.config.retry_limit):
-            log.warning("job %s task %s %s: lease expired (%s)", stale.job_id, stale.stage,
-                        stale.section, stale.status)
+            with log_context(job_id=stale.job_id, section=stale.section, stage=stale.stage):
+                log.warning("lease expired; task is now %s", stale.status)
             self._refresh(stale.job_id)
         task = self.store.claim_ready(self.config.lease_seconds)
         if task is None:
             return None
         with log_context(job_id=task.job_id, section=task.section, stage=task.stage,
                          task_attempt=task.attempts):
-            log.info("job %s %s %s: task claimed (attempt %d)", task.job_id, task.stage,
-                     task.section or "-", task.attempts,
-                     extra={"fields": {"func": "ingest_task", "step": "claimed"}})
+            log.info("task started")
             self._run_claimed(task)
         return task
 
@@ -198,8 +196,7 @@ class Runner:
         )
         if unchanged:
             # What the claim returns of the last run is what is still on disk: keep it.
-            log.info("job %s %s %s: unchanged, not run again", task.job_id, task.stage,
-                     task.section or "-")
+            log.info("inputs unchanged; keeping the last result")
             outcome = Outcome(
                 DONE,
                 reason=UNCHANGED,
@@ -208,13 +205,7 @@ class Runner:
             )
         else:
             outcome = self._execute(task, stage, ctx)
-        log.info(
-            "job %s %s %s: task finished %s in %.1fs", task.job_id, task.stage,
-            task.section or "-", outcome.status, self._clock() - started,
-            extra={"fields": {"func": "ingest_task", "step": "finished",
-                              "status": outcome.status,
-                              "duration_s": round(self._clock() - started, 3)}},
-        )
+        log.info("task %s in %.1fs", outcome.status, self._clock() - started)
         if outcome.status == FAILED:
             self.store.fail(task.id, outcome)
         else:
@@ -285,8 +276,7 @@ class Runner:
         try:
             return fingerprint.compute(stage, ctx)
         except Exception:
-            log.warning("could not fingerprint %s %s of job %s", stage.name, ctx.section or "-",
-                        ctx.job_id, exc_info=True)
+            log.warning("could not fingerprint the task's inputs; running it", exc_info=True)
             return None
 
     def _execute(self, task: Task, stage: Stage, ctx: StageContext) -> Outcome:
@@ -305,16 +295,14 @@ class Runner:
                 try:
                     outcome = stage.run(ctx)
                 except Exception as exc:
-                    log.error("job %s %s %s: stage raised %s", task.job_id, task.stage,
-                              task.section or "-", type(exc).__name__, exc_info=True)
+                    log.error("stage crashed: %s: %s", type(exc).__name__, exc, exc_info=True)
                     trace = traceback.format_exc()[-self.config.traceback_chars:]
                     outcome = failed(f"{type(exc).__name__}: {exc}")
         finally:
             stopped.set()
             beat.join()
-        if outcome.status == FAILED:
-            log.error("job %s %s %s failed: %s", task.job_id, task.stage, task.section or "-",
-                      outcome.error)
+        if outcome.status == FAILED and not trace:  # a crash was logged with its traceback above
+            log.error("stage failed: %s", outcome.error)
         warnings = tuple(dict.fromkeys((*outcome.warnings, *collected)))
         return Outcome(
             status=outcome.status,
@@ -430,8 +418,8 @@ class Runner:
         tasks = sorted(tasks, key=lambda t: t.id)
         if tasks:
             for task in tasks:
-                log.info("job %s %s %s: %s, back to the queue", task.job_id, task.stage,
-                         task.section or "-", why)
+                with log_context(job_id=task.job_id, section=task.section, stage=task.stage):
+                    log.info("back to the queue (%s)", why)
             self.store.reopen([t.id for t in tasks])
             self._refresh(job_id)
         return tasks

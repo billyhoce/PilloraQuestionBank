@@ -144,7 +144,7 @@ def calibrate(
             f"content_right={content_right:.1f})"
         )
 
-    log.info(
+    log.debug(
         "calibrated on %d page(s): gutter_x=%.1f content_x=%.1f x_cut=%.1f content_right=%.1f",
         len(selected),
         gutter_x,
