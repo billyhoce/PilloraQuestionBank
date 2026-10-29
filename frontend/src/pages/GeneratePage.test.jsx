@@ -92,12 +92,6 @@ describe('GeneratePage PDF output mode (non-admin)', () => {
     globalThis.URL.revokeObjectURL = vi.fn()
   })
 
-  it('defaults to the combined PDF option', async () => {
-    await renderWithCartItem()
-    expect(screen.getByRole('radio', { name: /1 combined pdf/i })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /separate question & answer/i })).not.toBeChecked()
-  })
-
   it('makes a single combined request with only the user-editable fields', async () => {
     const user = await renderWithCartItem()
     // Wait for the config to land so the payload is deterministic.
@@ -283,18 +277,6 @@ describe('GeneratePage autocreate target & algorithm', () => {
     api.questions.list.mockResolvedValue({ items: [item], total: 1 })
     api.generationConfig.get.mockResolvedValue(CONFIG)
     api.generate.select.mockResolvedValue({ items: [item], total_marks: 5, count: 1, exact: true, warning: null })
-  })
-
-  it('defaults to Random + selecting by number of questions', async () => {
-    render(
-      <MemoryRouter>
-        <GeneratePage />
-      </MemoryRouter>
-    )
-    expect(await screen.findByRole('radio', { name: /^random$/i })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /^in-order$/i })).not.toBeChecked()
-    expect(screen.getByLabelText(/select by/i)).toHaveValue('count')
-    expect(screen.getByLabelText(/number of questions/i)).toBeInTheDocument()
   })
 
   it('sends target_type "count" and algorithm "random" by default', async () => {

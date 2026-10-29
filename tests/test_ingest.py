@@ -1,6 +1,5 @@
-"""Tests for the import pipeline: image processing, confirm service, and routes."""
+"""Tests for the import pipeline: PDF page rendering, confirm service, and routes."""
 import gc
-import io
 import weakref
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -8,46 +7,12 @@ from unittest.mock import MagicMock, patch
 import anthropic
 import httpx
 import pytest
-from PIL import Image
 from sqlalchemy.orm import Session
 
 from app.ai.topic_labeler import TruncatedResponseError
 from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
-from app.pdf.image_processing import standardize, to_webp_bytes
 from app.services import ingest as ingest_module
 from app.services.ingest import confirm_import, iter_pdf_pages, upload_pages
-
-
-# ---------------------------------------------------------------------------
-# Image standardization (pure functions tested separately in test_image_processing)
-# Re-tested here in import-pipeline context for integration confidence
-# ---------------------------------------------------------------------------
-
-
-def test_standardize_image_downscales_wide_to_1760():
-    img = Image.new("RGB", (2480, 500), color=(100, 150, 200))
-    result = standardize(img)
-    assert result.width == 1760
-
-
-def test_standardize_image_keeps_narrow_unchanged():
-    img = Image.new("RGB", (1000, 500), color=(0, 100, 0))
-    result = standardize(img)
-    assert result.size == (1000, 500)
-
-
-def test_standardize_image_content_only_no_left_margin():
-    img = Image.new("RGB", (2480, 300), color=(0, 100, 0))
-    result = standardize(img)
-    # No white margin baked in — top-left is content.
-    assert result.getpixel((0, 0))[:3] == (0, 100, 0)
-
-
-def test_standardize_image_returns_webp_bytes():
-    img = Image.new("RGB", (2480, 400))
-    data = to_webp_bytes(img, quality=85)
-    reopened = Image.open(io.BytesIO(data))
-    assert reopened.format == "WEBP"
 
 
 def _make_fitz_doc(num_pages=1, width=200, height=300):
@@ -67,16 +32,6 @@ def _make_fitz_doc(num_pages=1, width=200, height=300):
     mock_doc.__enter__ = MagicMock(return_value=mock_doc)
     mock_doc.__exit__ = MagicMock(return_value=False)
     return mock_doc
-
-
-def test_iter_pdf_pages_calls_fitz_open(minimal_pdf_bytes):
-    mock_doc = _make_fitz_doc(num_pages=1)
-
-    with patch("app.services.ingest.fitz.open", return_value=mock_doc) as mock_open:
-        result = list(iter_pdf_pages(minimal_pdf_bytes))
-        mock_open.assert_called_once()
-    assert len(result) == 1
-    assert isinstance(result[0], Image.Image)
 
 
 def test_iter_pdf_pages_is_lazy(minimal_pdf_bytes):

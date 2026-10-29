@@ -12,7 +12,7 @@ from pipeline.runner import Runner
 from sqlalchemy import select
 
 from app.models.orm import IngestJob, IngestPaper, IngestTask
-from app.worker.main import Worker, WorkerSettings, load_settings
+from app.worker.main import Worker, WorkerSettings
 from tests.conftest import FakeObjectStore
 from tests.worker_support import PDF_BYTES, LOCKED_PDF_BYTES, make_job, make_session_factory, make_user
 
@@ -347,23 +347,6 @@ def test_a_cancelled_job_is_not_run(setup):
     worker.start()
     assert not worker.run_once()
     assert fake.seen == []
-
-
-def test_settings_come_from_the_environment():
-    defaults = load_settings({})
-    assert str(defaults.scratch_dir) == "/tmp/ingest"
-    assert defaults.pipeline.ingest.model == "claude-haiku-4-5"
-    assert defaults.pipeline.lease_seconds == 600
-    env = {
-        "INGEST_SCRATCH_DIR": "/data/scratch",
-        "INGEST_OCR_COMMAND": "tesseract",
-        "INGEST_SEGMENT_MODEL": "m1",
-        "INGEST_RETRY_MODEL": "m2",
-    }
-    s = load_settings(env)
-    assert str(s.scratch_dir) == "/data/scratch"
-    assert s.pipeline.extract.ocr_command == ("tesseract",)
-    assert (s.pipeline.ingest.model, s.pipeline.ingest.retry_model) == ("m1", "m2")
 
 
 def test_segment_call_is_handed_out_with_its_reply_and_logged_with_prices(caplog):

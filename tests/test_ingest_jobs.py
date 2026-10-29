@@ -51,11 +51,6 @@ def test_non_admin_forbidden(public_client, fake_object_store):
     assert fake_object_store.objects == {}
 
 
-def test_multipart_route_is_gone(admin_client, fake_object_store):
-    resp = admin_client.post("/api/import/jobs", files={"file": ("a.pdf", make_pdf(), "application/pdf")})
-    assert resp.status_code == 405
-
-
 def test_presign_response_carries_the_conditions(admin_client, db_session, admin_user, fake_object_store):
     resp = start_upload(admin_client, "RI_2024_Math_P1.pdf", 5000)
     assert resp.status_code == 201

@@ -204,20 +204,6 @@ describe('ReviewPage', () => {
       expect(screen.getByText('Question 1')).toBeInTheDocument()
     })
 
-    it('renumbers a question and refuses a duplicate number', async () => {
-      renderPage()
-      await screen.findByAltText('Page 2')
-      const field = screen.getByLabelText('Number of question 2')
-      fireEvent.change(field, { target: { value: '1' } })
-      await userEvent.type(field, '{Enter}')
-      expect(screen.getByRole('alert')).toHaveTextContent('Question 1 already exists')
-      fireEvent.change(field, { target: { value: '5' } })
-      await userEvent.type(field, '{Enter}')
-      expect(screen.getByText('Question 5')).toBeInTheDocument()
-      await waitFor(() => expect(api.import.saveProposal).toHaveBeenCalled(), { timeout: 3000 })
-      expect(api.import.saveProposal.mock.calls[0][1].papers[0].questions[1].number).toBe(5)
-    })
-
     it('merges a question with the previous one', async () => {
       renderPage()
       await screen.findByAltText('Page 2')

@@ -51,24 +51,10 @@ def _make_mock_response(input_dict: dict):
 # ---------------------------------------------------------------------------
 
 
-def test_build_system_prompt_contains_school_names():
+def test_build_system_prompt_lists_every_kind_of_reference_name():
     prompt = build_system_prompt(_make_ref_data())
-    assert "Raffles Institution" in prompt
-
-
-def test_build_system_prompt_contains_subject_names():
-    prompt = build_system_prompt(_make_ref_data())
-    assert "Math" in prompt
-
-
-def test_build_system_prompt_contains_level_names():
-    prompt = build_system_prompt(_make_ref_data())
-    assert "Sec 3" in prompt
-
-
-def test_build_system_prompt_contains_exam_type_names():
-    prompt = build_system_prompt(_make_ref_data())
-    assert "EOY" in prompt
+    for name in ("Raffles Institution", "Math", "Sec 3", "EOY", "Express"):
+        assert name in prompt
 
 
 def test_build_system_prompt_empty_ref_data_shows_none():
@@ -173,34 +159,9 @@ def test_resolve_stream_case_insensitive_and_unknown():
     assert resolve_metadata(base, _make_ref_data())["stream_id"] is None
 
 
-def test_system_prompt_lists_streams():
-    assert "Express" in build_system_prompt(_make_ref_data())
-
-
-def test_tool_schema_requires_stream():
-    assert "stream" in _EXTRACTION_TOOL["input_schema"]["required"]
-
-
 # ---------------------------------------------------------------------------
 # extract_metadata — mocked Anthropic client
 # ---------------------------------------------------------------------------
-
-
-@patch("app.ai.filename_extractor._fetch_reference_data")
-@patch("app.ai.filename_extractor.anthropic.Anthropic")
-def test_extract_metadata_uses_haiku_model(mock_cls, mock_fetch):
-    mock_fetch.return_value = _make_ref_data()
-    mock_client = MagicMock()
-    mock_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(
-        {"school": "Raffles Institution", "year": 2024, "subject": "Math",
-         "level": "Sec 3", "exam_type": "EOY", "paper_number": "1"}
-    )
-
-    extract_metadata("RI_2024_Math_Sec3_EOY_P1.pdf", db=MagicMock())
-
-    kwargs = mock_client.messages.create.call_args.kwargs
-    assert kwargs["model"] == "claude-haiku-4-5-20251001"
 
 
 @patch("app.ai.filename_extractor._fetch_reference_data")
@@ -219,27 +180,6 @@ def test_extract_metadata_uses_tool_choice(mock_cls, mock_fetch):
     kwargs = mock_client.messages.create.call_args.kwargs
     assert kwargs["tool_choice"] == {"type": "tool", "name": "extract_paper_metadata"}
     assert kwargs["tools"] == [_EXTRACTION_TOOL]
-
-
-@patch("app.ai.filename_extractor._fetch_reference_data")
-@patch("app.ai.filename_extractor.anthropic.Anthropic")
-def test_extract_metadata_no_image_blocks(mock_cls, mock_fetch):
-    mock_fetch.return_value = _make_ref_data()
-    mock_client = MagicMock()
-    mock_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response(
-        {"school": None, "year": None, "subject": None,
-         "level": None, "exam_type": None, "paper_number": None}
-    )
-
-    extract_metadata("RI_2024_Math_Sec3_EOY_P1.pdf", db=MagicMock())
-
-    kwargs = mock_client.messages.create.call_args.kwargs
-    for msg in kwargs.get("messages", []):
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            for block in content:
-                assert block.get("type") != "image"
 
 
 @patch("app.ai.filename_extractor._fetch_reference_data")

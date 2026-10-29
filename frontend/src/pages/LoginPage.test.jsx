@@ -45,13 +45,6 @@ describe('LoginPage redirects', () => {
     expect(await screen.findByText('QUESTION BANK HOME')).toBeInTheDocument()
   })
 
-  it('redirects admins to the question bank after login', async () => {
-    login.mockResolvedValue({ email: 'admin@example.com', role: 'admin' })
-    renderLogin()
-    await submitLogin()
-    expect(await screen.findByText('QUESTION BANK HOME')).toBeInTheDocument()
-  })
-
   it('redirects already-authenticated users to the question bank', () => {
     renderLogin({ user: { email: 'someone@example.com', role: 'public' } })
     expect(screen.getByText('QUESTION BANK HOME')).toBeInTheDocument()

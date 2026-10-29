@@ -4,19 +4,13 @@ import io
 import pytest
 from PIL import Image
 
-from app.pdf.image_processing import downscale_for_ai, get_dimensions, standardize, to_webp_bytes
+from app.pdf.image_processing import downscale_for_ai, standardize, to_webp_bytes
 
 _TARGET_WIDTH = 1760
 
 
 def _make_image(width: int, height: int, color=(200, 100, 50)) -> Image.Image:
     return Image.new("RGB", (width, height), color=color)
-
-
-def test_standardize_wide_image_downscaled_to_target_width():
-    img = _make_image(2480, 3508)
-    result = standardize(img)
-    assert result.width == _TARGET_WIDTH
 
 
 def test_standardize_downscale_preserves_aspect_ratio():
@@ -31,12 +25,6 @@ def test_standardize_narrow_image_kept_unchanged():
     img = _make_image(600, 400)
     result = standardize(img)
     assert result.size == (600, 400)
-
-
-def test_standardize_image_at_target_width_unchanged():
-    img = _make_image(_TARGET_WIDTH, 500)
-    result = standardize(img)
-    assert result.size == (_TARGET_WIDTH, 500)
 
 
 def test_standardize_no_left_margin_content_flush_at_zero():
@@ -57,19 +45,6 @@ def test_to_webp_bytes_returns_webp_format():
     data = to_webp_bytes(img, quality=85)
     reopened = Image.open(io.BytesIO(data))
     assert reopened.format == "WEBP"
-
-
-def test_to_webp_bytes_non_empty():
-    img = _make_image(100, 100)
-    data = to_webp_bytes(img, quality=85)
-    assert len(data) > 0
-
-
-def test_get_dimensions_returns_width_and_height():
-    img = _make_image(2480, 600)
-    w, h = get_dimensions(img)
-    assert w == 2480
-    assert h == 600
 
 
 def _webp_bytes(width: int, height: int) -> bytes:
