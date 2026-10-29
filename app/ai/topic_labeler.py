@@ -2,7 +2,7 @@ import base64
 
 import anthropic
 
-from app.logger import Timer, log, log_tokens
+from app.logger import Timer, log_claude_call
 
 MODEL = "claude-haiku-4-5-20251001"
 
@@ -148,8 +148,11 @@ def label_question(
             tools=[LABEL_PARTS_TOOL],
             tool_choice={"type": "tool", "name": "label_parts"},
         )
-    log.info(f"{'label_question':<22}| haiku     | {t_call.s}")
-    log_tokens("label_question", MODEL, resp.usage)
+    log_claude_call(
+        f"label question {question.id}", MODEL, resp.usage, getattr(resp, "_request_id", None),
+        reply=getattr(resp.content[0], "input", None) if resp.content else None,
+        seconds=t_call.s, stop_reason=resp.stop_reason,
+    )
 
     # Check before touching content: a truncated tool call may not even carry a
     # usable input dict, and a partial parts list must never pass for a complete one.

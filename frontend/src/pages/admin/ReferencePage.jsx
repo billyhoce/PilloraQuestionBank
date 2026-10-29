@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import SimpleTab from '../../features/reference/tabs/SimpleTab'
+import SubjectsTab from '../../features/reference/tabs/SubjectsTab'
 import StreamsTab from '../../features/reference/tabs/StreamsTab'
 import LevelsTab from '../../features/reference/tabs/LevelsTab'
 import TopicsTab from '../../features/reference/tabs/TopicsTab'
@@ -98,12 +99,11 @@ export default function ReferencePage() {
           />
         )}
         {activeTab === 'subjects' && (
-          <SimpleTab
-            label="Subject"
+          <SubjectsTab
             rows={subjects}
             loading={pageLoading}
-            onCreate={async (name) => { await api.subjects.create(name); await refresh('subjects') }}
-            onUpdate={async (id, name) => { await api.subjects.update(id, name); await refresh('subjects') }}
+            onCreate={async (name, code) => { await api.subjects.create(name, code); await refresh('subjects') }}
+            onUpdate={async (id, name, code) => { await api.subjects.update(id, name, code); await refresh('subjects') }}
             onDelete={async (id) => { await api.subjects.delete(id); await refresh('subjects') }}
           />
         )}

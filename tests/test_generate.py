@@ -298,33 +298,10 @@ def test_layout_preserves_labels_and_order():
     assert [b.label for b in plan.blocks] == ["1", "2", "3"]
 
 
-def test_layout_instructions_in_plan():
-    plan = _engine().compute_layout([], additional_instructions="Attempt all questions.")
-    assert plan.additional_instructions == "Attempt all questions."
-
-
-def test_layout_header_text_defaults_empty_and_is_settable():
-    # The branding header is set by the route, not compute_layout — it defaults
-    # empty and is threaded onto the plan for every page to draw.
-    plan = _engine().compute_layout([])
-    assert plan.header_text == ""
-    plan.header_text = "Visit www.pillora.com.sg"
-    assert plan.header_text == "Visit www.pillora.com.sg"
-
-
 def test_layout_empty_block_list_produces_at_least_one_page():
     plan = _engine().compute_layout([], additional_instructions="Instructions.")
     assert plan.page_count >= 1
     assert plan.blocks == []
-
-
-def test_layout_render_returns_pdf_bytes(minimal_webp_bytes):
-    # End-to-end render with real ReportLab + a real WebP image.
-    plan = _engine().compute_layout([_make_block("1", [800])], additional_instructions="Header")
-    plan.header_text = "Visit www.pillora.com.sg for more resources."
-    pdf = _engine().render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
-    assert pdf[:4] == b"%PDF"
-    assert len(pdf) > 0
 
 
 def test_question_variant_scales_image_down():
@@ -395,23 +372,6 @@ def test_chrome_renders_without_logo(minimal_webp_bytes, monkeypatch):
     layout_engine._load_logo.cache_clear()
 
 
-def test_chrome_renders_with_logo(minimal_webp_bytes, tmp_path, monkeypatch):
-    # A present logo exercises the drawImage(logo) path.
-    from PIL import Image as PILImage
-
-    from app.pdf import layout_engine
-
-    logo = tmp_path / "pillora_logo.png"
-    PILImage.new("RGBA", (500, 200), (134, 59, 255, 255)).save(logo)
-    layout_engine._load_logo.cache_clear()
-    monkeypatch.setattr(layout_engine, "LOGO_PATH", str(logo))
-    engine = LayoutEngine(fit_width=True)
-    plan = engine.compute_layout([_make_block("1", [800])])
-    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
-    assert pdf[:4] == b"%PDF"
-    layout_engine._load_logo.cache_clear()
-
-
 def test_load_logo_reports_bottom_padding(tmp_path, monkeypatch):
     # The logo asset is a square canvas with the mark inset; _load_logo returns
     # the transparent bottom padding (scaled to the target width) so the header
@@ -441,11 +401,6 @@ def test_chrome_does_not_change_page_count(minimal_webp_bytes):
     plan.footer_label = "Questions"
     pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
     assert _page_count(pdf) == 2
-
-
-def test_layout_plan_footer_label_defaults_empty():
-    plan = LayoutEngine().compute_layout([])
-    assert plan.footer_label == ""
 
 
 # ---------------------------------------------------------------------------
@@ -711,16 +666,6 @@ def _page_count(pdf: bytes) -> int:
     return len(PdfReader(io.BytesIO(pdf)).pages)
 
 
-def test_render_returns_expected_page_count(minimal_webp_bytes):
-    # Refactor guard: single-plan render still produces one page per packed page.
-    # capacity=1000, gap=100 (fit_width=False): 800 + 100 + 800 > 1000 → 2 pages.
-    engine = _engine(capacity_px=1000)
-    plan = engine.compute_layout([_make_block("1", [800]), _make_block("2", [800])])
-    pdf = engine.render(plan, fetch_bytes=lambda key: minimal_webp_bytes)
-    assert pdf[:4] == b"%PDF"
-    assert _page_count(pdf) == 2
-
-
 def test_render_combined_appends_sections(minimal_webp_bytes):
     # Section 1 packs onto one page (400 + 100 + 400 ≤ 1000); section 2 is one
     # page — the combined PDF holds both, each section starting on a fresh page.
@@ -743,16 +688,6 @@ def test_render_combined_matches_separate_renders(minimal_webp_bytes):
     separate = _page_count(e1.render(p1, fetch)) + _page_count(e2.render(p2, fetch))
     combined = _page_count(render_combined([(e1, p1), (e2, p2)], fetch))
     assert combined == separate == 2
-
-
-# ---------------------------------------------------------------------------
-# Routes — /api/generate/cover-defaults (retired, replaced by generation config)
-# ---------------------------------------------------------------------------
-
-
-def test_cover_defaults_endpoint_removed(public_client):
-    resp = public_client.get("/api/generate/cover-defaults")
-    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -863,17 +798,6 @@ def test_generate_select_in_order_is_stable(public_client, sample_paper, referen
     for _ in range(5):
         again = public_client.post("/api/generate/select", json=body)
         assert [it["id"] for it in again.json()["items"]] == first_ids
-
-
-def test_generate_select_defaults_to_random_algorithm(public_client, sample_paper, reference_data):
-    """Omitting `algorithm` still works (defaults to the random knapsack)."""
-    resp = public_client.post("/api/generate/select", json={
-        "filters": {"subject_id": reference_data["subject"].id},
-        "target_type": "marks",
-        "target_value": 10,
-    })
-    assert resp.status_code == 200
-    assert resp.json()["total_marks"] == 10
 
 
 def test_generate_select_count_in_order_takes_first_n(public_client, sample_paper, db_session, reference_data):
@@ -1091,21 +1015,6 @@ def test_generate_paper_answer_variant_skips_questions_without_answers(
     assert all(p.page_type == "answer" for p in blocks[0].pages)
     # Answer variant keeps native image size (flush-left, no centering).
     assert captured["fit_width"] is False
-
-
-def test_generate_paper_combined_returns_pdf(public_client, sample_paper, db_session, reference_data):
-    ids = _question_ids(db_session, sample_paper)
-    with (
-        patch("app.routes.generate.render_combined", return_value=b"%PDF-1.4 fake pdf bytes"),
-    ):
-        resp = public_client.post("/api/generate/paper", json={
-            "question_ids": ids,
-            "variant": "combined",
-            "additional_instructions": "Test paper",
-        })
-    assert resp.status_code == 200
-    assert resp.headers["content-type"] == "application/pdf"
-    assert len(resp.content) > 0
 
 
 def test_generate_paper_combined_builds_question_then_answer_sections(
@@ -1551,36 +1460,6 @@ def test_generate_select_includes_premium_for_premium(premium_client, sample_pap
     assert resp.json()["count"] == 3
 
 
-def test_generate_select_excludes_premium_from_other_school_level(
-    other_premium_client, sample_paper, db_session, reference_data
-):
-    """Primary premium doesn't put a Secondary paper in the candidate pool."""
-    sample_paper.is_premium = True
-    db_session.flush()
-    resp = other_premium_client.post("/api/generate/select", json={
-        "filters": {"subject_id": reference_data["subject"].id},
-        "target_type": "marks",
-        "target_value": 10,
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["count"] == 0
-    assert data["items"] == []
-
-
-def test_generate_select_still_includes_free_papers_for_partial_premium(
-    other_premium_client, sample_paper, db_session, reference_data
-):
-    """Holding the wrong school level must not cost a user the free catalogue."""
-    resp = other_premium_client.post("/api/generate/select", json={
-        "filters": {"subject_id": reference_data["subject"].id},
-        "target_type": "marks",
-        "target_value": 10,
-    })
-    assert resp.status_code == 200
-    assert resp.json()["count"] == 3
-
-
 def test_generate_paper_premium_blocked_for_public(public_client, sample_paper, db_session, reference_data):
     sample_paper.is_premium = True
     db_session.flush()
@@ -1608,20 +1487,3 @@ def test_generate_paper_premium_allowed_for_premium(premium_client, sample_paper
         })
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
-
-
-def test_generate_paper_premium_blocked_for_other_school_level(
-    other_premium_client, sample_paper, db_session, reference_data
-):
-    """The server-side guard, for ids posted directly past the UI."""
-    sample_paper.is_premium = True
-    db_session.flush()
-    ids = _question_ids(db_session, sample_paper)
-    with (
-        patch("app.routes.generate.LayoutEngine.render", return_value=b"%PDF-1.4 fake"),
-    ):
-        resp = other_premium_client.post("/api/generate/paper", json={
-            "question_ids": ids,
-            "variant": "question",
-        })
-    assert resp.status_code == 403

@@ -1,20 +1,66 @@
-from typing import Optional
+import uuid
+from typing import Literal, Optional
 
 import anthropic
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.ai.topic_labeler import TruncatedResponseError
 from app.db import get_db
-from app.deps import ImageFetcher, get_image_fetcher, get_question_labeller
-from app.logger import Timer, log
-from app.models.orm import Paper, Question, Topic
+from app.deps import (
+    ImageFetcher,
+    get_image_fetcher,
+    get_object_store,
+    get_question_labeller,
+)
+from app.log_context import set_context
+from app.services.ingest_events import add_event
+from app.logger import Timer, log, log_event, log_job_event
+from app.models.orm import INGEST_JOB_STATUSES, IngestJob, IngestPaper, Paper, Question, Topic
 from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
+from app.services.answer_coverage import job_coverage
+from app.services.ingest_matching import match_info, match_row, reject_suggestion
+from app.services.ingest_papers import (
+    MatchError,
+    get_row as get_paper_row,
+    link_papers,
+    paper_links,
+    reject_proposed_paper,
+    set_answer_map,
+    set_metadata as set_paper_metadata,
+    switch_role,
+    sync_job_papers,
+    unlink_paper,
+)
+from app.services.answer_mapping import mapping_table
+from app.services.match_candidates import find_candidates
+from app.services.ingest_confirm import ReviewActionError, attach_answers, confirm_job_paper, skip_job_paper
+from app.services.ingest_jobs import (
+    InvalidPdfError,
+    JobNotCancellableError,
+    JobNotRetryableError,
+    UploadError,
+    cancel_job,
+    create_upload,
+    finish_upload,
+    job_progress,
+    retry_job,
+    worker_state,
+)
+from app.services.ingest_review import (
+    NoProposalError,
+    ProposalEditError,
+    PageRangeError,
+    build_review,
+    extract_page_range,
+    save_edited_proposal,
+)
 from app.services.paper_admin import school_level_conflict
 from app.services.question_parts import scoped_topic_ids, set_question_parts, validate_parts
+from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, get_presigned_url
 
 
@@ -35,7 +81,7 @@ class QuestionIn(BaseModel):
     pages: list[PageIn]
 
 
-class ConfirmImportPayload(BaseModel):
+class PaperMetadataIn(BaseModel):
     subject_id: int
     stream_id: int
     level_id: int
@@ -46,6 +92,9 @@ class ConfirmImportPayload(BaseModel):
     # Imported papers are premium by default; the admin can untick this at the
     # final import step.
     is_premium: bool = True
+
+
+class ConfirmImportPayload(PaperMetadataIn):
     questions: list[QuestionIn]
 
 
@@ -97,18 +146,15 @@ class SaveTopicsPayload(BaseModel):
 
 
 @router.post("/upload-pdf")
-async def upload_pdf(
+def upload_pdf(
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=422, detail="Only PDF files are accepted")
-    with Timer() as t:
-        pdf_bytes = await file.read()
-        result = upload_pages(pdf_bytes, file.filename or "", db)
-    log.info(f"{'upload_pdf':<22}| TOTAL     | {t.s}")
-    return result
+    pdf_bytes = file.file.read()
+    return upload_pages(pdf_bytes, file.filename or "", db)
 
 
 def _serialize_paper_questions(paper: Paper) -> list[dict]:
@@ -131,6 +177,19 @@ def _serialize_paper_questions(paper: Paper) -> list[dict]:
     ]
 
 
+def _confirm_response(db: Session, paper_id: int) -> dict:
+    paper = (
+        db.query(Paper)
+        .options(selectinload(Paper.questions).selectinload(Question.pages))
+        .filter(Paper.id == paper_id)
+        .first()
+    )
+    return {
+        "paper_id": paper.id,
+        "questions": _serialize_paper_questions(paper),
+    }
+
+
 @router.post("/confirm", status_code=201)
 def confirm(
     payload: ConfirmImportPayload,
@@ -144,16 +203,7 @@ def confirm(
         raise HTTPException(status_code=422, detail=conflict)
 
     paper = confirm_import(payload.model_dump(), current_user, db)
-    paper = (
-        db.query(Paper)
-        .options(selectinload(Paper.questions).selectinload(Question.pages))
-        .filter(Paper.id == paper.id)
-        .first()
-    )
-    return {
-        "paper_id": paper.id,
-        "questions": _serialize_paper_questions(paper),
-    }
+    return _confirm_response(db, paper.id)
 
 
 @router.post("/ai-topics", response_model=AiTopicsResponse)
@@ -176,7 +226,6 @@ def ai_topics(
                 .filter(Question.id == payload.question_id)
                 .first()
             )
-        log.info(f"{'ai_topics':<22}| db_query  | {t_db.s}")
 
         if question is None:
             raise HTTPException(status_code=404, detail="Question not found")
@@ -190,7 +239,6 @@ def ai_topics(
                 .order_by(Topic.topic_number)
                 .all()
             )
-        log.info(f"{'ai_topics':<22}| db_topics | {t_topics.s}")
 
         topics = [
             {
@@ -211,7 +259,6 @@ def ai_topics(
             with Timer() as _t:
                 raw_list.append(fetch_bytes(p.image_key))
             t_s3 += _t.elapsed
-        log.info(f"{'ai_topics':<22}| s3_fetch  | {t_s3:.3f}s  ({n} pages)")
 
         t_ds = 0.0
         image_bytes_list = []
@@ -219,32 +266,34 @@ def ai_topics(
             with Timer() as _t:
                 image_bytes_list.append(downscale_for_ai(raw))
             t_ds += _t.elapsed
-        log.info(f"{'ai_topics':<22}| downscale | {t_ds:.3f}s  ({n} pages)")
 
         try:
             with Timer() as t_label:
                 result = label_question(question, topics, image_bytes_list)
-            log.info(f"{'ai_topics':<22}| ai_label  | {t_label.s}")
         except TruncatedResponseError as e:
-            log.error(f"{'ai_topics':<22}| truncated | question_id={payload.question_id} {e}")
+            log.error("AI labelling of question %s was cut off: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=502,
                 detail="The AI response was cut off — please retry this question.",
             )
         except anthropic.RateLimitError as e:
-            log.error(f"{'ai_topics':<22}| rate_limit| question_id={payload.question_id} {e}")
+            log.error("AI labelling of question %s was rate limited: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=429,
                 detail="AI topic labeling is rate limited — please retry in a moment.",
             )
         except anthropic.APIError as e:
-            log.error(f"{'ai_topics':<22}| api_error | question_id={payload.question_id} {e}")
+            log.error("AI labelling of question %s failed: %s", payload.question_id, e)
             raise HTTPException(
                 status_code=503,
                 detail="AI topic labeling is temporarily unavailable — please retry.",
             )
 
-    log.info(f"{'ai_topics':<22}| TOTAL     | {t_total.s}")
+    log_event(
+        f"AI labelled question {payload.question_id} ({n} page(s)) in {t_total.elapsed:.1f}s: "
+        f"database {t_db.elapsed + t_topics.elapsed:.2f}s, images {t_s3:.2f}s, "
+        f"downscale {t_ds:.2f}s, Claude {t_label.elapsed:.1f}s"
+    )
     return {"parts": result["parts"]}
 
 
@@ -291,7 +340,7 @@ def delete_paper_route(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    image_keys = delete_paper(paper_id, db)
+    image_keys = delete_paper(paper_id, db, current_user)
     # Commit the DB deletion before performing irreversible S3 deletions, so a
     # failed commit can't leave paper rows pointing at already-deleted images.
     db.commit()
@@ -301,3 +350,685 @@ def delete_paper_route(
         except Exception:
             pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# Auto-import jobs
+# ---------------------------------------------------------------------------
+
+
+def _task_out(t) -> dict:
+    return {
+        "id": t.id,
+        "section": t.section,
+        "stage": t.stage,
+        "status": t.status,
+        "attempts": t.attempts,
+        "reason": t.reason,
+        "error": t.error,
+        "traceback": t.traceback,
+        "warnings": t.warnings,
+        "needs_review": t.needs_review,
+        "started_at": t.started_at,
+        "finished_at": t.finished_at,
+        "duration_ms": t.duration_ms,
+    }
+
+
+def _job_out(job: IngestJob) -> dict:
+    return {
+        "id": str(job.id),
+        "filename": job.filename,
+        "status": job.status,
+        "page_count": job.page_count,
+        "error": job.error,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "confirmed_paper_ids": job.confirmed_paper_ids,
+        **job_progress(job),
+    }
+
+
+def _paper_summary(
+    row: IngestPaper, coverage: dict | None = None, extracted_school: str | None = None,
+    partner: dict | None = None, suggestion: dict | None = None,
+) -> dict:
+    """One proposed paper as the job list shows it: enough for an at-a-glance review queue card.
+    ``answer_coverage`` (``none``/``partial``/``all``, of its own answer boxes) and ``unanswered``
+    (its question numbers without one) come from the job's current proposal; ``extracted_school``
+    is the school name read from its cover (pre-fills the queue's "Match this paper" popup, #93).
+    ``partner`` is the paper it is linked to and ``suggestion`` (answer-only) the question paper
+    suggested for it, each ``{ingest_paper_id, job_id, filename, paper_key}``: the queue groups a
+    linked pair into one card and offers suggestions as "Looks like a pair"."""
+    coverage = coverage or {"answer_coverage": "none", "unanswered": []}
+    return {
+        "id": row.id,
+        "key": row.paper_key,
+        "role": row.role,
+        "status": row.status,
+        "school_id": row.school_id,
+        "new_school_name": row.new_school_name,
+        "year": row.year,
+        "level_id": row.level_id,
+        "subject_id": row.subject_id,
+        "exam_type_id": row.exam_type_id,
+        "stream_id": row.stream_id,
+        "paper_number": row.paper_number,
+        "linked": row.matched_ingest_paper_id is not None,
+        "match_status": row.match_status,
+        "match_note": row.match_note,
+        "extracted_school": extracted_school,
+        "partner": partner,
+        "suggestion": suggestion,
+        **coverage,
+    }
+
+
+def _papers_by_job(db: Session, jobs: list[IngestJob]) -> dict:
+    """Each job's ``ingest_paper`` rows (one query for the whole list), in paper-key order."""
+    by_job: dict = {j.id: [] for j in jobs}
+    if not by_job:
+        return by_job
+    rows = (
+        db.query(IngestPaper)
+        .filter(IngestPaper.job_id.in_(list(by_job)))
+        .order_by(IngestPaper.job_id, IngestPaper.paper_key)
+        .all()
+    )
+    coverage = {j.id: job_coverage(j) for j in jobs}
+    meta = {j.id: (j.report or {}).get("paper_metadata") or {} for j in jobs}
+    others = _partner_rows(db, rows)
+    for r in rows:
+        extracted = (meta[r.job_id].get(r.paper_key) or {}).get("extracted") or {}
+        partner = others.get(r.matched_ingest_paper_id)
+        suggested = others.get(r.suggested_ingest_paper_id) if r.match_status == "suggested" else None
+        if suggested is not None and (
+            r.matched_ingest_paper_id is not None or suggested[0].status != "pending"
+            or suggested[0].matched_ingest_paper_id is not None
+            or (suggested[1].id != r.job_id and suggested[1].status != "review_ready")
+        ):
+            suggested = None  # no longer holds (see ingest_matching.suggestion)
+        by_job[r.job_id].append(_paper_summary(
+            r, coverage[r.job_id].get(r.paper_key), extracted.get("school"),
+            _partner_out(partner), _partner_out(suggested),
+        ))
+    return by_job
+
+
+def _partner_rows(db: Session, rows: list[IngestPaper]) -> dict:
+    """The papers ``rows`` are linked to or suggested with, with their jobs, by id (one query)."""
+    ids = {i for r in rows for i in (r.matched_ingest_paper_id, r.suggested_ingest_paper_id) if i is not None}
+    if not ids:
+        return {}
+    pairs = db.query(IngestPaper, IngestJob).join(IngestJob, IngestJob.id == IngestPaper.job_id).filter(IngestPaper.id.in_(ids))
+    return {p.id: (p, j) for p, j in pairs}
+
+
+def _partner_out(pair) -> dict | None:
+    if pair is None:
+        return None
+    paper, job = pair
+    return {"ingest_paper_id": paper.id, "job_id": str(job.id), "filename": job.filename, "paper_key": paper.paper_key}
+
+
+def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
+    """The job to act on. Every route here is admin-only and admins are trusted with each other's
+    jobs, so any admin may open or act on any job; a non-admin (unreachable through these routes)
+    would still be limited to their own."""
+    q = db.query(IngestJob).filter(IngestJob.id == job_id)
+    if getattr(user, "role", None) != "admin":
+        q = q.filter(IngestJob.created_by == user.id)
+    job = q.first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    set_context(job_id=str(job.id), user_id=str(user.id))
+    return job
+
+
+class UploadIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=512)
+    size: int
+
+
+@router.post("/uploads", status_code=201)
+def create_ingest_upload(
+    body: UploadIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Create the job (``awaiting_upload``) and return the presigned S3 POST the browser uploads to."""
+    try:
+        job, post = create_upload(body.filename, body.size, current_user, db, store)
+    except UploadError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    set_context(job_id=str(job.id), user_id=str(current_user.id))
+    return {"job_id": str(job.id), "url": post["url"], "fields": post["fields"]}
+
+
+@router.post("/jobs/{job_id}/uploaded")
+def ingest_upload_finished(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """The browser finished its S3 POST: verify the object and queue the job."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        finish_upload(job, current_user, db, store)
+    except UploadError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"job_id": str(job.id), "status": job.status}
+
+
+@router.get("/jobs")
+def list_ingest_jobs(
+    status: Optional[str] = None,
+    job_id: Optional[uuid.UUID] = None,
+    paper_id: Optional[int] = None,
+    unmatched_answers: bool = False,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Every admin's jobs, optionally narrowed by status (one, or several comma-separated), job id, or a paper id (the job that
+    confirmed that paper, by ``paper.source_job_id`` or the job's recorded ``confirmed_paper_ids``), or to the jobs
+    with an answer-only paper still pending and linked to no question paper (``unmatched_answers``)."""
+    statuses = [s.strip() for s in status.split(",")] if status is not None else None
+    if statuses is not None and any(s not in INGEST_JOB_STATUSES for s in statuses):
+        raise HTTPException(status_code=422, detail="Unknown job status")
+    q = db.query(IngestJob).options(selectinload(IngestJob.tasks))
+    if statuses is not None:
+        q = q.filter(IngestJob.status.in_(statuses))
+    if job_id is not None:
+        q = q.filter(IngestJob.id == job_id)
+    if paper_id is not None:
+        # confirmed_paper_ids is INT[] on Postgres and JSON on SQLite, so match it in Python.
+        ids = {
+            j for j, in db.query(Paper.source_job_id).filter(Paper.id == paper_id, Paper.source_job_id.isnot(None))
+        }
+        ids |= {j.id for j in db.query(IngestJob).filter(IngestJob.confirmed_paper_ids.isnot(None))
+                if paper_id in (j.confirmed_paper_ids or [])}
+        q = q.filter(IngestJob.id.in_(ids))
+    if unmatched_answers:
+        q = q.filter(
+            db.query(IngestPaper.id)
+            .filter(
+                IngestPaper.job_id == IngestJob.id,
+                IngestPaper.role == "answer_only",
+                IngestPaper.status == "pending",
+                IngestPaper.matched_ingest_paper_id.is_(None),
+            )
+            .exists()
+        )
+    jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
+    papers = _papers_by_job(db, jobs)
+    return {"data": [{**_job_out(j), "papers": papers[j.id]} for j in jobs], **worker_state(db)}
+
+
+@router.get("/jobs/{job_id}")
+def get_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    job = _get_own_job(db, job_id, current_user)
+    return {
+        **_job_out(job),
+        "report": job.report,
+        "tasks": [_task_out(t) for t in job.tasks],
+        **worker_state(db),
+    }
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        reopened = retry_job(job, db, current_user)
+    except JobNotRetryableError as e:
+        raise HTTPException(status_code=409, detail=e.reason)
+    db.refresh(job)
+    return {**_job_out(job), "reopened": reopened}
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+def cancel_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        prefix = cancel_job(job, db, current_user)
+    except JobNotCancellableError as e:
+        raise HTTPException(status_code=409, detail=f"A {e.status} job cannot be cancelled")
+    # Commit the status change before the irreversible S3 delete, as the paper
+    # delete does; a failed delete only orphans temp objects.
+    db.commit()
+    try:
+        store.delete_prefix(prefix)
+    except Exception:
+        log.error("could not delete the cancelled job's S3 files under %s", prefix)
+    return None
+
+
+@router.get("/jobs/{job_id}/review")
+def review_ingest_job(
+    job_id: uuid.UUID,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        review = build_review(job, store)
+    except NoProposalError:
+        raise HTTPException(status_code=409, detail="This job has no proposal to review yet")
+    # Papers linked to a paper of another job (by key), for the "linked to ..." note.
+    # ``proposals``: automatic matches of answer-only papers to confirmed papers, by key (#83).
+    return {**review, "matches": paper_links(db, job), "proposals": match_info(db, job)}
+
+
+@router.put("/jobs/{job_id}/proposal")
+def save_proposal(
+    job_id: uuid.UUID,
+    payload: dict = Body(...),
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Save the admin's corrections as ``proposal_edited`` (the original ``proposal`` is kept).
+    Body: ``{"papers": [{"questions": [...], "orphan_answers": [...]}, ...]}``, one entry per
+    proposal paper; everything else is taken from the original."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's proposal cannot be edited")
+    try:
+        save_edited_proposal(job, payload)
+    except NoProposalError:
+        raise HTTPException(status_code=409, detail="This job has no proposal to edit yet")
+    except ProposalEditError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    add_event(db, job.id, "proposal_edited", actor_user_id=current_user.id)
+    db.commit()
+    log_job_event(job.id, "review edits saved")
+    return {"saved": True}
+
+
+class ManualPagesIn(BaseModel):
+    first_page: int
+    last_page: int
+
+
+@router.post("/jobs/{job_id}/manual-pages")
+def manual_pages(
+    job_id: uuid.UUID,
+    payload: ManualPagesIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Hand a page range of the job's source PDF to the Manual import flow: the same
+    ``{pages, suggested_metadata}`` the Manual flow's own PDF upload returns."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        pdf = extract_page_range(store.get(job.source_key), payload.first_page, payload.last_page)
+    except PageRangeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except InvalidPdfError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    report = job.report or {}
+    # An old job has one filename guess; a newer one has one entry per paper (take the first).
+    metadata = report.get("filename_metadata") or next(iter((report.get("paper_metadata") or {}).values()), None)
+    return upload_pages(pdf, job.filename, db, suggested_metadata=metadata)
+
+
+class JobConfirmIn(PaperMetadataIn):
+    # Which proposal paper: its question label, else its answer label (see paper_key).
+    paper_label: str
+    # A school not in the list yet (#87): give its name instead of school_id; confirm creates it.
+    school_id: Optional[int] = None
+    new_school_name: Optional[str] = Field(None, max_length=128)
+
+
+class PaperMetadataEditIn(BaseModel):
+    """The review sidebar's seven fields as the admin has them so far; any may be unset.
+    ``new_school_name`` is a school typed that is not in the list yet (used when ``school_id`` is
+    unset; a name equal to an existing school resolves to it)."""
+
+    school_id: Optional[int] = None
+    new_school_name: Optional[str] = Field(None, max_length=128)
+    year: Optional[int] = None
+    level_id: Optional[int] = None
+    subject_id: Optional[int] = None
+    exam_type_id: Optional[int] = None
+    stream_id: Optional[int] = None
+    paper_number: Optional[str] = None
+
+
+@router.put("/jobs/{job_id}/papers/{paper_key}/metadata")
+def save_paper_metadata(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: PaperMetadataEditIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Record the admin's edits to one paper's metadata on its ``ingest_paper`` row (source
+    ``admin`` when a value changed). Called as the admin edits the review sidebar."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's metadata cannot be edited")
+    db.refresh(job, with_for_update=True)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    if row.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} was already {row.status}")
+    set_paper_metadata(db, job, paper_key, payload.model_dump())
+    match_row(db, row)  # the key may now match (or stop matching) a confirmed paper
+    db.commit()
+    return {"saved": True, "metadata_source": row.metadata_source, "proposal": match_info(db, job).get(paper_key)}
+
+
+@router.get("/jobs/{job_id}/papers/{paper_key}/candidates")
+def paper_candidates(
+    job_id: uuid.UUID,
+    paper_key: str,
+    school_id: Optional[int] = None,
+    new_school_name: Optional[str] = None,
+    year: Optional[int] = None,
+    level_id: Optional[int] = None,
+    subject_id: Optional[int] = None,
+    exam_type_id: Optional[int] = None,
+    stream_id: Optional[int] = None,
+    paper_number: Optional[str] = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """"Match this paper": the booklets this paper could be paired with, ranked against the given
+    fields (blank = any) as ``{exact, best}``. See ``app.services.match_candidates``."""
+    job = _get_own_job(db, job_id, current_user)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    query = {
+        "school_id": school_id, "new_school_name": new_school_name, "year": year, "level_id": level_id,
+        "subject_id": subject_id, "exam_type_id": exam_type_id, "stream_id": stream_id, "paper_number": paper_number,
+    }
+    return find_candidates(db, store, row, query)
+
+
+class JobMatchIn(BaseModel):
+    ingest_paper_id: int
+    # "Also update this paper's details": saved on this paper in the same transaction.
+    metadata: Optional[PaperMetadataEditIn] = None
+    # The answer mapping table (answer label -> question label, null: left off), saved as the answer
+    # paper's ``answer_map``; omitted means by number (#92).
+    mapping: Optional[dict[str, Optional[str]]] = None
+
+
+@router.post("/jobs/{job_id}/papers/{paper_key}/match")
+def match_job_paper(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: JobMatchIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Pair a pending paper with a pending paper of the other role (answer-only <-> question), of
+    another review-ready job or this one (both rows get each other's id in
+    ``matched_ingest_paper_id``), optionally saving this paper's ``metadata`` first and the
+    pair's answer ``mapping``. Nothing is attached yet; confirming the question paper settles the
+    pair. The response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        metadata = payload.metadata.model_dump() if payload.metadata is not None else None
+        link_papers(db, job, paper_key, payload.ingest_paper_id, metadata, payload.mapping)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+@router.get("/jobs/{job_id}/papers/{paper_key}/answer-map")
+def answer_mapping_table(
+    job_id: uuid.UUID,
+    paper_key: str,
+    ingest_paper_id: Optional[int] = None,
+    paper_id: Optional[int] = None,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """The answer mapping table (#92) for this paper and a partner: the pending paper
+    ``ingest_paper_id``, the bank paper ``paper_id``, or (neither) its current link, as
+    ``{questions, answers, mapping}``. See ``app.services.answer_mapping``."""
+    job = _get_own_job(db, job_id, current_user)
+    row = get_paper_row(db, job, paper_key) or (sync_job_papers(db, job) and get_paper_row(db, job, paper_key))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    try:
+        return mapping_table(db, store, row, ingest_paper_id, paper_id)
+    except MatchError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+
+
+class AnswerMapIn(BaseModel):
+    # answer label -> question label (null: left off); null altogether means by number
+    mapping: Optional[dict[str, Optional[str]]] = None
+
+
+@router.put("/jobs/{job_id}/papers/{paper_key}/answer-map")
+def save_answer_map(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: AnswerMapIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Check answers…": save an edited answer mapping on a linked pair (#92), from either side; it
+    is stored on the answer paper and used when the question paper is confirmed. The response is
+    what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        set_answer_map(db, job, paper_key, payload.mapping)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+def _match_state(db: Session, job, paper_key: str) -> dict:
+    """What matching now offers one paper: its link (``matches``) and its proposal."""
+    return {"matches": paper_links(db, job).get(paper_key), "proposal": match_info(db, job).get(paper_key)}
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/match")
+def unmatch_job_paper(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Unmatch: remove a paper's link (on both sides) and reject that pair, so automatic matching
+    never re-makes it. Both papers are re-matched; the response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    db.refresh(job, with_for_update=True)
+    try:
+        unlink_paper(db, job, paper_key)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/proposed-paper")
+def reject_job_paper_proposal(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Not this one": reject an answer-only paper's proposed confirmed paper and re-run matching,
+    which may propose or link something else. The response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    try:
+        reject_proposed_paper(db, job, paper_key)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+@router.delete("/jobs/{job_id}/papers/{paper_key}/suggestion")
+def reject_job_paper_suggestion(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Not a pair": reject the pending question paper suggested for an answer-only paper and re-run
+    matching for both. The response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    row = get_paper_row(db, job, paper_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    if reject_suggestion(db, row) is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} has no suggested partner")
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+@router.post("/jobs/{job_id}/papers/{paper_key}/role")
+def switch_job_paper_role(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: RoleIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"This is an answer booklet" / "This is a question booklet": make a pending paper answers
+    only (its boxes become answer boxes) or a question paper, release its link, and re-match it.
+    The response is what this paper has now, plus its ``role``."""
+    job = _get_own_job(db, job_id, current_user)
+    db.refresh(job, with_for_update=True)
+    try:
+        row = switch_role(db, job, paper_key, payload.role)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    log_job_event(job.id, f"paper {paper_key} is now {'answers only' if row.role == 'answer_only' else 'a question paper'}")
+    return {"role": row.role, **_match_state(db, job, paper_key)}
+
+
+class JobSkipIn(BaseModel):
+    paper_label: str
+
+
+@router.post("/jobs/{job_id}/confirm", status_code=201)
+def confirm_job(
+    job_id: uuid.UUID,
+    payload: JobConfirmIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Confirm one proposed paper of a reviewed job: crop its rectangles from ``source.pdf``,
+    run ``confirm_import``, and answer like ``/confirm`` (plus ``job_status``) so the topic-review
+    step follows unchanged."""
+    job = _get_own_job(db, job_id, current_user)
+    conflict = school_level_conflict(db, payload.stream_id, payload.level_id)
+    if conflict:
+        raise HTTPException(status_code=422, detail=conflict)
+    metadata = payload.model_dump(exclude={"paper_label"})
+    answers: dict = {}
+    try:
+        paper, settled = confirm_job_paper(
+            job, payload.paper_label, metadata, current_user, db, store, answers_info=answers
+        )
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {
+        **_confirm_response(db, paper.id), "job_status": "confirmed" if settled else "review_ready",
+        "answers_from": answers.get("answers_from"), "unmatched": answers.get("unmatched", []),
+        "answers_job_settled": answers.get("answers_job_settled", False),
+    }
+
+
+@router.post("/jobs/{job_id}/skip")
+def skip_job(
+    job_id: uuid.UUID,
+    payload: JobSkipIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Skip one proposed paper; the job is ``confirmed`` once every paper is confirmed or skipped."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        settled = skip_job_paper(job, payload.paper_label, db, store, current_user)
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {"job_status": "confirmed" if settled else "review_ready"}
+
+
+class JobAttachIn(BaseModel):
+    key: str
+    paper_id: int
+    mode: Optional[Literal["append", "replace"]] = None
+    # The answer mapping table: answer label -> question label (null: left off); an answer it does
+    # not name goes onto the question with its number (#92).
+    mapping: Optional[dict[str, Optional[str]]] = None
+
+
+@router.post("/jobs/{job_id}/attach")
+def attach_job(
+    job_id: uuid.UUID,
+    payload: JobAttachIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Attach an answer-only paper's answers to an existing paper, placed by ``mapping`` if given,
+    else by question number. Omitting ``mode`` replaces a question's answers when it has none and
+    appends otherwise. Answers that land on no question are returned as ``unmatched``."""
+    job = _get_own_job(db, job_id, current_user)
+    try:
+        result = attach_answers(
+            job, payload.key, payload.paper_id, payload.mode, current_user, db, store, mapping=payload.mapping
+        )
+    except ReviewActionError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    return {**result, "job_status": "confirmed" if result["job_settled"] else "review_ready"}

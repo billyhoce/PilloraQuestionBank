@@ -51,6 +51,42 @@ async function request(method, path, body, signal) {
   return data
 }
 
+// POST a file to a presigned S3 form. XMLHttpRequest, not fetch: only XHR reports upload progress.
+// `fields` go first and the file last, as S3 requires. `onProgress` gets a 0..1 fraction.
+// Aborting `signal` aborts the transfer and rejects with { aborted: true }.
+function postToS3(url, fields, file, onProgress, signal) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    Object.entries(fields).forEach(([k, v]) => form.append(k, v))
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url)
+    if (signal) {
+      if (signal.aborted) {
+        reject({ status: 0, aborted: true, message: 'Upload cancelled' })
+        return
+      }
+      signal.addEventListener('abort', () => {
+        xhr.abort?.()
+        reject({ status: 0, aborted: true, message: 'Upload cancelled' })
+      }, { once: true })
+    }
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(1)
+        resolve()
+      } else {
+        reject({ status: xhr.status, message: 'Upload to storage failed. Please try again.' })
+      }
+    }
+    xhr.onerror = () => reject({ status: 0, message: 'Upload to storage failed. Please check your connection and try again.' })
+    xhr.send(form)
+  })
+}
+
 export const api = {
   import: {
     uploadPdf: (file) => {
@@ -66,6 +102,100 @@ export const api = {
           return res.json()
         })
     },
+    // Auto-detect: upload a PDF straight to S3 as an ingest job -> { job_id }.
+    // 1. POST /uploads (creates the job `awaiting_upload` + a presigned POST), 2. XHR POST to S3 with
+    // progress, 3. POST /jobs/{id}/uploaded (queues it). If step 2 or 3 fails, or `signal` is
+    // aborted during them, the job is cancelled. `onJob(job_id)` is told the id once it exists.
+    uploadJob: async (file, onProgress, { signal, onJob } = {}) => {
+      const { job_id, url, fields } = await request('POST', '/api/import/uploads', {
+        filename: file.name,
+        size: file.size,
+      })
+      onJob?.(job_id)
+      try {
+        await postToS3(url, fields, file, onProgress, signal)
+        await request('POST', `/api/import/jobs/${job_id}/uploaded`)
+      } catch (e) {
+        await request('DELETE', `/api/import/jobs/${job_id}`).catch(() => {})
+        throw e
+      }
+      return { job_id }
+    },
+    // Every admin's jobs, newest first; optional status, `{ job_id }` or `{ paper_id }` filters.
+    // Resolves to { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
+    listJobs: (status, { job_id, paper_id, unmatched_answers } = {}) => {
+      const params = new URLSearchParams()
+      if (status) params.set('status', status)
+      if (job_id) params.set('job_id', job_id)
+      if (paper_id) params.set('paper_id', paper_id)
+      if (unmatched_answers) params.set('unmatched_answers', 'true')
+      const qs = params.toString()
+      return request('GET', `/api/import/jobs${qs ? `?${qs}` : ''}`).then(r => ({
+        jobs: r.data,
+        workerAlive: r.worker_alive,
+        heartbeatAgeS: r.heartbeat_age_s,
+      }))
+    },
+    getJob: (id) => request('GET', `/api/import/jobs/${id}`),
+    // The proposal under review, with presigned page-image URLs and pixel sizes.
+    review: (id) => request('GET', `/api/import/jobs/${id}/review`),
+    // Save the corrected proposal ({papers: [{questions, orphan_answers}]}); 422 carries a message.
+    saveProposal: (id, body) => request('PUT', `/api/import/jobs/${id}/proposal`, body),
+    // Record the admin's sidebar edits for one paper (its `key`) on its ingest_paper row.
+    savePaperMetadata: (id, key, body) =>
+      request('PUT', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/metadata`, body),
+    // Booklet pages first..last of the job's source PDF, as the Manual flow's upload result.
+    manualPages: (id, first_page, last_page) =>
+      request('POST', `/api/import/jobs/${id}/manual-pages`, { first_page, last_page }),
+    // Confirm / skip one proposed paper (paper_label = the paper's `key` from the review).
+    // Confirm resolves like `confirm` plus job_status; skip to { job_status }.
+    confirmJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/confirm`, payload),
+    skipJobPaper: (id, paper_label) => request('POST', `/api/import/jobs/${id}/skip`, { paper_label }),
+    // Attach an answer-only paper to an existing paper: { key, paper_id, mode? } -> { attached, unmatched, modes, job_status }.
+    attachJobPaper: (id, payload) => request('POST', `/api/import/jobs/${id}/attach`, payload),
+    // "Match this paper": the booklets paper `key` could be paired with, ranked against `query`
+    // (the seven fields, or new_school_name; blank = any) -> { exact, best }.
+    paperCandidates: (id, key, query = {}) => {
+      const params = new URLSearchParams()
+      for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== '') params.set(k, v)
+      const qs = params.toString()
+      return request('GET', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/candidates${qs ? `?${qs}` : ''}`)
+    },
+    // Pair paper `key` with a pending paper of the other role (another job's, or this one's),
+    // optionally saving this paper's `metadata` and the answer `mapping` too. Returns { matches, proposal }.
+    matchJobPaper: (id, key, ingest_paper_id, metadata, mapping) =>
+      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`, {
+        ingest_paper_id, ...(metadata && { metadata }), ...(mapping && { mapping }),
+      }),
+    // The answer mapping table for paper `key` and `target` ({ ingest_paper_id } or { paper_id };
+    // null: its current link) -> { questions, answers, mapping }.
+    answerMappingTable: (id, key, target) => {
+      const params = new URLSearchParams()
+      for (const [k, v] of Object.entries(target ?? {})) params.set(k, v)
+      const qs = params.toString()
+      return request('GET', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/answer-map${qs ? `?${qs}` : ''}`)
+    },
+    // "Check answers…": save a linked pair's edited mapping -> { matches, proposal }.
+    saveAnswerMap: (id, key, mapping) =>
+      request('PUT', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/answer-map`, { mapping }),
+    // Unmatch a linked paper (either side): the pair is rejected for good and both are re-matched.
+    // Returns what this paper has now: { matches, proposal }.
+    unmatchJobPaper: (id, key) => request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/match`),
+    // "Not this one": reject an answer-only paper's proposed confirmed paper and re-match it.
+    // Returns { matches, proposal } like unmatchJobPaper.
+    rejectProposedPaper: (id, key) =>
+      request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/proposed-paper`),
+    // "Not a pair": reject the question paper suggested for answer-only paper `key` and re-match
+    // both. Returns { matches, proposal } like unmatchJobPaper.
+    rejectSuggestion: (id, key) =>
+      request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/suggestion`),
+    // "This is an answer booklet" / "This is a question booklet": role 'answer_only' | 'question'.
+    // Returns { role, matches, proposal }.
+    switchPaperRole: (id, key, role) =>
+      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/role`, { role }),
+    cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
+    // Failed/blocked tasks and everything downstream go back to ready.
+    retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),
     confirm: (payload) => request('POST', '/api/import/confirm', payload),
     aiTopicsForQuestion: (question_id, signal) =>
       request('POST', '/api/import/ai-topics', { question_id }, signal),
@@ -107,8 +237,8 @@ export const api = {
 
   subjects: {
     list: () => request('GET', '/api/subjects').then(r => r.data),
-    create: (name) => request('POST', '/api/subjects', { name }),
-    update: (id, name) => request('PUT', `/api/subjects/${id}`, { name }),
+    create: (name, code) => request('POST', '/api/subjects', { name, code }),
+    update: (id, name, code) => request('PUT', `/api/subjects/${id}`, { name, code }),
     delete: (id) => request('DELETE', `/api/subjects/${id}`),
   },
 

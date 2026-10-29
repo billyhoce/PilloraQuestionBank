@@ -28,7 +28,7 @@ def get_db():
     try:
         db = SessionLocal()
     except OperationalError as e:
-        log.error(f"{'get_db':<22}| db_connect| {e}")
+        log.error("database connection failed: %s", e)
         raise DatabaseConnectionError("Could not connect to the database") from e
 
     try:
@@ -36,7 +36,7 @@ def get_db():
         db.commit()
     except OperationalError as e:
         db.rollback()
-        log.error(f"{'get_db':<22}| db_connect| {e}")
+        log.error("database connection failed: %s", e)
         raise DatabaseConnectionError("Lost connection to the database") from e
     except Exception:
         db.rollback()

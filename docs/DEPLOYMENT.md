@@ -1,211 +1,356 @@
 # Deployment
 
-**Scope:** Hosting plan, CI/CD pipeline, one-time VM provisioning, configuration, backup strategy. For application code, see [ARCHITECTURE.md](./ARCHITECTURE.md) and the feature docs under [`features/`](./features).
+Hosting, environments, CI/CD, configuration, one-time provisioning, backups, rollback and
+observability.
 
-## Hosting Plan
+**Code:** `Dockerfile`, `deploy/docker-compose.prod.yml`, `deploy/nginx/pillora.conf`,
+`deploy/scripts/backup_db.sh`, `deploy/systemd/`, `deploy/journald/`, `deploy/pillora.env.example`,
+`.github/workflows/ci.yml`, `.github/workflows/deploy.yml`
 
-| Component | Service | Tier | Notes |
+## Hosting
+
+| Component | Service | Notes |
+|---|---|---|
+| App server | Oracle Cloud always-free Ampere VM (`VM.Standard.A1.Flex`) | **arm64**, 2 OCPU / 12 GB, Ubuntu 24.04. Host Nginx + Docker (API and worker containers) |
+| Database | Supabase managed Postgres, free tier | 500 MB (metadata only; expected < 50 MB). **No managed backups or PITR** — see [Backups](#backups). Kept off the VM so a VM loss loses no data |
+| Object storage | AWS S3, `ap-southeast-1` | Images bucket + backups bucket, both private and versioned |
+| Registry | GitHub Container Registry | `ghcr.io/billyhoce/pillora-api`, `linux/arm64` |
+| Edge | Cloudflare (proxied DNS, free) | Browser TLS, DDoS protection, hides the origin IP |
+| Origin TLS | Cloudflare Origin Certificate | 15-year cert on Nginx, SSL mode Full (strict); no ACME renewal |
+| Domain | `questionbank.pillora.com.sg` | `www.pillora.com.sg` stays on Wix, DNS-only, untouched |
+| AI | Anthropic Claude API | Haiku 4.5 for labelling, metadata and segmentation; segmentation retries on Opus 5 |
+
+```mermaid
+flowchart LR
+    b[Browser] --> cf["Cloudflare edge"]
+    cf -- "HTTPS, Full (strict)" --> nginx
+    subgraph VM["Oracle VM"]
+        nginx["Nginx<br/>/var/www/pillora + /api proxy"]
+        api["api container<br/>127.0.0.1:8000"]
+        worker["worker container<br/>1 CPU / 6 GB cap"]
+        nginx --> api
+    end
+    api --> pg[(Supabase)]
+    worker --> pg
+    api --> s3[(S3)]
+    worker --> s3
+    b -. presigned URLs .-> s3
+```
+
+- The API and worker run the **same image**: Python 3.11 on Debian bookworm with `tesseract-ocr`
+  5.3.0 (the version OCR calibration assumes) and the `ingestion/` package installed.
+- `api`: uvicorn, single process, bound to loopback; Docker healthcheck on `/api/health` every 30 s.
+- `worker`: `python -m app.worker`, no ports, capped at 1 CPU / 6 GB (an 80-page booklet fits),
+  leaving the other core and 6 GB to the API, Nginx and the OS. Check with `docker stats` after a
+  large booklet.
+- Both restart `unless-stopped`, read `/opt/pillora/.env` and log to the host's journald (see
+  [Observability](#observability)).
+- Same-origin SPA and API, so the API needs no CORS. The only cross-origin request is the browser's
+  direct PDF upload to S3, which needs the bucket CORS rule (provisioning step 6).
+
+## Environments
+
+| Env | Database | Object store | URL |
 |---|---|---|---|
-| Database | Supabase managed PostgreSQL | Free | 500 MB. **No managed backups/PITR on the free tier** — see [Backup Strategy](#backup-strategy) |
-| App server | Oracle Cloud Free Tier — 1 Ampere ARM VM (`VM.Standard.A1.Flex`) | Always-free | 1 OCPU, 6 GB RAM, **arm64/aarch64**. Runs the Dockerized FastAPI backend + host Nginx |
-| Object storage | AWS S3 | Paid (small) | ~$0.023/GB/month after 5 GB / 12-month free tier expires |
-| Container registry | GitHub Container Registry (GHCR) | Free | Stores the `pillora-api` image (`linux/arm64`) built by CI |
-| Edge / CDN / TLS | Cloudflare (proxied DNS) | Free | Browser TLS, DDoS protection, caching, hides the origin IP |
-| Domain | `questionbank.pillora.com.sg` (zone DNS on Cloudflare) | — | Proxied A record → Oracle VM. `www.pillora.com.sg` stays DNS-only → Wix (untouched) |
-| Origin TLS | Cloudflare Origin Certificate | Free | 15-year cert on Nginx; zone SSL/TLS mode Full (strict). No Certbot/ACME renewal |
-| AI | Anthropic Claude API | Paid | ~$48/year at projected volume |
+| Local | Dev Supabase project | MinIO (`docker compose up`) or a dev S3 bucket | `http://localhost:5173` |
+| Production | Supabase production project | `pillora-question-bank-prod` | `https://questionbank.pillora.com.sg` |
 
-**DB size estimate:** metadata only, no images. Expected <50 MB even after years of use. Comfortably inside the 500 MB free tier.
+There is no staging environment: PR review, green CI and fast rollback cover it.
 
-**Object-storage cost:** AWS S3 free tier covers 5 GB for the first 12 months only. After that, expect ~$0.023/GB/month for storage plus modest request and egress costs. At ~2 GB/year growth, year-2 storage cost is roughly $0.05/month, scaling to ~$0.50/month by year 5 — still trivial.
+Locally the worker runs either on the host (`python -m app.worker`) or in the production image via
+the opt-in compose profile (`docker compose --profile worker up -d --build`); see the README.
 
-**Region:** pick an AWS region close to Singapore (e.g. `ap-southeast-1`) to keep latency low for users and for the Oracle VM ↔ S3 round-trips during paper generation.
+## CI (pull requests and non-`main` branches)
 
-### Why DB is NOT on the VM
+`.github/workflows/ci.yml`, two parallel jobs:
 
-A VM disk crash on Oracle Cloud's free tier would lose all data. Supabase provides a managed, off-VM Postgres with high availability at zero cost. Durability of point-in-time data is handled by our own backup pipeline (below), since the free tier does not include managed backups. Putting the DB on the VM trades reliability for nothing.
+- **backend-tests** — Python 3.11: `pip install -r requirements-dev.txt`, then
+  `pytest tests/ --ignore=tests/integration` (offline: SQLite + moto).
+- **frontend-build** — Node 22: `npm ci`, `npm run lint` (informational, never fails the job),
+  `npm test` (Vitest), `npm run build`.
 
-## Architecture
+Details of the suites: [TESTING.md](./TESTING.md).
 
-```
-Browser
-   │  HTTPS
-   ▼
-Cloudflare edge (browser TLS, CDN, DDoS, hides origin IP)
-   │  HTTPS — Full (strict), Cloudflare Origin Certificate; firewall allows only Cloudflare IPs
-   ▼
-Oracle Cloud VM
-   ├─ Nginx (host)      — origin TLS, serves /var/www/pillora SPA, proxies /api → 127.0.0.1:8000
-   └─ Docker
-        └─ pillora-api  — FastAPI/uvicorn on 127.0.0.1:8000
-              ├──► Supabase Postgres   — metadata
-              ├──► AWS S3              — images (+ DB backups)
-              └──► Anthropic Claude    — AI labeling
+## CD (push to `main`)
 
-CI/CD:  GitHub push to main → Actions (test → build image → push GHCR → SSH deploy)
-```
+Every push to `main` deploys to production. `.github/workflows/deploy.yml`; deploys never run
+concurrently.
 
-The frontend is built in CI and served as static files by Nginx; it calls the API at same-origin `/api/*` (Cloudflare is transparent — same hostname), so **no CORS configuration is needed**.
+1. **test** — backend pytest only (frontend tests and lint are not part of the deploy gate).
+2. **build-and-push** — cross-builds the image for `linux/arm64` (QEMU) and pushes
+   `pillora-api:<sha>` and `:latest`; builds the frontend and uploads `dist/`.
+3. **deploy** (SSH to the VM, aborts on any failed step):
+   1. Replace `/var/www/pillora` with the new `dist/`.
+   2. Reset `/opt/pillora/repo` to `origin/main`; refresh `/opt/pillora/backup_db.sh`.
+   3. Pull the new image (`IMAGE_TAG=<sha>`).
+   4. **Dump the database to S3** — failure aborts before migrating.
+   5. `alembic upgrade head` in a one-off API container.
+   6. `docker compose up -d` (API and worker).
+   7. Poll `/api/health` for ~30 s; fail the deploy if it never answers.
 
-## Alternatives Considered
+- The frontend is swapped **before** migrations and the health check, so a failed deploy can leave
+  the new SPA in front of the old API.
+- Migrations run on every deploy and also seed data; there is no separate seed step.
 
-| Option | Why rejected |
+### GitHub secrets
+
+| Secret | Purpose |
 |---|---|
-| **AWS EC2 for the VM** | Only 12 months free, then paid. Oracle's always-free VMs are better long-term. |
-| **Oracle Cloud Object Storage** | Always-free 10 GB, but S3's tooling, MinIO local-dev compatibility, and presigned-URL ergonomics won out. |
-| **DB on the Oracle VM** | VM disk failure = data loss. Supabase is free and managed. |
-| **Supabase Pro ($25/mo) for PITR** | Better RPO, but not needed at this scale; weekly `pg_dump` → S3 meets the durability requirement for free. |
-| **Bare systemd backend** | Docker gives reproducible builds and clean image-tag rollbacks; chosen over venv-on-VM. |
-| **Let's Encrypt/Certbot at the origin** | Works, but Cloudflare adds free edge TLS, DDoS protection, and origin-IP hiding, and its 15-year Origin Certificate removes ACME renewal entirely. |
+| `DEPLOY_HOST` | VM public IP or DNS name |
+| `DEPLOY_USER` | SSH user on the VM |
+| `DEPLOY_SSH_KEY` | Private key whose public half is in that user's `authorized_keys` |
 
-## CI/CD Pipeline
+GHCR uses the built-in `GITHUB_TOKEN`. **App secrets never go to GitHub**: they live only in
+`/opt/pillora/.env` on the VM (mode `0600`), and migrations run there.
 
-Two GitHub Actions workflows:
+## Configuration
 
-- **`.github/workflows/ci.yml`** — runs on PRs and non-`main` branches: backend unit tests (`pytest tests/ --ignore=tests/integration`, fully offline via SQLite + moto) and the frontend lint/build.
-- **`.github/workflows/deploy.yml`** — runs on **push to `main`**:
-  1. **test** — same checks, as a deploy gate.
-  2. **build-and-push** — cross-builds the `Dockerfile` for **`linux/arm64`** (via QEMU, to match the Ampere VM) and pushes `ghcr.io/billyhoce/pillora-api:<sha>` + `:latest`; builds the frontend and uploads `dist/` as an artifact.
-  3. **deploy** — SCPs `dist/` to the VM and SSHes in to: sync the repo, `docker compose pull`, **take a pre-migration DB dump (aborts on failure)**, `alembic upgrade head`, `docker compose up -d`, and curl `/api/health` to confirm.
+Production values live in `/opt/pillora/.env` (template `deploy/pillora.env.example`); local values
+in the gitignored `.env` (template `.env.example`). Both containers and the backup script read it.
 
-**Required GitHub secrets:** `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` (private key whose public half is in the VM user's `~/.ssh/authorized_keys`). GHCR push/pull uses the built-in `GITHUB_TOKEN` — no extra secret needed. **Production app secrets are never placed in GitHub** — they live only in `/opt/pillora/.env` on the VM, and migrations run there.
+| Variable | Used by | Purpose |
+|---|---|---|
+| `DATABASE_URL` | API, worker, backups | Postgres URL with the `+psycopg` driver; Supabase **session pooler, port 5432** (Alembic needs it) |
+| `JWT_SECRET_KEY` | API | Signs session tokens. Long random value (`openssl rand -hex 32`); the code falls back to an insecure default if unset |
+| `S3_BUCKET` | API, worker | Images bucket |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | API, worker, backups | S3 credentials and region |
+| `S3_ENDPOINT_URL` | API, worker | Local MinIO only (`http://localhost:9000`); **unset in production** |
+| `BACKUP_S3_BUCKET` | Backups | Bucket for database dumps |
+| `ANTHROPIC_API_KEY` | API, worker | Claude API |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | API | Google sign-in. Optional: leave unset and the Google button is hidden. Redirect URI must match the OAuth client exactly |
+| `INGEST_OCR_COMMAND` | Worker | Tesseract command. `tesseract` in production; unset runs the local `pillora-tesseract` Docker image |
+| `INGEST_SCRATCH_DIR` | Worker | Per-job working folder, default `/tmp/ingest` |
+| `INGEST_RECONCILE_DELETE` | Worker | Default off: the daily reconciler only reports orphans and stuck jobs. `true` lets it delete orphans, cancel abandoned uploads and fail stuck jobs. Turn on once its reports look right |
+| `INGEST_SEGMENT_MODEL`, `INGEST_RETRY_MODEL` | Worker | Override the segmentation model (`claude-haiku-4-5`) and its retry model (`claude-opus-5`) |
+| `INGEST_FIXTURES_DIR` | Worker | Development only: segmentation plans used instead of calling Claude |
+| `WORKER_VERSION` | Worker | Recorded on the worker heartbeat |
+| `LOG_LEVEL` | API, worker | Root log level, default `INFO` |
 
-**Rollback:** re-deploy a previous image by SSHing to the VM and running, from `/opt/pillora/repo/deploy`:
-```bash
-IMAGE_TAG=<previous-git-sha> docker compose -f docker-compose.prod.yml up -d
-```
+## One-time VM provisioning
 
-## One-Time VM Provisioning
-
-1. **Provision the VM** — Oracle Cloud, 1 Ampere ARM VM (`VM.Standard.A1.Flex`, up to 4 OCPU / 24 GB RAM, always-free), **Ubuntu 24.04 LTS (aarch64)**. The CI image is built for `linux/arm64` to match this shape. Open port **443** in the security list, ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) so the origin is reachable only through Cloudflare. Leave port 80 closed.
-2. **Install host packages:**
+1. **VM** — `VM.Standard.A1.Flex`, 2 OCPU / 12 GB, Ubuntu 24.04 aarch64. Open port **443** only,
+   ideally restricted to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/). Keep 80 closed.
+2. **Host packages:**
    ```bash
    sudo apt update
-   sudo apt install -y docker.io docker-compose-v2 nginx \
-                       postgresql-client git curl unzip
-   sudo usermod -aG docker "$USER"   # log out/in for group to take effect
+   sudo apt install -y docker.io docker-compose-v2 nginx postgresql-client git curl unzip
+   sudo usermod -aG docker,systemd-journal "$USER"   # log out and in again; journal = read logs
    ```
-   *(No Poppler — PDF→image uses PyMuPDF, which bundles its own libraries.)*
-
-   **AWS CLI v2** (not via `apt` — Ubuntu dropped the `awscli` package due to an upstream botocore dependency conflict; v2 is also the only AWS-supported version):
+   AWS CLI v2 (not available via apt):
    ```bash
    curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
-   unzip awscliv2.zip
-   sudo ./aws/install
-   rm -rf aws awscliv2.zip
+   unzip awscliv2.zip && sudo ./aws/install && rm -rf aws awscliv2.zip
    ```
-   *(Use `awscli-exe-linux-x86_64.zip` instead if provisioning on an x86_64 VM.)*
-3. **Clone the repo** (used by the deploy job to sync the compose file + backup script):
+   Tesseract and PDF libraries live in the image, not on the host.
+3. **Repo** (the deploy job syncs the compose file and backup script from it):
    ```bash
    sudo mkdir -p /opt/pillora && sudo chown "$USER":"$USER" /opt/pillora
    git clone https://github.com/billyhoce/PilloraQuestionBank.git /opt/pillora/repo
    ```
-4. **Create the production env file:**
+4. **Env file and backup script:**
    ```bash
-   cp /opt/pillora/repo/deploy/pillora.env.example /opt/pillora/.env
-   # edit /opt/pillora/.env with real prod values
+   cp /opt/pillora/repo/deploy/pillora.env.example /opt/pillora/.env   # fill in real values
    chmod 600 /opt/pillora/.env
    cp /opt/pillora/repo/deploy/scripts/backup_db.sh /opt/pillora/backup_db.sh
    chmod +x /opt/pillora/backup_db.sh
    ```
-5. **Static frontend dir** (owned by the deploy user so the workflow needs no sudo):
+5. **Static dir** owned by the deploy user (the workflow uses no sudo):
    ```bash
    sudo mkdir -p /var/www/pillora && sudo chown -R "$USER":"$USER" /var/www/pillora
    ```
-6. **AWS S3** — create two buckets in `ap-southeast-1`:
-   - `pillora-question-bank-prod` (images) and `question-bank-backups` (DB dumps).
-   - **Block all public access** on both (app uses presigned URLs).
-   - **Enable bucket versioning** on both. On each, add a lifecycle rule to expire **noncurrent** versions after 30 days.
-   - Create one IAM user with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `pillora-question-bank-prod`, plus `s3:PutObject` on `question-bank-backups`. Put its keys in `/opt/pillora/.env`.
-7. **Cloudflare + Nginx (origin TLS):** the app runs on its own subdomain, `questionbank.pillora.com.sg`, so the existing `www.pillora.com.sg` Wix site is untouched.
-   - **Move the `pillora.com.sg` zone to Cloudflare:** add it in Cloudflare, let it import existing records, then set the given nameservers at your registrar. **Replicate every current Wix record and keep `www`/root DNS-only (grey cloud)** so Wix behaves exactly as before.
-   - Add a **proxied** (orange-cloud) A record: `questionbank` → the VM's public IP.
-   - Set the zone's **SSL/TLS mode to Full (strict)** and enable **Always Use HTTPS** (this is per-hostname-safe: grey-clouded `www`/Wix bypasses Cloudflare entirely).
-   - Create a **Cloudflare Origin Certificate** (SSL/TLS → Origin Server → Create Certificate) covering `questionbank.pillora.com.sg` (or `*.pillora.com.sg`) and install it on the VM:
+6. **S3** — two buckets in `ap-southeast-1`: `pillora-question-bank-prod` (images) and
+   `question-bank-backups` (dumps).
+   - Block all public access and enable versioning on both.
+   - Lifecycle on the images bucket (this call **replaces** the whole lifecycle config, so keep
+     both rules in one file). Never add a rule on `ingest/`: pending auto-import jobs keep their
+     files there indefinitely.
+     ```bash
+     aws s3api put-bucket-lifecycle-configuration --bucket pillora-question-bank-prod \
+       --lifecycle-configuration file://lifecycle.json
+     ```
+     ```json
+     {"Rules": [
+       {"ID": "expire-noncurrent", "Status": "Enabled", "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 30}},
+       {"ID": "expire-tmp", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
+        "Expiration": {"Days": 2}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 2}}
+     ]}
+     ```
+     Add the same noncurrent-version rule (30 days) to the backups bucket.
+     Older auto-import jobs may sit under `tmp/ingest/`; settle or cancel them within 2 days of
+     applying the `tmp/` rule.
+   - CORS on the images bucket, for the browser's direct PDF upload (POST from the app origin
+     only):
+     ```bash
+     aws s3api put-bucket-cors --bucket pillora-question-bank-prod --cors-configuration file://cors.json
+     ```
+     ```json
+     {"CORSRules": [
+       {"AllowedOrigins": ["https://questionbank.pillora.com.sg"], "AllowedMethods": ["POST"],
+        "AllowedHeaders": ["*"], "MaxAgeSeconds": 3000}
+     ]}
+     ```
+     Without it uploads fail in the browser and jobs stay `awaiting_upload` until cancelled (by the
+     admin, or after 1 hour by the reconciler when `INGEST_RECONCILE_DELETE` is on). Locally, MinIO's CORS is set server-wide in
+     `docker-compose.yml`.
+   - One IAM user: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on the images bucket's
+     objects, `s3:ListBucket` on the images bucket (prefix cleanup, reconciler, existence checks),
+     and `s3:PutObject` on the backups bucket. Its keys go in `/opt/pillora/.env`.
+7. **Cloudflare and Nginx:**
+   - Move the `pillora.com.sg` zone to Cloudflare; replicate every existing Wix record and keep
+     `www`/root **DNS-only**.
+   - Add a **proxied** A record `questionbank` → the VM's IP.
+   - SSL/TLS mode **Full (strict)**; enable **Always Use HTTPS**.
+   - Create an Origin Certificate for `questionbank.pillora.com.sg` and install it:
      ```bash
      sudo mkdir -p /etc/ssl/cloudflare
-     sudo tee /etc/ssl/cloudflare/pillora-origin.pem   # paste the certificate, then Ctrl-D
-     sudo tee /etc/ssl/cloudflare/pillora-origin.key   # paste the private key, then Ctrl-D
+     sudo tee /etc/ssl/cloudflare/pillora-origin.pem   # paste certificate, Ctrl-D
+     sudo tee /etc/ssl/cloudflare/pillora-origin.key   # paste private key, Ctrl-D
      sudo chmod 600 /etc/ssl/cloudflare/pillora-origin.key
      ```
-   - Install the site config (its `server_name` is already `questionbank.pillora.com.sg`):
+   - Install the site:
      ```bash
      sudo cp /opt/pillora/repo/deploy/nginx/pillora.conf /etc/nginx/sites-available/pillora.conf
      sudo ln -s /etc/nginx/sites-available/pillora.conf /etc/nginx/sites-enabled/
      sudo rm -f /etc/nginx/sites-enabled/default
      sudo nginx -t && sudo systemctl reload nginx
      ```
-   - (Recommended) Enable **Authenticated Origin Pulls** and keep the VM firewall restricted to Cloudflare IPs so the origin cannot be reached directly.
-8. **Verify DNS** — `dig +short questionbank.pillora.com.sg` should return Cloudflare IPs (proxied), and `www.pillora.com.sg` should still resolve to and serve Wix as before.
+   - The site restores real client IPs from `CF-Connecting-IP`; refresh its Cloudflare ranges if
+     they change. Optionally enable Authenticated Origin Pulls.
+8. **Check DNS** — `dig +short questionbank.pillora.com.sg` returns Cloudflare IPs; `www` still
+   serves Wix.
 9. **Weekly backup timer:**
    ```bash
    sudo cp /opt/pillora/repo/deploy/systemd/pillora-backup.* /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now pillora-backup.timer
+   sudo systemctl daemon-reload && sudo systemctl enable --now pillora-backup.timer
    ```
-10. **First deploy** — push to `main` (or re-run the deploy workflow). It pulls the image, runs migrations against the prod DB, and brings up the container. The seed-reference-data migration runs automatically as part of `alembic upgrade head`.
-
-After this, every push to `main` deploys automatically.
-
-## Configuration Reference
-
-Production values live in `/opt/pillora/.env` (template: `deploy/pillora.env.example`).
-
-| Env var | Used by | Purpose |
-|---|---|---|
-| `DATABASE_URL` | Backend, backups | Postgres connection (Supabase prod, session pooler :5432, `+psycopg` driver) |
-| `JWT_SECRET_KEY` | Backend | Signs auth tokens. Must be a long random string (`openssl rand -hex 32`) |
-| `S3_BUCKET` | Backend | Image bucket (`pillora-question-bank-prod`) |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | Backend, backups | AWS S3 (boto3 / awscli) credentials and region |
-| `S3_ENDPOINT_URL` (optional) | Backend | MinIO override for local dev only; **leave unset in production** |
-| `BACKUP_S3_BUCKET` | Backups | Versioned bucket for DB dumps (`question-bank-backups`) |
-| `ANTHROPIC_API_KEY` | Backend | Claude API auth |
-| `GOOGLE_CLIENT_ID` | Backend | OAuth client ID for "Sign in with Google" (see [Google OAuth setup](#google-oauth-setup) and [features/auth.md](./features/auth.md)) |
-| `GOOGLE_CLIENT_SECRET` | Backend | OAuth client secret. Never reaches the browser |
-| `GOOGLE_REDIRECT_URI` | Backend | `https://questionbank.pillora.com.sg/api/auth/google/callback` — must match a URI registered on the OAuth client exactly |
-
-The three `GOOGLE_*` vars are **optional**: leave them unset and Google sign-in is simply off
-(`GET /api/auth/providers` returns `{"google": false}` and the frontend hides the button). The rest
-of the app is unaffected.
+10. **Persistent logs** — keep the journal on disk with a 2 GB cap:
+    ```bash
+    sudo mkdir -p /etc/systemd/journald.conf.d
+    sudo cp /opt/pillora/repo/deploy/journald/pillora.conf /etc/systemd/journald.conf.d/
+    sudo systemctl restart systemd-journald
+    ```
+11. **First deploy** — push to `main` (or re-run the workflow). Migrations create the schema and
+    seed reference data and an admin account, `admin@pillora.com`. There is no in-app password
+    change, so sign in with Google on a real admin address or promote a real account to admin.
 
 ## Google OAuth setup
 
-One-time setup in the [Google Cloud Console](https://console.cloud.google.com). Google Workspace is
-**not** required — a plain free Google Cloud project is enough.
+One-time, in the [Google Cloud Console](https://console.cloud.google.com); a free project is
+enough.
 
-1. **Create a project** — project picker → **New Project** → e.g. `Pillora Question Bank`.
-2. **Configure the OAuth consent screen** — APIs & Services → **OAuth consent screen**, user type
-   **External**.
-   - App name `Pillora Question Bank`; user-support and developer-contact email addresses.
-   - Authorized domain: `pillora.com.sg`.
-   - Scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile` — **and nothing
-     else**. All three are non-sensitive, so Google requires no verification review.
-3. **Publish the app.** While it is in "Testing" only explicitly listed test accounts can sign in
-   (100 max). **Publish app** opens it to anyone; with only the scopes above this is immediate.
-4. **Create the OAuth client** — APIs & Services → **Credentials** → **Create credentials** →
-   **OAuth client ID** → **Web application**.
-   - **Authorized JavaScript origins:** leave empty. The server-side flow never uses them.
-   - **Authorized redirect URIs** — these must match `GOOGLE_REDIRECT_URI` byte-for-byte:
-     - `https://questionbank.pillora.com.sg/api/auth/google/callback` (production)
-     - `http://localhost:5173/api/auth/google/callback` (local dev — the Vite dev server proxies
-       `/api` to the backend. Google permits plain `http` only for `localhost`.)
-5. **Store the credentials.** Add the three vars to `/opt/pillora/.env` (`chmod 600`) and restart
-   the API container. For local development put them in the gitignored `.env` with the
-   `localhost:5173` redirect URI. **Nothing goes in GitHub secrets** — like `JWT_SECRET_KEY` and the
-   AWS keys, these live only on the VM.
+1. Create a project (e.g. `Pillora Question Bank`).
+2. **OAuth consent screen**: External; app name, support and developer emails; authorised domain
+   `pillora.com.sg`; scopes `openid`, `userinfo.email`, `userinfo.profile` only (non-sensitive, no
+   verification review).
+3. **Publish** the app — in "Testing" only listed test users (max 100) can sign in.
+4. **Credentials → OAuth client ID → Web application**:
+   - Authorised JavaScript origins: leave empty (server-side flow).
+   - Authorised redirect URIs, matching `GOOGLE_REDIRECT_URI` exactly:
+     - `https://questionbank.pillora.com.sg/api/auth/google/callback`
+     - `http://localhost:5173/api/auth/google/callback` (local; Vite proxies `/api`)
+5. Put the three `GOOGLE_*` values in `/opt/pillora/.env` and restart the API container. Locally,
+   use `.env` with the localhost redirect URI. Nothing goes in GitHub.
 
-Rotating the client secret is a console action plus an `/opt/pillora/.env` edit and a container
-restart; no redeploy or migration is involved.
+Rotating the secret: console, `.env` edit, container restart. No redeploy.
 
-## Backup Strategy
+## Backups
 
-**The Supabase free tier has no managed backups and no point-in-time recovery.** Durability is provided by our own pipeline:
+- `deploy/scripts/backup_db.sh` streams `pg_dump | gzip` to
+  `s3://$BACKUP_S3_BUCKET/db/pillora-<UTC timestamp>.sql.gz`.
+  - **Weekly** via `pillora-backup.timer` (runs a missed backup on next boot).
+  - **Before every migration** in the deploy; a failed dump aborts the deploy.
+  - The bucket is versioned, so an overwritten or deleted dump is recoverable.
+- **Restore:**
+  ```bash
+  aws s3 cp s3://<bucket>/db/<file>.sql.gz - | gunzip | psql "<DATABASE_URL without +psycopg>"
+  ```
+- **Images:** S3 durability plus versioning; noncurrent versions are kept 30 days.
+- **RPO:** up to 7 days for the database (plus a dump at every deploy). Tighten by changing the
+  timer's `OnCalendar` to `daily`.
 
-- **PostgreSQL → S3 (`pg_dump`):** `deploy/scripts/backup_db.sh` streams `pg_dump | gzip` to `s3://<BACKUP_S3_BUCKET>/db/`.
-  - **Weekly** via the `pillora-backup.timer` systemd timer.
-  - **Before every migration:** the deploy workflow runs the same script *before* `alembic upgrade head`, so an automated deploy always creates a fresh recovery point and aborts if the dump fails.
-  - The backups bucket has **versioning** on, so even an overwritten/deleted dump is recoverable.
-  - **Restore:** `aws s3 cp s3://<bucket>/db/<file>.sql.gz - | gunzip | psql "<plain-postgresql-url>"` (strip the `+psycopg` driver suffix from `DATABASE_URL`).
-- **Images (AWS S3):** 11-nines durability by design. **Versioning** is enabled on the image bucket with a lifecycle rule expiring noncurrent versions after 30 days, protecting against accidental overwrites/deletes without inflating storage cost.
+## Rollback
 
-**Recovery point objective (RPO):** up to 7 days for the database between weekly dumps (plus a guaranteed dump on every deploy). Acceptable for this workload; tighten by changing the timer's `OnCalendar` to `daily` if desired.
+- **Preferred:** `git revert <bad-commit>` and push — a full deploy, frontend included, with a
+  fresh dump first.
+- **Fast, backend only:** on the VM, from `/opt/pillora/repo/deploy`:
+  ```bash
+  IMAGE_TAG=<previous-sha> docker compose -f docker-compose.prod.yml up -d
+  ```
+  Rolls both API and worker. It runs no migrations, so it is safe only if the old code works with
+  the current schema. Any later `docker compose up -d` without `IMAGE_TAG` goes back to `:latest`.
+- Re-running an old deploy run fails at `alembic upgrade head` once the schema has moved past that
+  image (and the frontend has already been swapped by then).
+- **Database:** prefer a forward-fix migration over `alembic downgrade`; for data loss, restore the
+  latest dump (no PITR).
+
+## Observability
+
+- **Logs:** both containers log one JSON object per line to stdout (`ts`, `level`, `logger`, `msg`,
+  `job_id`, `section`, `stage`, `request_id`, `user_id`, `task_attempt`, plus structured fields such
+  as `seconds` or `cost_usd`).
+  - Docker's `journald` driver hands each line to the **VM's journal**, tagged `pillora-api` or
+    `pillora-worker` (migration runs log as `pillora-api` too). The history belongs to the VM, not
+    the container, so deploys, rollbacks and restarts keep it (`json-file` logs vanished with every
+    recreated container, i.e. every deploy).
+  - Retention: the whole journal is capped at 2 GB and survives reboots (`deploy/journald/`,
+    provisioning step 10); the oldest lines go first. Check usage with `journalctl --disk-usage`.
+  - Nothing is copied off the VM: losing the VM loses its logs. Durable job history is in
+    `ingest_event` (below), and the reading commands are under [Reading the logs](#reading-the-logs).
+
+- **Request ids:** every API response carries `X-Request-ID`; quote it to find the request's log
+  lines.
+- **Health:** `/api/health` (no database hit) — used by the container healthcheck and the deploy.
+  An external uptime check (e.g. UptimeRobot every 5 min) is recommended but not part of the repo.
+- **Worker liveness:** the worker heartbeats every 30 s; the import pages show "Worker offline" when
+  it is more than 90 s stale.
+- **Ingest history:** every job's task attempts, admin actions and reconciler findings stay in the
+  `ingest_event` audit table and on the job detail panel; each job's Claude cost is on its report.
+  See [features/auto-import.md](./features/auto-import.md).
+- **Daily reconciler** reports orphaned S3 objects, scratch folders and stuck jobs as log lines and
+  audit events.
+- Errors to watch: PDF generation failures, Claude call errors, auth failures, database-unavailable
+  responses. No error tracker (e.g. Sentry) is wired in.
+
+### Reading the logs
+
+The logs live only on the VM, so reading them **needs SSH** — the same access the deploy uses (a key
+in the deploy user's `authorized_keys`; that user must be in `systemd-journal` or `adm`, or use
+`sudo`). There is no log viewer in the app or a hosted service.
+
+No interactive session is needed: run `journalctl` over SSH from your machine and filter locally.
+`-o cat` prints just the app's own line:
+
+```text
+2026-10-28 15:36:11.769 WARNING [job 139b2f78-… q1 locate] page 9: ignoring out-of-sequence question number 8
+```
+
+The bracket is the context: the job, section, stage (and attempt after the first) in the worker; the
+request id and user in the API. Every line of a traceback repeats it, so a grep keeps the traceback.
+
+```bash
+VM=<user>@<DEPLOY_HOST>
+
+# One auto-import job, both containers, from the last week
+ssh $VM "journalctl -t pillora-worker -t pillora-api --since -7d -o cat" | grep <job-id>
+
+# One API request, by the X-Request-ID the user quotes
+ssh $VM "journalctl -t pillora-api --since today -o cat" | grep <request-id>
+
+# Follow the worker live; last 200 lines; errors only; every Claude call (with its reply)
+ssh $VM "journalctl -t pillora-worker -f -o cat"
+ssh $VM "journalctl -t pillora-api -n 200 -o cat"
+ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | grep ' ERROR '
+ssh $VM "journalctl -t pillora-worker --since -1d -o cat" | grep 'Claude call'
+
+# Save a day to a file
+ssh $VM "journalctl -t pillora-worker --since 2026-10-26 --until 2026-10-27 -o cat" > worker.log
+```
+
+- `--since`/`--until` take dates, `today`, `yesterday` or relative times such as `-2h`.
+- On the VM, `docker compose -f docker-compose.prod.yml logs -f` (from `/opt/pillora/repo/deploy`)
+  also works, but shows only the current containers, i.e. since the last deploy.
+- Locally the lines go to the terminal running the API or worker; a worker in the compose profile
+  is read with `docker compose logs worker --no-log-prefix` (lost when the container is recreated).
+- `LOG_LEVEL=DEBUG` adds the ingestion stages' routine progress (calibration, renders, scratch paths).

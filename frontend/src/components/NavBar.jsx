@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import UserMenu from './UserMenu'
+import { useUploadQueue } from '../features/import/uploadQueueContext'
 
 const baseLinks = [
   { to: '/', label: 'Question Bank' },
@@ -23,6 +24,9 @@ const adminLinks = [
 export default function NavBar() {
   const { user } = useAuth()
   const location = useLocation()
+  // Auto-import uploads keep running on other pages; say so on the Import link.
+  const uploads = useUploadQueue()
+  const uploading = uploads?.items.filter(it => it.status !== 'failed').length ?? 0
 
   const links = user?.role === 'admin' ? [...baseLinks, ...adminLinks] : baseLinks
 
@@ -66,6 +70,15 @@ export default function NavBar() {
                 }`}
               >
                 {label}
+                {to === '/admin/import' && uploading > 0 && (
+                  <span
+                    aria-label={`${uploading} uploading`}
+                    title={`${uploading} PDF${uploading === 1 ? '' : 's'} uploading`}
+                    className="ml-1.5 inline-block rounded-full bg-blue-600 text-white text-xs px-1.5 leading-5"
+                  >
+                    ↑{uploading}
+                  </span>
+                )}
               </Link>
             )
           })}

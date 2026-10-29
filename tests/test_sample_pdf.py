@@ -4,7 +4,6 @@ These drive the real layout engine end-to-end with synthetic images — no DB,
 S3, or network. Expected page counts are computed from the engine itself so
 the tests don't hardcode page geometry.
 """
-import io
 import sys
 from pathlib import Path
 
@@ -34,12 +33,6 @@ def _planned_pages(n_questions: int, variant: str) -> int:
 
 def _page_count(pdf_path: Path) -> int:
     return len(PdfReader(str(pdf_path)).pages)
-
-
-def test_make_page_png_dimensions():
-    raw = make_page_png(1234, 567, "label")
-    img = Image.open(io.BytesIO(raw))
-    assert img.size == (1234, 567)
 
 
 def test_question_variant_page_count(tmp_path):

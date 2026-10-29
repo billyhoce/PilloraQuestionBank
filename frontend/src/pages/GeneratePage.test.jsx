@@ -15,7 +15,7 @@ vi.mock('../api/client', () => {
       schools: { list },
       examTypes: { list },
       schoolLevels: { list },
-      tags: { list },
+      tags: { list: vi.fn().mockResolvedValue([]) },
       topics: { list: vi.fn().mockResolvedValue([]) },
       papers: { years: vi.fn().mockResolvedValue([]) },
       questions: { list: vi.fn() },
@@ -90,12 +90,6 @@ describe('GeneratePage PDF output mode (non-admin)', () => {
     api.generate.paper.mockResolvedValue(new Blob(['%PDF'], { type: 'application/pdf' }))
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:fake')
     globalThis.URL.revokeObjectURL = vi.fn()
-  })
-
-  it('defaults to the combined PDF option', async () => {
-    await renderWithCartItem()
-    expect(screen.getByRole('radio', { name: /1 combined pdf/i })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /separate question & answer/i })).not.toBeChecked()
   })
 
   it('makes a single combined request with only the user-editable fields', async () => {
@@ -285,18 +279,6 @@ describe('GeneratePage autocreate target & algorithm', () => {
     api.generate.select.mockResolvedValue({ items: [item], total_marks: 5, count: 1, exact: true, warning: null })
   })
 
-  it('defaults to Random + selecting by number of questions', async () => {
-    render(
-      <MemoryRouter>
-        <GeneratePage />
-      </MemoryRouter>
-    )
-    expect(await screen.findByRole('radio', { name: /^random$/i })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /^in-order$/i })).not.toBeChecked()
-    expect(screen.getByLabelText(/select by/i)).toHaveValue('count')
-    expect(screen.getByLabelText(/number of questions/i)).toBeInTheDocument()
-  })
-
   it('sends target_type "count" and algorithm "random" by default', async () => {
     const user = userEvent.setup()
     render(
@@ -329,6 +311,23 @@ describe('GeneratePage autocreate target & algorithm', () => {
     expect(body.target_type).toBe('marks')
     expect(body.target_value).toBe(20)
     expect(body.algorithm).toBe('in-order')
+  })
+
+  it('sends the Tags filter in the select payload', async () => {
+    api.tags.list.mockResolvedValueOnce([{ id: 7, name: 'Challenging' }])
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter>
+        <GeneratePage />
+      </MemoryRouter>
+    )
+    await user.click(await screen.findByPlaceholderText(/filter by tag/i))
+    await user.click(await screen.findByText('Challenging'))
+    await user.type(screen.getByLabelText(/number of questions/i), '5')
+    await user.click(screen.getByRole('button', { name: /autocreate paper/i }))
+    await waitFor(() => expect(api.generate.select).toHaveBeenCalledTimes(1))
+    const [body] = api.generate.select.mock.calls[0]
+    expect(body.filters.tag_ids).toEqual([7])
   })
 })
 

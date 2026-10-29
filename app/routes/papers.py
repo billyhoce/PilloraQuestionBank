@@ -276,14 +276,14 @@ def list_papers(
 
 
 @router.post("/papers/upload-image")
-async def upload_image(
+def upload_image(
     file: UploadFile = File(...),
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(status_code=422, detail="Only image files are accepted")
-    data = await file.read()
+    data = file.file.read()
     return upload_single_image(data)
 
 
@@ -368,7 +368,7 @@ def delete_paper_route(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    image_keys = delete_paper(paper_id, db)
+    image_keys = delete_paper(paper_id, db, current_user)
     # Commit the DB deletion before performing irreversible S3 deletions, so a
     # failed commit can't leave paper rows pointing at already-deleted images.
     db.commit()

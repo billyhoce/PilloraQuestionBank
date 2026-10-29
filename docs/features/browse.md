@@ -1,94 +1,69 @@
 # Browse & Filter
 
-**Scope:** The public read surface — `GET /api/questions`, `GET /api/questions/:id`, and the filter
-/ results UI on `/` and `/questions/:id`. The Generate page reuses this filter suite; see
-[paper-generation.md](./paper-generation.md).
+The public question bank at `/`: anyone (signed in or not) filters and searches questions, sees their
+metadata, and opens a detail view. Premium papers' images are shown only to entitled viewers. The
+Generate page reuses the same filters and result cards ([paper-generation.md](./paper-generation.md)).
 
-## API — public read
+**Code:** `app/routes/questions.py`, `app/services/question_query.py`,
+`app/services/question_serialization.py`, `app/services/premium.py`,
+`frontend/src/pages/BrowsePage.jsx`, `frontend/src/components/browse/`,
+`frontend/src/hooks/useQuestionSearch.js`, `frontend/src/utils/premium.js`
+**Related:** [users-and-premium.md](./users-and-premium.md), [site-config.md](./site-config.md),
+[reference-data.md](./reference-data.md)
 
-```
-GET    /api/questions             -- filter params: subject_id, stream_id, level_id, year,
-                                     school_id, exam_type_id, topic_ids[] (repeatable),
-                                     exclusive (bool — restrict to only the given topics),
-                                     paper_number (case-insensitive exact match; strings may
-                                     contain letters, e.g. "1", "a"),
-                                     search (free-text keyword, OR-matched case-insensitively
-                                     against topic, subtopic, tag, school, subject, level,
-                                     school-level tier (e.g. "Secondary"), stream and exam-type
-                                     names; a "T{n}" token (e.g. "T10") matches the topic
-                                     number; an all-digit keyword also matches the paper year
-                                     exactly),
-                                     page, page_size
-                                  -- returns paginated question list with paper info, topic chips
-                                     ({ topic_name, topic_number, subtopic_names[] }),
-                                     marks (summed across the question's parts), and a
-                                     presigned first-page image URL
-GET    /api/questions/:id         -- full question detail: question pages + answer pages
-                                     (each with a presigned S3 URL), topics, and parts
-                                     ({ part_order, label, marks, topics[] })
-```
+## Filters
 
-`apply_filters` in `app/services/question_query.py` builds the query and `POST /api/generate/select`
-reuses it, along with the `PAPER_EAGER` / `PARTS_EAGER` / `TAG_EAGER` options in the same module —
-so the two endpoints can't drift on what a filter means. Response shaping lives next door in
-`app/services/question_serialization.py` (`serialize_list_item`, `paper_info`, `topic_infos`,
-`part_infos`, `tag_infos`), shared with the admin paper editor.
+All optional and combinable; Browse keeps them in the URL so a filtered view can be shared or
+bookmarked. Any change refetches from page 1.
 
-Presigned URLs reach these functions as an argument, not an import: the routes take the URL-maker
-via `Depends(get_presigner)` (`app/deps.py`), which is also the seam tests override.
+| Filter | Control | Rule |
+|---|---|---|
+| Level | chips (labelled with school level, e.g. "Secondary 3") | exact |
+| Stream | chips | exact; only streams of the chosen level's school level are offered |
+| Subject | chips | exact |
+| Topic | chips, multi-select | only once **both Subject and Stream** are chosen; matches when **any part** of the question carries a selected topic |
+| Exclusive only | checkbox beside topics | question's topics (across all parts) must be a **subset** of the selection; disabled until a topic is chosen, cleared when topics are emptied |
+| Tags | tag picker, multi-select | question carries any selected tag |
+| School | dropdown | exact |
+| Year | dropdown of years that exist for the chosen subject/stream/level, newest first | exact |
+| Exam type | dropdown | exact |
+| Paper no. | free text | exact, case-insensitive; values may contain letters (`1`, `a`) |
+| Search | free text | see below |
 
-### Topics are per part; the list endpoint returns their union
+- Picking a level whose school level differs from the chosen stream clears the stream, and vice versa.
+- Changing subject or stream clears the topic selection and Exclusive only.
 
-`topics` on a list item is the de-duplicated union of every part's topics, with subtopic names
-merged — so a browse card renders exactly as it did before questions had parts. The per-part
-breakdown is only on the detail endpoint, keeping the list payload small (the list query still loads
-parts to build the union, it just doesn't serialize them).
+### Search
 
-`topic_ids` matches when **any** part carries a selected topic. `exclusive` means **no** part carries
-a topic outside the selection — i.e. the union of the question's topics is a subset of the selection,
-the same meaning it had when topics were recorded at question level.
+- Runs **live**, ~300 ms after the last keystroke; Enter or **Search** commits at once; **Clear**
+  returns to all questions.
+- Case-insensitive substring match against **any** of: topic, subtopic, tag, school, subject, level,
+  stream and exam-type names, and the school level of the level or stream (e.g. "Secondary").
+- `T{n}` (e.g. `T10`) also matches topic number *n*.
+- An all-digit keyword also matches the paper year exactly.
 
-### Access
+## Results
 
-Both endpoints take optional auth so they stay public but can withhold image URLs from premium
-papers the viewer isn't entitled to. `serialize_list_item` takes the decision as an injected
-`PremiumGate` predicate (built once per request by `premium_gate(user)`), the same seam style as the
-presigner above — the serializer never asks who the viewer is. `paper_info` carries
-`school_level_name` so a locked tile can name the premium group the viewer is missing. See
-[users-and-premium.md](./users-and-premium.md#how-the-paywall-is-enforced).
+- Ordered by question id, 50 per page, with **Load more** and a "Showing X of Y" count.
+- Each card: first question page as thumbnail, topic chips (union across all parts, de-duplicated),
+  title `School Year ExamType PaperNo · Q{n}`, subtopic names, tags.
+- **Detail view** is a modal over the page (no separate URL): all question and answer pages, marks
+  (sum of parts), subtopics, tags, and a **Breakdown** of each part's label, marks and topics. The
+  breakdown is hidden for a question that is a single unlabelled part.
+- Admins can add/remove tags on a question directly in the detail modal.
 
-## Filter panel UI
+## Premium visibility
 
-All filters are optional and combinable.
+| Viewer | Non-premium paper | Premium paper |
+|---|---|---|
+| Anonymous / Normal | metadata + images | metadata only (locked) |
+| Premium for the paper's school level | metadata + images | metadata + images |
+| Admin | metadata + images | metadata + images |
 
-- **Subject** — single-select dropdown
-- **Stream** — single-select dropdown
-- **Level** — single-select dropdown
-- **Year** — single-select dropdown OR range
-- **School** — multi-select
-- **Exam Type** — multi-select
-- **Paper Number** — free-text, case-insensitive exact match (values may contain letters)
-- **Topic** — multi-select, **scoped to the selected Subject + Stream** (greyed out until both are
-  chosen), rendered by `TopicMultiSelect.jsx` (reused by Browse and Generate).
-  - **Exclusive only** — a checkbox beside the topic chips restricting results to questions covering
-    **only** the selected topics (maps to the `exclusive` param). Disabled until at least one topic
-    is selected, auto-cleared when the selection is emptied. A help "?" badge (the shared
-    `InfoTooltip.jsx`) shows an explanation on hover, pins it open on click, and dismisses on
-    outside-click / Escape / scroll; it is portal-rendered so the filter card can't clip it.
-- **Subtopic** — multi-select, **scoped to the selected Topic(s)**
-- **Search** — free-text box running **live as the user types**, debounced ~300 ms after the last
-  keystroke (Enter or the Search button commit instantly); clearing it returns to all questions.
-
-## Results view
-
-- A grid of matching questions, each card showing: first-page thumbnail, paper-local question number,
-  paper info (school / year / level / exam type), marks (summed across parts), and topic chips (the
-  union across parts).
-- **Click to expand** — `QuestionDetailModal.jsx` shows all pages plus a **Breakdown** section
-  listing each part's label, marks and topics. The breakdown is hidden for a question that is a
-  single unlabelled part, where it would only repeat the topic chips above it. There is **no
-  `/questions/:id` route** — the detail view is this modal, opened over Browse or Generate.
-- Pagination or infinite scroll.
-- Every question image renders through `<ProtectedImage>`, which blocks right-click, dragging and the
-  mobile long-press menu when an admin has switched the site-wide toggle on (admins excepted). It is
-  a deterrent only — see [site-config.md](./site-config.md).
+- A paper's school level is the one on its **level** ([users-and-premium.md](./users-and-premium.md)).
+- Locked questions still appear in results as teasers: image URLs are withheld server-side, the card
+  shows a premium placeholder naming the school level needed (e.g. "requires Secondary premium"),
+  and the detail modal shows a **Get {School level} Premium** link to `/subscribe` with that plan
+  highlighted. Metadata, topics, parts and marks stay visible.
+- Every displayed question image honours the site-wide copy deterrent (no right-click, drag or
+  long-press menu for non-admins when enabled) — see [site-config.md](./site-config.md).

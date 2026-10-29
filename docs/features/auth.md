@@ -1,166 +1,133 @@
 # Auth
 
-**Scope:** Registration, password login, Google OAuth 2.0, session handling, and the security
-posture around them — backend and UI. Roles and per-school-level premium access are in
-[users-and-premium.md](./users-and-premium.md); the `User` table is in
-[DATA_MODEL.md](../DATA_MODEL.md); Google Cloud Console setup is in
-[DEPLOYMENT.md](../DEPLOYMENT.md#google-oauth-setup).
+Registration, password sign-in, Google sign-in and sessions. Roles, premium and user management are
+in [users-and-premium.md](./users-and-premium.md).
 
-Accounts are created either manually (email + password) or with Google. Either way the session is a
-JWT in an httpOnly cookie.
+**Code:** `app/routes/auth.py`, `app/services/auth.py`, `app/services/google_oauth.py`,
+`app/schemas/auth.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/pages/LoginPage.jsx`,
+`frontend/src/pages/RegisterPage.jsx`, `frontend/src/components/GoogleSignInButton.jsx`,
+`frontend/src/components/ProtectedRoute.jsx`
+**Related:** [users-and-premium.md](./users-and-premium.md), [DATA_MODEL.md](../DATA_MODEL.md),
+[DEPLOYMENT.md](../DEPLOYMENT.md) (Google Cloud Console setup, secrets)
 
-## Endpoints
+## Accounts
 
+- An account has a first name, last name and email, plus any of: a password, a Google link.
+- Three ways an account comes to exist:
+  - **Register** with email + password (`/register`).
+  - **Sign in with Google** on an address with no account.
+  - **Pre-added by an admin** with neither credential (an *invite*), so premium is ready before the
+    person signs up — see [users-and-premium.md](./users-and-premium.md#pre-adding-a-user).
+- Self-registered and Google-created accounts start as role `public` ("Normal") with no premium.
+- Every email is stored and looked up **trimmed and lower-cased**, so `Billy@Gmail.com` and
+  `billy@gmail.com` are one account. Gmail dot and `+alias` variants are **not** folded (wrong for
+  other providers) — they are different addresses.
+- No email verification, no password reset, no self-service profile editing.
+
+## Register (password)
+
+1. User fills **First name, Last name, Email, Password, Confirm password** on `/register`.
+2. Rules:
+   - Names are trimmed; blank or longer than 100 characters is rejected.
+   - Password needs ≥ 8 characters, an uppercase letter, a lowercase letter, a digit and a special
+     character (enforced server-side; the page shows the rule as hint text).
+   - Password and confirmation must match (checked in the browser).
+3. Outcome by address:
+   - **New address** → account created as Normal.
+   - **Unclaimed invite** → the invite is *claimed*: it gets the password, keeps its role and premium,
+     and only blank names are filled in.
+   - **Address with any credential** → refused ("Email already registered"). Registering can never
+     take over an existing account.
+4. On success the user is sent to `/login`; registering does not sign them in.
+
+## Sign in (password)
+
+- Unknown email, wrong password and an **unclaimed invite** all give the same generic error
+  ("Unknown email or incorrect password").
+- An account that has a Google link but **no password** gets a specific message: *"This account was
+  created with Google. Use "Sign in with Google" instead."* — deliberate, since the generic error
+  would loop the user. It reveals that the address has a Google account; this is the only such
+  disclosure.
+- An account with both a password and a Google link signs in either way.
+
+## Sign in with Google
+
+Server-side authorization-code flow. The browser never sees the client ID, client secret or any
+Google token, and no Google JavaScript is loaded. Scopes are `openid email profile` only. Google's
+account picker is always shown.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as API
+    participant G as Google
+    B->>A: GET /api/auth/google/login
+    A-->>B: redirect to Google + state cookie (10 min)
+    B->>G: consent / pick account
+    G-->>B: redirect to /api/auth/google/callback?code&state
+    B->>A: callback (code, state, state cookie)
+    A->>A: state must match cookie
+    A->>G: exchange code, read profile (server-to-server)
+    A->>A: find / link / create account
+    A-->>B: session cookie + redirect to /
 ```
-POST   /api/auth/register       -- public registration (normally role "public").
-                                   Body: { first_name, last_name, email, password }.
-                                   Names are trimmed; blank or >100 chars -> 422.
-                                   If the address is an unclaimed admin-created
-                                   invite (no password, no google_sub) this
-                                   *claims* that row instead of 409-ing, keeping
-                                   its role and premium school levels and filling
-                                   in only the names it doesn't already have.
-                                   An address with any credential still -> 409.
-POST   /api/auth/login          -- sets JWT in httpOnly cookie. Unknown email and wrong
-                                   password are one generic 401. An account created with
-                                   Google (no password on file) instead gets 409 with a
-                                   "use Sign in with Google" message.
-POST   /api/auth/logout         -- clears cookie
-GET    /api/auth/me             -- current authenticated user, including first_name/last_name
-                                   and the has_password / has_google flags describing how it
-                                   signs in
-GET    /api/auth/providers      -- { "google": bool } — whether Google sign-in is configured
-                                   on this deployment. Public.
-```
 
-### Google OAuth 2.0
+Account resolution, in order:
 
-```
-GET    /api/auth/google/login    -- 307 to Google's consent screen. Plants a random
-                                    `state` nonce in a 10-minute httpOnly cookie.
-                                    503 if the GOOGLE_* env vars are unset.
-GET    /api/auth/google/callback -- Google redirects the browser here with ?code&state.
-                                    On success: sets the same JWT cookie as /login and
-                                    307s to "/". On failure: 307 to /login?error=<code>,
-                                    where <code> is one of google_cancelled,
-                                    google_state_mismatch, google_email_unverified,
-                                    google_failed.
-```
+1. **Already linked** (same Google account) → sign in. Survives the user changing their Google email.
+2. **Same email, not linked** → link the Google account to it and sign in. The account keeps its role
+   and premium. This is also how an admin's invite is claimed.
+3. **Otherwise** → create a Normal account with no password.
 
-Both are browser navigations, not XHR — the frontend links to `/api/auth/google/login` directly.
-Failures redirect rather than returning JSON because the user is mid-redirect in a browser, where a
-JSON body would be a dead end.
+- Names from Google only fill blank first/last names; they never overwrite.
+- Google must report the email as **verified**; otherwise sign-in is refused (an unverified address
+  would be a route to hijacking an account).
+- A different Google address (e.g. a work account) creates a separate account; it does not merge.
 
-## Email normalization
+Failures land on `/login` with a message:
 
-Every address is stored and looked up through `normalize_email` (`app/services/auth.py`), which
-lower-cases and trims. It is applied on registration, on the login lookup, on the Google callback and
-when an admin pre-creates a user; migration `e6f7a8b9c0d1` folded the pre-existing rows.
+| Case | Message shown |
+|---|---|
+| User cancelled / Google refused | Google sign-in was cancelled. |
+| State missing or mismatched (expired or forged flow) | That Google sign-in link expired. Please try again. |
+| Google email not verified | Your Google email address is not verified. |
+| Code exchange or profile read failed | Could not sign in with Google. Please try again. |
 
-Pydantic's `EmailStr` does **not** fold case, and Google's OIDC `email` claim is canonical
-lower-case — so before this, one person could end up with two accounts, and an invite typed
-`Billy@Gmail.com` would never match the Google sign-in that created a second, unentitled row.
+- The Google button appears on `/login` ("Sign in with Google") and `/register` ("Sign up with
+  Google") only when the deployment has Google configured; otherwise it is hidden.
+- The button is a real browser navigation (not an SPA link) so the server can set the state cookie
+  and redirect.
 
-Gmail's dot and `+` aliases are deliberately **not** folded: they are provider-specific, and treating
-`a.b@` and `ab@` as one address would be wrong for every other provider. The consequence — an invite
-typed with an alias never matches — is surfaced in the invite form's help text instead. See
-[users-and-premium.md](./users-and-premium.md#what-can-go-wrong-with-google-and-what-we-do-about-it).
+## Sessions
 
-## Security
+- A successful sign-in (either path) sets a **JWT in an httpOnly, secure, SameSite=Lax cookie**,
+  valid for **7 days**, and stamps the account's last-login time.
+- The token carries only the user id; role and premium are read from the database on every request,
+  so admin changes apply immediately. Deleting an account invalidates its session.
+- **Log out** (account menu) clears the cookie. Tokens are not revoked server-side.
+- The SPA never handles the token. On load it asks the API who is signed in; any 401 from the API
+  drops the SPA to signed-out ("Your session has expired. Please log in again.").
 
-- **Passwords:** bcrypt via `bcrypt.gensalt()` (default cost factor 12).
-- **Auth tokens:** JWT (`python-jose`, HS256) in an `httpOnly`, `secure`, `samesite=lax` cookie
-  named `access_token`, 7-day expiry. `JWT_SECRET_KEY` comes from env and falls back to an insecure
-  default — it **must** be set in production. `_set_session_cookie` also stamps `last_login_at`;
-  putting it there rather than in each caller is what keeps the password path and the Google callback
-  from drifting apart.
-- **Admin routes:** the `require_admin` dependency (`app/routes/auth.py`) checks
-  `user.role == "admin"` and returns `403` otherwise. Applied to all reference-data writes, all
-  `/api/import/*`, and the `/api/users` routes.
-- **Optional auth:** `get_current_user_optional` is the non-raising variant used by the public
-  browse endpoints so they can tailor responses to the viewer's tier.
-- **Input validation:** every API input is a Pydantic model (`app/schemas/`), including
-  password-strength validation on registration.
-- **CORS:** **not implemented** — no `CORSMiddleware` in `app/main.py`, and none is needed. Nginx
-  serves the SPA and the API at the same origin, and Google redirects the browser to a same-origin
-  backend route rather than making a cross-origin request.
-- **Rate limiting:** **not implemented** — there is no limiter on `/api/auth/*` or anywhere else.
+## Page access
 
-### Google OAuth internals
+| Pages | Who |
+|---|---|
+| `/` (Browse), `/about` | Anyone, signed in or not |
+| `/login`, `/register` | Signed-out users; signed-in users are redirected to `/` |
+| `/generate`, `/subscribe` | Signed-in users; others go to `/login` |
+| `/admin/*` | Admins; others go to `/login` (then `/` if signed in) |
 
-Server-side **authorization-code** flow: `app/services/google_oauth.py` (pure helpers) plus the two
-`/api/auth/google/*` routes. The browser only ever sees a redirect URL — the client ID, the client
-secret and every Google token stay on the server, and no Google JavaScript is loaded. Configured by
-`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI`; when any is unset
-`is_configured()` is false, `/api/auth/providers` reports `{"google": false}` and the UI hides the
-button. Scopes are `openid email profile` only — all non-sensitive, so the consent screen needs no
-Google verification review.
+- After sign-in every role lands on `/`.
+- The menubar shows the user's full name, falling back to their email when no name is on file.
 
-- **CSRF:** `/google/login` mints a `secrets.token_urlsafe(32)` nonce, stores it in a 10-minute
-  `httpOnly` `oauth_state` cookie, and passes it as `state`. The callback compares the two with
-  `secrets.compare_digest` and aborts on any mismatch, so a callback the browser never initiated
-  cannot log anyone in.
-- **Profile trust:** the callback reads the profile from Google's OIDC **userinfo endpoint** using
-  the freshly exchanged access token, rather than verifying the `id_token` JWT locally. The response
-  arrives over TLS straight from Google in a server-to-server call the client cannot influence, so
-  it is equally trustworthy without a JWKS fetch and cache.
-- **Account linking:** matching is by `google_sub` first, then by email — but **only when Google
-  reports `email_verified`**. An unverified address is rejected outright
-  (`google_email_unverified`), since it is not proof of identity and would otherwise be a route to
-  hijacking an existing account. A verified match attaches `google_sub` to the existing row and
-  preserves its `role` **and its premium school levels**. That email branch is also what claims an
-  admin-created invite, which is why pre-adding a user needed no OAuth-specific code at all.
-  [DATA_MODEL.md](../DATA_MODEL.md) tabulates the four password/Google
-  combinations a `User` row can be in.
-- **Passwordless accounts:** `password_hash` is `NULL` for Google-created accounts.
-  `verify_password` returns `False` for a NULL/empty hash rather than letting bcrypt raise. Password
-  login against such an account short-circuits to a **`409`** telling the user to use "Sign in with
-  Google" — a password attempt there can never succeed, so the generic 401 would just look like a
-  forgotten password and loop them. This is a **deliberate user-enumeration trade-off**: it confirms
-  the address has a Google account. It is the only such disclosure — it fires only when the account
-  has *no* password at all, so an account with both a password and a Google link (and every unknown
-  email) still returns the single generic `401`. The branch requires a `google_sub`, so an
-  **unclaimed invite** — which has neither credential — falls through to the generic `401` and stays
-  undisclosed.
+## Security posture
 
-## UI
-
-`/login`, `/register`; **Log out** lives in the menubar's account dropdown (`<UserMenu />`, see
-[ARCHITECTURE.md](../ARCHITECTURE.md#navigation-app-shell)). After login — and for
-already-authenticated visits to `/login`/`/register` — **all roles redirect to `/`**. Non-admins are
-redirected away from `/admin/*`. The session lives in the httpOnly cookie; **no token handling in
-JS**.
-
-### Two ways in
-
-Both pages offer a manual form and a Google button; the user picks either.
-
-- **Register** (`pages/RegisterPage.jsx`) collects **First name, Last name**, Email, Password and
-  Confirm password. Passwords are matched client-side; the strength rules are enforced server-side
-  and only described in hint text. On success it redirects to `/login` — it does not
-  auto-authenticate.
-- **Sign in with Google** (`components/GoogleSignInButton.jsx`) is a plain
-  `<a href="/api/auth/google/login">`, **not** a react-router `<Link>` — the flow needs a real
-  browser navigation so the backend can set the `oauth_state` cookie and redirect on to Google. No
-  Google JavaScript, no client ID in the bundle, and consequently **no `VITE_*` env vars anywhere in
-  this app**. Availability comes from `GET /api/auth/providers` at page load; when it reports
-  `google: false` (or the call fails) the button and its "or" divider are hidden.
-- The Google callback finishes with a **full page load** of `/`, so `AuthContext`'s existing
-  `api.auth.me()` on mount picks up the session — no extra client wiring.
-- A failed Google sign-in lands on `/login?error=<code>`. `LoginPage` maps the four backend codes to
-  copy shown in the shared `<ErrorBanner />`; an unrecognised code is ignored rather than echoed.
-- **Password on a Google-created account** shows *"This account was created with Google. Use \"Sign
-  in with Google\" instead."* in the same banner, with the button right below it. The backend sends
-  this as a `409`, and `friendlyMessage` in `api/client.js` passes a 409 `detail` through verbatim —
-  the generic *"Unknown email or incorrect password"* rewrite applies only to a `401` on
-  `/api/auth/login`.
-
-### Displaying the user
-
-`utils/userName.js` owns the fallback, since accounts predating the name fields (and Google accounts
-that report no given/family name) store empty strings:
-
-- `fullName(user)` → `"First Last"`, or `''`. Used in the admin Users table, where the email is
-  already in its own column.
-- `displayName(user)` → the same, falling back to the **email address**. Used by `<UserMenu />` for
-  the account button.
+- Passwords hashed with bcrypt.
+- Admin-only API routes refuse non-admins; the same check guards every admin write, import and user
+  route. Public read routes accept an optional session so they can tailor responses (e.g. the
+  paywall).
+- Google flow protected against login CSRF by the state cookie.
+- The JWT signing secret falls back to an insecure default and **must** be set in production.
+- Not implemented: rate limiting, email verification, CORS (not needed — SPA and API share one
+  origin behind Nginx).
+- A bootstrap admin account is seeded by the initial database migration.

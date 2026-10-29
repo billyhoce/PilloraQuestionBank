@@ -18,9 +18,34 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
+    # Host journald keeps the history across deploys (a recreated container loses json-file
+    # logs). `journalctl -t pillora-api -o cat | grep <job id>`; size cap in deploy/journald/.
+    logging:
+      driver: journald
+      options:
+        tag: pillora-api
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else sys.exit(1)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Ingest worker: same image and env file, drains the ingest-job queue (PDF -> question
+  # images via the ingestion pipeline, OCR via the image's Tesseract). No ports.
+  # Limits sized for the 2 OCPU / 12 GB VM: the worker gets one core and up to 6 GB
+  # (an 80-page booklet), leaving the other core and 6 GB to the API, Nginx and the OS.
+  worker:
+    image: ghcr.io/billyhoce/pillora-api:${IMAGE_TAG:-latest}
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - /opt/pillora/.env
+    cpus: "1.0"
+    mem_limit: 6g
+    restart: unless-stopped
+    # Host journald keeps the history across deploys (a recreated container loses json-file
+    # logs). `journalctl -t pillora-worker -o cat | grep <job id>`; size cap in deploy/journald/.
+    logging:
+      driver: journald
+      options:
+        tag: pillora-worker
