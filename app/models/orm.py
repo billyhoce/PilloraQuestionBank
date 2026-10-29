@@ -30,6 +30,8 @@ class Subject(Base):
     __tablename__ = "subject"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # How covers and filenames may name the subject ("4052", "EM"); shown only to the metadata reader.
+    code: Mapped[str | None] = mapped_column(String(32))
 
 
 class SchoolLevel(Base):

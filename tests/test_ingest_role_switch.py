@@ -36,7 +36,7 @@ def _switch(client, job, key, role):
 
 
 def test_a_solutions_booklet_becomes_answers_and_pairs_with_its_questions(
-    admin_client, db_session, admin_user, reference_data
+    admin_client, db_session, admin_user, reference_data, fake_object_store
 ):
     meta = _meta(reference_data)
     qjob, _ = job_with(db_session, admin_user, QUESTIONS_2, meta, filename="BPGHS 2020 EM P1 Qns Paper.pdf")

@@ -19,7 +19,7 @@ from app.ai.filename_extractor import (
 
 def _make_ref_data():
     school = MagicMock(); school.name = "Raffles Institution"; school.id = 1
-    subject = MagicMock(); subject.name = "Math"; subject.id = 2
+    subject = MagicMock(); subject.name = "Math"; subject.id = 2; subject.code = None
     level = MagicMock(); level.name = "Sec 3"; level.id = 3
     exam_type = MagicMock(); exam_type.name = "EOY"; exam_type.id = 4
     stream = MagicMock(); stream.name = "Express"; stream.id = 5
@@ -389,3 +389,20 @@ def test_a_learned_alias_resolves_the_school():
     base = {"year": None, "subject": None, "level": None, "exam_type": None, "paper_number": None}
     assert resolve_metadata({**base, "school": " RI"}, ref)["school_id"] == 1
     assert resolve_metadata({**base, "school": "Raffles"}, ref)["school_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Subject codes: shown beside the name; the model still answers with the name
+# ---------------------------------------------------------------------------
+
+
+def test_a_subject_is_offered_with_its_code_when_it_has_one():
+    ref = _make_ref_data()
+    coded = MagicMock(); coded.name = "E Math"; coded.id = 7; coded.code = "4052"
+    ref["subjects"] = [ref["subjects"][0], coded]
+    prompt = build_system_prompt(ref)
+    assert "  - E Math (code: 4052)\n" in prompt
+    assert "  - Math\n" in prompt  # no code, name alone
+    assert "never its code" in prompt
+    base = {"school": None, "year": None, "level": None, "exam_type": None, "paper_number": None}
+    assert resolve_metadata({**base, "subject": "E Math"}, ref)["subject_id"] == 7

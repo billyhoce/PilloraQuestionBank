@@ -60,6 +60,25 @@ def test_update_subject(admin_client):
     assert resp.json()["name"] == "New Name"
 
 
+def test_a_subject_keeps_an_optional_code(admin_client):
+    coded = admin_client.post("/api/subjects", json={"name": "E Math", "code": " 4052 "})
+    assert coded.status_code == 201
+    assert coded.json()["code"] == "4052"  # trimmed
+    plain = admin_client.post("/api/subjects", json={"name": "Art"})
+    assert plain.json()["code"] is None
+    listed = {s["name"]: s["code"] for s in admin_client.get("/api/subjects").json()["data"]}
+    assert listed == {"E Math": "4052", "Art": None}
+
+
+def test_updating_a_subject_changes_or_clears_its_code(admin_client):
+    subject_id = admin_client.post("/api/subjects", json={"name": "A Math", "code": "4049"}).json()["id"]
+    resp = admin_client.put(f"/api/subjects/{subject_id}", json={"name": "A Math", "code": "AM"})
+    assert resp.json()["code"] == "AM"
+    resp = admin_client.put(f"/api/subjects/{subject_id}", json={"name": "A Math", "code": "  "})
+    assert resp.json()["code"] is None  # blank is no code
+    assert admin_client.get(f"/api/subjects/{subject_id}").json()["code"] is None
+
+
 def test_delete_subject(admin_client):
     create_resp = admin_client.post("/api/subjects", json={"name": "To Delete"})
     subject_id = create_resp.json()["id"]

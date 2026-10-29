@@ -104,6 +104,9 @@ metadata form.
 - The model must pick names from the existing reference lists (schools, subjects, levels, streams,
   exam types). Each name is then matched to a reference record by **exact, case-insensitive name**;
   an unmatched field is left blank for the admin.
+- **Subjects** are offered with their **code** when they have one ("E Math (code: 4052)"), since a
+  cover or filename often names the subject by code; the model still answers with the name, and the
+  code is used nowhere else ([reference-data.md](./reference-data.md)).
 - **Levels** are offered and matched qualified by school level ("Secondary 4", "Primary 4"), since
   bare level names repeat across school levels; a bare name is accepted only when it names one level.
 - **School exception:** a school not in the list is returned **as printed** (e.g. "Raffles Instn").

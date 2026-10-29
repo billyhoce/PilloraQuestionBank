@@ -108,6 +108,13 @@ def level_label(level) -> str:
     return name
 
 
+def subject_label(subject) -> str:
+    """A subject as offered to the model: its name, with its code when it has one, since covers and
+    filenames often name a subject by code ("4052", "EM")."""
+    code = getattr(subject, "code", None)
+    return f"{subject.name} (code: {code})" if code else subject.name
+
+
 def _level_map(levels) -> dict[str, int]:
     """Lower-cased level label -> id. A bare name ("4") is accepted too, but only when it names one
     level."""
@@ -123,7 +130,7 @@ def _level_map(levels) -> dict[str, int]:
 
 def build_system_prompt(ref_data: dict) -> str:
     schools_str    = "\n".join(f"  - {s.name}" for s in ref_data["schools"])    or "  (none)"
-    subjects_str   = "\n".join(f"  - {s.name}" for s in ref_data["subjects"])   or "  (none)"
+    subjects_str   = "\n".join(f"  - {subject_label(s)}" for s in ref_data["subjects"]) or "  (none)"
     levels_str     = "\n".join(f"  - {level_label(l)}" for l in ref_data["levels"]) or "  (none)"
     streams_str    = "\n".join(f"  - {s.name}" for s in ref_data.get("streams", [])) or "  (none)"
     exam_types_str = "\n".join(f"  - {e.name}" for e in ref_data["exam_types"]) or "  (none)"
@@ -142,7 +149,9 @@ def build_system_prompt(ref_data: dict) -> str:
         "generic (e.g. 'scan001.pdf', 'document.pdf'). "
         "Do not guess — return null for any field you are not confident about.\n\n"
         "You MUST pick values exclusively from the lists below. "
-        "If a filename token does not closely match an entry in the list, return null for that field.\n\n"
+        "If a filename token does not closely match an entry in the list, return null for that field. "
+        "A subject may be named on the cover or in the filename by the code shown beside it; "
+        "answer with the subject's name, never its code.\n\n"
         f"## Available Schools\n{schools_str}\n\n"
         f"## Available Subjects\n{subjects_str}\n\n"
         f"## Available Levels\n{levels_str}\n\n"

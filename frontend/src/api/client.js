@@ -237,8 +237,8 @@ export const api = {
 
   subjects: {
     list: () => request('GET', '/api/subjects').then(r => r.data),
-    create: (name) => request('POST', '/api/subjects', { name }),
-    update: (id, name) => request('PUT', `/api/subjects/${id}`, { name }),
+    create: (name, code) => request('POST', '/api/subjects', { name, code }),
+    update: (id, name, code) => request('PUT', `/api/subjects/${id}`, { name, code }),
     delete: (id) => request('DELETE', `/api/subjects/${id}`),
   },
 

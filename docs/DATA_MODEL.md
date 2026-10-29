@@ -42,7 +42,8 @@ migration seeds school levels, subjects, streams, levels and exam types.
 - **stream** — e.g. G1, G2, G3; belongs to one school level; names unique across all streams.
 - **level** — e.g. Sec 1; belongs to one school level; has a display `sort_order`; name unique within
   its school level (the same name may exist under Primary and Secondary).
-- **subject**, **school**, **exam_type** — plain unique names.
+- **subject**, **school**, **exam_type** — plain unique names. A subject also has an optional `code`
+  ("4052", "EM"), used only in the paper metadata reader's prompt.
 - **topic** — belongs to a (subject, stream) pair, so each stream has its own topic list per
   subject; has a `topic_number`. Name and number are each unique within the pair.
 - **subtopic** — belongs to a topic; name unique within it. Deleting a topic deletes its subtopics.

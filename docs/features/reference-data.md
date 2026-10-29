@@ -24,7 +24,7 @@ erDiagram
 | Entity | Examples | Rules |
 |---|---|---|
 | School level | Primary, Secondary | Name unique. Each one is also a **premium plan** — see [users-and-premium.md](./users-and-premium.md). |
-| Subject | E Math, A Math, Science | Name unique. |
+| Subject | E Math, A Math, Science | Name unique. Optional **code** ("4052", "EM"): how covers and filenames may name it; shown only to the paper metadata reader ([ai-labelling.md](./ai-labelling.md#paper-metadata-extraction)). |
 | Stream | Foundation, Standard, G1–G3 | Belongs to one school level. Name unique across all school levels. |
 | Level | 1–6 (Primary), 1–4 (Secondary) | Belongs to one school level; name unique within it. Shown as "Secondary 1". Ordered by a sort order that drives every level list. |
 | School | — | Name unique. |
@@ -63,6 +63,7 @@ Topics & Subtopics, Tags.
 
 - Simple tabs (school levels, subjects, schools, exam types, tags): list, add, rename, delete with a
   confirm dialog. Errors (duplicate name, still in use) show in the modal or dialog.
+- Subjects also list and edit the optional **code**; a blank code is stored as none.
 - Streams and Levels pick a school level. Levels are **reordered by drag and drop**, which rewrites
   their sort order.
 
