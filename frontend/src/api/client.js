@@ -185,6 +185,14 @@ export const api = {
     // Returns { matches, proposal } like unmatchJobPaper.
     rejectProposedPaper: (id, key) =>
       request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/proposed-paper`),
+    // "Not a pair": reject the question paper suggested for answer-only paper `key` and re-match
+    // both. Returns { matches, proposal } like unmatchJobPaper.
+    rejectSuggestion: (id, key) =>
+      request('DELETE', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/suggestion`),
+    // "This is an answer booklet" / "This is a question booklet": role 'answer_only' | 'question'.
+    // Returns { role, matches, proposal }.
+    switchPaperRole: (id, key, role) =>
+      request('POST', `/api/import/jobs/${id}/papers/${encodeURIComponent(key)}/role`, { role }),
     cancelJob: (id) => request('DELETE', `/api/import/jobs/${id}`),
     // Failed/blocked tasks and everything downstream go back to ready.
     retryJob: (id) => request('POST', `/api/import/jobs/${id}/retry`),

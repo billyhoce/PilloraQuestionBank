@@ -10,6 +10,7 @@ vi.mock('../../api/client', () => ({
     import: {
       review: vi.fn(), savePaperMetadata: vi.fn(), manualPages: vi.fn(), saveProposal: vi.fn(),
       confirmJobPaper: vi.fn(), skipJobPaper: vi.fn(), attachJobPaper: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(), answerMappingTable: vi.fn(), aiTopicsForQuestion: vi.fn(), saveTopics: vi.fn(),
+      switchPaperRole: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
@@ -747,5 +748,114 @@ describe('ReviewPage', () => {
       expect(api.import.unmatchJobPaper).toHaveBeenCalledWith('j1', 'a1')
       expect(await screen.findByText('No match found')).toBeInTheDocument()
     })
+  })
+})
+
+describe('ReviewPage: a question booklet reviewed with its answer booklet', () => {
+  // j1 holds question paper q1 (no answers of its own); j2, linked to it, holds answers a1.
+  const QUESTIONS = {
+    ...REVIEW,
+    filename_metadata: { subject_id: 1, stream_id: 2, level_id: 3, school_id: 4, exam_type_id: 5, year: 2024, paper_number: '1' },
+    proposal: {
+      ...REVIEW.proposal,
+      unrouted: [],
+      papers: [{
+        ...REVIEW.proposal.papers[0], key: 'q1', outcome: null,
+        questions: REVIEW.proposal.papers[0].questions.map(q => ({ ...q, answer_rects: [] })),
+      }],
+    },
+    matches: { q1: { filename: 'soln.pdf', paper_key: 'a1', job_id: 'j2', job_status: 'review_ready', matched_by: 'auto', answer_numbers: [1], answer_map: null } },
+  }
+  const ANSWER_JOB = {
+    job_id: 'j2', filename: 'soln.pdf', edited: false,
+    proposal: {
+      papers: [{
+        label: null, answer_label: 'a1', role: 'answer_only', key: 'a1', outcome: null,
+        pages: [page(5), page(6)],
+        questions: [
+          { number: 1, question_rects: [], answer_rects: [{ page: 6, x0: 5, y0: 5, x1: 50, y1: 50 }], flags: [] },
+        ],
+        orphan_answers: [], warnings: [],
+      }],
+      unrouted: [], warnings: [],
+    },
+    matches: { a1: { filename: 'scan.pdf', paper_key: 'q1', job_id: 'j1', job_status: 'review_ready', matched_by: 'auto' } },
+  }
+  const reviews = { j1: QUESTIONS, j2: ANSWER_JOB }
+
+  beforeEach(() => {
+    api.import.review.mockImplementation(id => Promise.resolve(reviews[id]))
+    api.import.saveProposal.mockResolvedValue({ saved: true })
+  })
+
+  it('shows where each question’s answers come from, and opens an answer in the answer booklet', async () => {
+    renderPage()
+    expect(await screen.findByRole('heading', { name: 'scan.pdf + soln.pdf' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Questions · scan\.pdf/ })).toHaveAttribute('aria-pressed', 'true')
+    const questions = within(screen.getByRole('complementary', { name: 'Questions' }))
+    expect(await questions.findByRole('button', { name: 'Open answer 1' })).toBeInTheDocument()
+    expect(questions.getByText('No answer')).toBeInTheDocument()  // question 2: no answer 2 in the booklet
+    expect(screen.getByRole('button', { name: /Confirm paper and answers/ })).toBeInTheDocument()
+    await userEvent.click(questions.getByRole('button', { name: 'Open answer 1' }))
+    expect(screen.getByRole('button', { name: /Answers · soln\.pdf/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByAltText('Page 6')).toBeInTheDocument()
+    expect(screen.getByTestId('selected-rect')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Selected box' })).toHaveTextContent('Answer box of question 1')
+  })
+
+  it('saves an edit of the answer booklet to its own job, and saves both before confirming', async () => {
+    api.import.confirmJobPaper.mockResolvedValue({ paper_id: 7, job_status: 'confirmed', questions: [], answers_job_settled: true })
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: /Answers · soln\.pdf/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Answer 1/ }))
+    fireEvent.keyDown(window, { key: 'Delete' })
+    await userEvent.click(screen.getByRole('button', { name: /Questions · scan\.pdf/ }))
+    // the answer is gone from question 1
+    expect(within(screen.getByRole('complementary', { name: 'Questions' })).getAllByText('No answer')).toHaveLength(2)
+    const button = screen.getByRole('button', { name: /Confirm paper/ })
+    await waitFor(() => expect(button).toBeEnabled())
+    await userEvent.click(button)
+    await waitFor(() => expect(api.import.confirmJobPaper).toHaveBeenCalled())
+    expect(api.import.saveProposal).toHaveBeenCalledWith('j2', { papers: [{ questions: [{ number: 1, question_rects: [], answer_rects: [], flags: [] }], orphan_answers: [] }] })
+    expect(api.import.saveProposal).not.toHaveBeenCalledWith('j1', expect.anything())
+    expect(api.import.saveProposal.mock.invocationCallOrder[0]).toBeLessThan(api.import.confirmJobPaper.mock.invocationCallOrder[0])
+  })
+
+  it('opens the answer booklet’s pair when the answer booklet is opened on its own', async () => {
+    render(
+      <MemoryRouter initialEntries={['/admin/import/jobs/j2/review']}>
+        <Routes>
+          <Route path="/admin/import/jobs/:jobId/review" element={<><ReviewPage /><Where /></>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/admin/import/jobs/j1/review'))
+    expect(await screen.findByRole('button', { name: /Answers · soln\.pdf/ })).toBeInTheDocument()
+  })
+
+  it('says a linked answer paper is reviewed with its pair when the booklet has more to decide', async () => {
+    reviews.j2 = {
+      ...ANSWER_JOB,
+      proposal: { ...ANSWER_JOB.proposal, papers: [...ANSWER_JOB.proposal.papers, { ...REVIEW.proposal.papers[0], key: 'q2', label: 'q2', outcome: null }] },
+    }
+    render(
+      <MemoryRouter initialEntries={['/admin/import/jobs/j2/review']}>
+        <Routes><Route path="/admin/import/jobs/:jobId/review" element={<ReviewPage />} /></Routes>
+      </MemoryRouter>,
+    )
+    const note = await screen.findByRole('note')
+    expect(note).toHaveTextContent('Reviewed together with scan.pdf (q1)')
+    expect(within(note).getByRole('link', { name: 'Open pair' })).toHaveAttribute('href', '/admin/import/jobs/j1/review?paper=q1')
+    reviews.j2 = ANSWER_JOB
+  })
+
+  it('turns a question paper with no answers into an answer booklet after asking', async () => {
+    api.import.review.mockImplementation(() => Promise.resolve({ ...QUESTIONS, matches: {} }))
+    api.import.switchPaperRole.mockResolvedValue({ role: 'answer_only', matches: null, proposal: null })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'This is an answer booklet' }))
+    await waitFor(() => expect(api.import.switchPaperRole).toHaveBeenCalledWith('j1', 'q1', 'answer_only'))
+    await waitFor(() => expect(api.import.review).toHaveBeenCalledTimes(2))  // loaded again
   })
 })

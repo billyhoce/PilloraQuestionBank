@@ -35,7 +35,8 @@ function AttachResult({ result, onContinue }) {
 /**
  * The review page's Pairing block, on a paper that needs a partner (an answer-only paper, or a
  * question paper whose booklet had no answers) or that has one. Three states (see pairingState):
- * no partner ("No match found" / "N possible matches", Match this paper…), linked to a pending
+ * no partner ("No match found" / "N possible matches", Match this paper…; an answer-only paper
+ * with a suggested question paper also offers Pair / Not a pair), linked to a pending
  * paper (Check answers…, Change match…, Unmatch) and, for an answer-only paper, a proposed bank
  * paper (Attach…, Change match…, Not this one). Check answers… and Attach… open the answer mapping
  * table, which places the answers (pre-filled by number).
@@ -132,6 +133,25 @@ export default function PairingBlock({
             <button type="button" className={linkBtn} disabled={disabled} onClick={() => rematch(api.import.rejectProposedPaper)}>Not this one</button>
           </p>
         </>
+      )}
+      {state === 'none' && proposal?.suggestion && (
+        <div className="space-y-1 border-b border-amber-200 pb-1">
+          <p>
+            Looks like the answers to {proposal.suggestion.filename} ({proposal.suggestion.paper_key})
+            {proposal.note ? <span className="text-gray-600">: {proposal.note}</span> : null}.
+          </p>
+          <p className="flex flex-wrap gap-x-3">
+            <button type="button" className={linkBtn} disabled={disabled} onClick={() => run(async () => {
+              await beforeSave?.()
+              onMatched(await api.import.matchJobPaper(jobId, paper.key, proposal.suggestion.ingest_paper_id))
+            })}>
+              Pair
+            </button>
+            <button type="button" className={linkBtn} disabled={disabled} onClick={() => rematch(api.import.rejectSuggestion)}>
+              Not a pair
+            </button>
+          </p>
+        </div>
       )}
       {state === 'none' && (
         <>

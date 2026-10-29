@@ -87,12 +87,74 @@ def test_ambiguous_matches_are_not_linked(db_session, admin_user, fake_object_st
     assert prow(db_session, a2, "a1").matched_ingest_paper_id is None
 
 
-def test_partial_key_is_not_linked(db_session, admin_user, fake_object_store, meta):
-    mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
+def test_a_blank_field_no_longer_blocks_a_link(db_session, admin_user, fake_object_store, meta):
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "q.pdf")
     aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**meta, "paper_number": None}, "a.pdf")
     match_job(db_session, aj)
     db_session.commit()
-    assert prow(db_session, aj, "a1").matched_ingest_paper_id is None
+    assert prow(db_session, aj, "a1").matched_ingest_paper_id == prow(db_session, qj, "q1").id
+
+
+def test_a_field_known_on_both_sides_that_differs_rules_the_pair_out(db_session, admin_user, fake_object_store, meta):
+    mk(db_session, admin_user, fake_object_store, question_paper(), "q1", meta, "x P1 Qns.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**meta, "paper_number": "2"}, "x P1 Soln.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    a = prow(db_session, aj, "a1")
+    assert a.matched_ingest_paper_id is None and a.match_status is None
+
+
+def test_booklets_with_few_details_pair_on_their_filenames(db_session, admin_user, fake_object_store, meta):
+    # the screenshot's P2 pair: no school on either cover, and level and subject unread on the
+    # questions; the filenames agree once "questions" / "solutions" are dropped
+    q_meta = {**meta, "school_id": None, "level_id": None, "subject_id": None}
+    a_meta = {**meta, "school_id": None}
+    p1 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", {**q_meta, "paper_number": None},
+            "BPGHS 2020 Prelim EM P1 questions.pdf")
+    p2 = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", {**q_meta, "paper_number": None},
+            "BPGHS 2020 Prelim EM P2 questions.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**a_meta, "paper_number": None},
+            "BPGHS 2020 Prelim EM P2 solutions.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    a = prow(db_session, aj, "a1")
+    assert a.matched_ingest_paper_id == prow(db_session, p2, "q1").id and a.match_status == "auto"
+    assert prow(db_session, p1, "q1").matched_ingest_paper_id is None  # "P1" vs "P2": never
+
+
+def test_weaker_evidence_is_suggested_and_not_a_pair_rejects_it(db_session, admin_user, fake_object_store, meta):
+    from app.services.ingest_matching import match_info, reject_suggestion
+
+    few = {f: None for f in meta} | {"year": 2024, "exam_type_id": meta["exam_type_id"], "stream_id": meta["stream_id"]}
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", few, "scan 7.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**few, "subject_id": meta["subject_id"]},
+            "answers 7.pdf")
+    match_job(db_session, aj)
+    db_session.commit()
+    a, qq = prow(db_session, aj, "a1"), prow(db_session, qj, "q1")
+    # year, exam type, stream and the shared upload (the numbers fit only 2 of 3): suggested, not linked
+    assert (a.match_status, a.suggested_ingest_paper_id, a.matched_ingest_paper_id) == ("suggested", qq.id, None)
+    info = match_info(db_session, aj)["a1"]
+    assert info["suggestion"]["ingest_paper_id"] == qq.id and "uploaded together" in info["note"]
+    reject_suggestion(db_session, a)
+    db_session.commit()
+    a = prow(db_session, aj, "a1")
+    assert (a.match_status, a.suggested_ingest_paper_id) == (None, None)
+    match_job(db_session, aj)  # rejected for good
+    db_session.commit()
+    assert prow(db_session, aj, "a1").match_status is None
+
+
+def test_the_same_unresolved_cover_school_counts_as_the_same_school(db_session, admin_user, fake_object_store, meta):
+    from app.services.ingest_matching import match_evidence, side
+
+    blank_school = {**meta, "school_id": None}
+    qj = mk(db_session, admin_user, fake_object_store, question_paper(), "q1", {**blank_school, "extracted": {"school": "BPGHS"}}, "q.pdf")
+    aj = mk(db_session, admin_user, fake_object_store, answers_paper(), "a1", {**blank_school, "extracted": {"school": " bpghs"}}, "a.pdf")
+    a, qq = prow(db_session, aj, "a1"), prow(db_session, qj, "q1")
+    assert (a.cover_school_name, qq.cover_school_name) == ("bpghs", "BPGHS")
+    ev = match_evidence.score(side(db_session, a), side(db_session, qq))
+    assert ev.veto is None and any("BPGHS" in r or "bpghs" in r for r in ev.reasons)
 
 
 @pytest.mark.parametrize("side", ["answer", "question"])
@@ -215,6 +277,7 @@ def test_confirm_brings_in_the_other_jobs_answers_and_settles_both(
     assert body["job_status"] == "confirmed"
     assert body["unmatched"] == [9]
     assert body["answers_from"] == {"job_id": str(aj.id), "filename": "answers.pdf", "paper_key": "a1", "attached": [1, 2]}
+    assert body["answers_job_settled"] is True  # its only paper is now attached
     qs = {x["question_number"]: x for x in body["questions"]}
     # q1 had no answer of its own: the other job's answer (its page 1)
     assert [(p["page_type"], p["page_order"]) for p in qs[1]["pages"] if p["page_type"] == "answer"] == [("answer", 1)]

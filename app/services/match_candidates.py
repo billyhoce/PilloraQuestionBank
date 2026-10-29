@@ -2,7 +2,7 @@
 with, ranked by how many of the admin's filled fields agree, rather than filtered.
 
 * **Blank means "any":** only the filled fields are compared, each *exactly* (``paper_number``
-  trimmed and case-folded, as in automatic matching; no fuzzy matching). A school is the same if the
+  normalised as in automatic matching: ``P1`` = ``Paper 1`` = ``1``; no fuzzy matching). A school is the same if the
   ids are equal, or if neither has an id and the new-school names are equal (#87).
 * **Exact** matches agree on every filled field. **Best** matches, listed only when there is no
   exact one, are the top ten by number of agreeing fields; a booklet that agrees on nothing is left
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.orm import IngestJob, IngestPaper, Paper
 from app.services.answer_coverage import answered_numbers, bank_coverage, current_papers, proposal_coverage
 from app.services.ingest_papers import METADATA_FIELDS, first_preview
+from app.services.match_evidence import normalise_paper_number
 
 BEST_LIMIT = 10
 EXACT_LIMIT = 50
@@ -47,7 +48,7 @@ def _same(field: str, query: dict, fields: dict) -> bool:
     if value is None:
         return False
     if field == "paper_number":
-        return _norm(value) == _norm(query[field])
+        return normalise_paper_number(value) == normalise_paper_number(query[field])
     return value == query[field]
 
 
@@ -104,8 +105,9 @@ def _bank_items(db: Session, query: dict) -> list[dict]:
             continue  # a new school is never in the bank
         if not _filled(query, f):
             continue
-        if f == "paper_number":
-            clauses.append(func.lower(func.trim(Paper.paper_number)) == _norm(query[f]))
+        if f == "paper_number":  # the bank's numbers are not normalised: try the usual spellings
+            n = normalise_paper_number(query[f])
+            clauses.append(func.lower(func.trim(Paper.paper_number)).in_({n, f"p{n}", f"p {n}", f"paper {n}", f"0{n}"}))
         else:
             clauses.append(getattr(Paper, f) == query[f])
     q = select(Paper)

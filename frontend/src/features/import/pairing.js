@@ -2,6 +2,9 @@
 // paper" popup): which papers need one, what the block shows, and the popup's search in words.
 import { coverageOf } from './answerCoverage'
 
+// Proposals from before roles existed have no `role`: they are question papers.
+export const isAnswerOnly = paper => paper?.role === 'answer_only'
+
 // A pending paper needs a partner when it is answer-only, or a question paper whose own booklet
 // had no answers at all (a partly answered one is warned about instead). A paper with no questions
 // can only be skipped.

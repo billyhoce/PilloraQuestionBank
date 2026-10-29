@@ -85,7 +85,8 @@ outcome (the job becomes `confirmed`), or when it is `cancelled` or `expired`; a
 prefix is emptied.
 
 **Seven-field key** — `school, year, level, subject, exam type, stream, paper number`: what
-identifies a paper when matching answers to questions. A school typed during review that is not yet
+identifies a paper: matching to a bank paper needs all seven to agree; two pending booklets are
+scored, and need only not disagree on any. A school typed during review that is not yet
 in the reference list is a **new school**, created only when a question paper carrying it is confirmed.
 
 **Link** — Pairs a pending answer-only paper with a pending question paper that has no answers of
@@ -95,5 +96,11 @@ question paper brings the answers in.
 **Proposed attach** — The one confirmed paper an answer-only paper matches; the admin accepts it with
 one click.
 
-**Rejected pair** — A pair the admin turned down (Unmatch, or "Not this one"); automatic matching
+**Suggested pair** — A pending question paper that looks like an answer-only paper's partner, on
+evidence too weak to link them unasked; the admin pairs it or turns it down ("Not a pair").
+
+**Pair (review)** — A question paper and its linked answer-only paper in another booklet, shown as
+one review queue card and reviewed on one page.
+
+**Rejected pair** — A pair the admin turned down (Unmatch, "Not this one" or "Not a pair"); automatic matching
 never offers it again, but both papers stay free to match others.

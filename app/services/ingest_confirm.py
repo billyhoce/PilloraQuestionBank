@@ -21,7 +21,7 @@ from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.services.ingest import confirm_import
 from app.services.ingest_events import add_event
 from app.services.ingest_jobs import job_prefix
-from app.services.ingest_papers import create_new_school, get_row, set_metadata, set_status
+from app.services.ingest_papers import create_new_school, get_row, learn_school_alias, set_metadata, set_status
 from app.services.paper_admin import apply_page_changes, commit_with_page_moves
 from app.storage.object_store import ObjectStore
 from app.storage.s3_client import delete_object, put_image
@@ -318,6 +318,7 @@ def confirm_job_paper(
         paper.source_job_id = job_id
         settled = _record(job, key, "confirmed", paper.id)
         set_metadata(db, job, key, metadata)  # what the admin confirmed (admin-sourced if it differs)
+        learn_school_alias(db, job, key, paper.school_id)
         set_status(db, job, key, "confirmed", paper.id)
         if partner is not None:
             answers_settled = _record(partner_job, partner_key, "attached", paper.id)

@@ -4,7 +4,7 @@ import anthropic
 
 from app.ai.job_cost import record_usage
 from app.logger import Timer, log
-from app.models.orm import ExamType, Level, School, Stream, Subject
+from app.models.orm import ExamType, Level, School, SchoolAlias, Stream, Subject
 
 _EMPTY: dict = {
     "school_id": None,
@@ -29,7 +29,7 @@ _EMPTY: dict = {
 _EXAMPLES: str = (
     "'2024 S3 EM WA2 CGS - P1' should be parsed as "
     "school='Crescent Girls School', year=2024, subject='E Math', level='Secondary 3', exam_type='WA2', paper_number=1\n"
-    "Explanation: '2024' matches the year format; 'S3' maps to 'Sec 3' level; 'EM' is a common abbreviation for 'E Math'; "
+    "Explanation: '2024' matches the year format; 'S3' maps to 'Secondary 3' level; 'EM' is a common abbreviation for 'E Math'; "
     "'WA2' matches the exam type; 'P1' is an abbreviation for 'Paper 1'.\n\n"
     "'ANDSS 4E2024EM' should be parsed as "
     "school='Anderson Secondary School', year=2024, subject='E Math', level='Secondary 4', exam_type=null, paper_number=null\n"
@@ -86,6 +86,7 @@ _EXTRACTION_TOOL: dict = {
 def _fetch_reference_data(db) -> dict:
     return {
         "schools": db.query(School).all(),
+        "school_aliases": {a.alias: a.school_id for a in db.query(SchoolAlias).all()},
         "subjects": db.query(Subject).all(),
         "levels": db.query(Level).all(),
         "streams": db.query(Stream).all(),
@@ -93,10 +94,37 @@ def _fetch_reference_data(db) -> dict:
     }
 
 
+def alias_key(name: str) -> str:
+    """A school alias as stored and looked up: trimmed, lower-cased, runs of spaces collapsed."""
+    return " ".join(name.split()).lower()
+
+
+def level_label(level) -> str:
+    """A level as offered to the model and resolved back: qualified by its school level when its
+    name is a bare number ("Secondary 4"), since "4" exists under Primary and Secondary alike."""
+    name = str(level.name).strip()
+    if name.isdigit():
+        return f"{level.school_level.name} {name}"
+    return name
+
+
+def _level_map(levels) -> dict[str, int]:
+    """Lower-cased level label -> id. A bare name ("4") is accepted too, but only when it names one
+    level."""
+    out = {level_label(l).lower(): l.id for l in levels}
+    bare: dict[str, list[int]] = {}
+    for l in levels:
+        bare.setdefault(str(l.name).strip().lower(), []).append(l.id)
+    for name, ids in bare.items():
+        if len(ids) == 1:
+            out.setdefault(name, ids[0])
+    return out
+
+
 def build_system_prompt(ref_data: dict) -> str:
     schools_str    = "\n".join(f"  - {s.name}" for s in ref_data["schools"])    or "  (none)"
     subjects_str   = "\n".join(f"  - {s.name}" for s in ref_data["subjects"])   or "  (none)"
-    levels_str     = "\n".join(f"  - {l.name}" for l in ref_data["levels"])     or "  (none)"
+    levels_str     = "\n".join(f"  - {level_label(l)}" for l in ref_data["levels"]) or "  (none)"
     streams_str    = "\n".join(f"  - {s.name}" for s in ref_data.get("streams", [])) or "  (none)"
     exam_types_str = "\n".join(f"  - {e.name}" for e in ref_data["exam_types"]) or "  (none)"
 
@@ -131,12 +159,13 @@ def resolve_metadata(extracted: dict, ref_data: dict) -> dict:
 
     school_map    = {s.name.lower(): s.id for s in ref_data["schools"]}
     subject_map   = {s.name.lower(): s.id for s in ref_data["subjects"]}
-    level_map     = {l.name.lower(): l.id for l in ref_data["levels"]}
+    level_map     = _level_map(ref_data["levels"])
     exam_type_map = {e.name.lower(): e.id for e in ref_data["exam_types"]}
     stream_map    = {s.name.lower(): s.id for s in ref_data.get("streams", [])}
 
     if extracted.get("school"):
-        result["school_id"] = school_map.get(extracted["school"].lower())
+        name = extracted["school"].strip().lower()
+        result["school_id"] = school_map.get(name) or (ref_data.get("school_aliases") or {}).get(alias_key(name))
     if extracted.get("subject"):
         result["subject_id"] = subject_map.get(extracted["subject"].lower())
     if extracted.get("level"):

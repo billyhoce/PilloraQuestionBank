@@ -528,6 +528,9 @@ class IngestPaper(Base):
     # A school the admin typed that is not in the reference list (``school_id`` is then NULL); the
     # school is only created when a question paper carrying it is confirmed (#87).
     new_school_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # The school as printed on the cover when it matched no school (e.g. "BPGHS"): compared between
+    # pending papers by matching, and learned as a ``school_alias`` when the paper is confirmed.
+    cover_school_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # On an answer-only paper linked to a pending question paper: which answers go onto which
     # questions, ``{answer label: question label | null}`` (null: not placed). An answer missing
     # from it, or a NULL map, goes onto the question with its number. Cleared whenever the link
@@ -544,16 +547,34 @@ class IngestPaper(Base):
         "IngestPaper", foreign_keys=[matched_ingest_paper_id], remote_side="IngestPaper.id", post_update=True
     )
     # Automatic matching (app/services/ingest_matching.py): NULL (nothing to do), ``proposed`` (one
-    # confirmed paper, ``proposed_paper_id``), ``manual`` (several or only partial candidates) or
-    # ``auto`` (auto-linked to a pending paper); ``match_note`` says why. Pairs the admin turned down
-    # are in ``ingest_match_rejection``.
+    # confirmed paper, ``proposed_paper_id``), ``manual`` (several or only partial candidates),
+    # ``auto`` (auto-linked to a pending paper) or ``suggested`` (on an answer-only paper: one
+    # pending question paper, ``suggested_ingest_paper_id``, on weaker evidence; the admin pairs or
+    # turns it down); ``match_note`` says why. Pairs the admin turned down are in
+    # ``ingest_match_rejection``.
     match_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     proposed_paper_id: Mapped[int | None] = mapped_column(ForeignKey("paper.id", ondelete="SET NULL"), nullable=True)
     match_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    suggested_ingest_paper_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingest_paper.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class SchoolAlias(Base):
+    """Another name a cover prints for a school ("BPGHS"), learned when an admin confirms a paper
+    whose cover school matched nothing by picking the school. Reading a cover resolves it like the
+    school's own name. ``alias`` is stored trimmed and lower-cased, with runs of spaces collapsed."""
+
+    __tablename__ = "school_alias"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alias: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    school_id: Mapped[int] = mapped_column(ForeignKey("school.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class IngestMatchRejection(Base):

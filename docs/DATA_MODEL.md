@@ -169,14 +169,20 @@ See [features/auto-import.md](./features/auto-import.md) and
   `proposal` and `report`, used for matching across jobs.
   - `paper_key` (unique per job: `q1`, `a1` or `paperN`), `role` (`question` / `answer_only`).
   - The seven identifying fields (nullable until known), plus `new_school_name` for a school typed
-    during review that is not in the list yet (created on confirm).
+    during review that is not in the list yet (created on confirm), and `cover_school_name`: the
+    school the cover printed when it matched none ("BPGHS"), compared by matching.
+  - `role` can be switched by the admin ("This is an answer booklet"), together with the proposal.
   - `metadata_source`: `cover`, `filename` or `admin`.
   - `status`: `pending`, `confirmed`, `skipped`, `attached`; `paper_id` once confirmed.
   - Pairing: `matched_ingest_paper_id` (answer-only ↔ pending question paper, both rows point at
     each other), `answer_map` (answer label → question label; null means by question number;
     cleared when the link changes).
-  - Matching to the bank: `match_status` (`proposed`, `manual`, `auto`, or null),
-    `proposed_paper_id`, `match_note` (why manual).
+  - Matching: `match_status` (`proposed`, `manual`, `auto`, `suggested`, or null),
+    `proposed_paper_id` (a bank paper), `suggested_ingest_paper_id` (a pending question paper
+    suggested on weaker evidence), `match_note` (why manual, or the evidence for a suggestion).
+- **school_alias** — another name a cover prints for a school (`alias`, stored trimmed and
+  lower-cased, unique → `school_id`), learned when a paper whose cover school matched nothing is
+  confirmed with a school; reading a cover resolves it like the school's name.
 - **ingest_match_rejection** — a pairing the admin turned down, against either a pending paper
   (counts in both directions) or a bank paper; automatic matching never proposes it again.
 - **ingest_event** — append-only audit trail, never pruned: job created, task claimed/finished,

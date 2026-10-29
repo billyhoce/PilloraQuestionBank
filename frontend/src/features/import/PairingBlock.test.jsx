@@ -8,7 +8,7 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       paperCandidates: vi.fn(), matchJobPaper: vi.fn(), attachJobPaper: vi.fn(), unmatchJobPaper: vi.fn(), rejectProposedPaper: vi.fn(),
-      answerMappingTable: vi.fn(), saveAnswerMap: vi.fn(),
+      answerMappingTable: vi.fn(), saveAnswerMap: vi.fn(), rejectSuggestion: vi.fn(),
     },
   },
 }))
@@ -55,6 +55,21 @@ describe('PairingBlock', () => {
     expect(api.import.paperCandidates).toHaveBeenCalledWith('j1', 'a1', expect.objectContaining({ year: 2024, school_id: 4 }))
     await userEvent.click(screen.getByRole('button', { name: 'Match this paper…' }))
     expect(screen.getByRole('dialog', { name: 'Match this paper' })).toBeInTheDocument()
+  })
+
+  it('offers a suggested question paper: Pair saves first and pairs, Not a pair turns it down', async () => {
+    const suggestion = { ingest_paper_id: 31, job_id: 'j2', filename: 'P2 questions.pdf', paper_key: 'q1' }
+    const proposal = { status: 'suggested', note: 'same year; uploaded together', paper: null, suggestion }
+    api.import.matchJobPaper.mockResolvedValue({ matches: LINK, proposal: null })
+    api.import.rejectSuggestion.mockResolvedValue({ matches: null, proposal: null })
+    const { onMatched, beforeSave } = renderBlock({ proposal })
+    expect(screen.getByText(/Looks like the answers to P2 questions\.pdf \(q1\)/)).toHaveTextContent('same year; uploaded together')
+    await userEvent.click(screen.getByRole('button', { name: 'Pair' }))
+    expect(beforeSave).toHaveBeenCalled()
+    expect(api.import.matchJobPaper).toHaveBeenCalledWith('j1', 'a1', 31)
+    expect(onMatched).toHaveBeenCalledWith({ matches: LINK, proposal: null })
+    await userEvent.click(screen.getByRole('button', { name: 'Not a pair' }))
+    expect(api.import.rejectSuggestion).toHaveBeenCalledWith('j1', 'a1')
   })
 
   it('says when nothing matches', async () => {

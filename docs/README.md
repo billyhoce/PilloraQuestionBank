@@ -52,5 +52,6 @@ flowchart LR
 | [adr/0001-stage-pipeline.md](./adr/0001-stage-pipeline.md) | Ingest a booklet as a job of file-based stages in a task store |
 | [adr/0002-qa-booklet-pairing.md](./adr/0002-qa-booklet-pairing.md) | Pair question and answer booklets by metadata; attach answers to a confirmed paper |
 | [adr/0003-ingest-queue-storage-retention.md](./adr/0003-ingest-queue-storage-retention.md) | Postgres queue, direct-to-S3 upload, keep jobs until settled |
+| [adr/0004-scored-pending-matching.md](./adr/0004-scored-pending-matching.md) | Score pending question/answer pairs; review a linked pair as one |
 
 `agents/` configures the engineering skills (issue tracker, triage labels, domain docs).

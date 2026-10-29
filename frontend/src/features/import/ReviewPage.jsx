@@ -1,23 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
-import { clientToPt, firstPageOf, rectToPx } from './reviewGeometry'
-import {
-  addRect, assignAnswer, deleteRect, drawError, followSelection, getRect, mergeWithPrevious, moveRect, nextNumber, normalise,
-  renumber, renumberError, resizeRect, splitBetween, splitThrough, toEditPayload,
-} from './proposalReducer'
 import { partlyAnsweredWarning } from './answerCoverage'
+import { answersOn, startMapping } from './answerMapping'
 import { startManualImport } from './manualHandoff'
 import MetadataSidebar from './MetadataSidebar'
 import PairingBlock from './PairingBlock'
-import { metadataBody, needsPartner, pairingState } from './pairing'
+import { isAnswerOnly, metadataBody, needsPartner, pairingState } from './pairing'
+import PaperEditor from './PaperEditor'
+import { groupJobs } from './queueGroups'
+import RectPreview from './RectPreview'
 import TopicReview from './TopicReview'
 import { emptyMetadata, mergeSuggested, useReferenceData } from './importMetadata'
-
-// Proposals from before roles existed have no `role`: they are question papers.
-const isAnswerOnly = paper => paper?.role === 'answer_only'
+import useJobReview from './useJobReview'
 
 function paperTitle(paper, i) {
   return paper.label ? `${paper.label}${paper.answer_label ? ` / ${paper.answer_label}` : ''}` : `Answers ${paper.answer_label ?? i + 1}`
@@ -26,296 +23,60 @@ function paperTitle(paper, i) {
 // A linked partner's file: "this file" when it is in the same booklet (#90).
 const fileName = (link, jobId) => (link.job_id === jobId ? 'this file' : link.filename)
 
-const SAVE_DELAY_MS = 800
-const HANDLE_PX = 14
-const COLOUR = { question: '#2563eb', answer: '#16a34a', orphan: '#6b7280' }
-
-// Edge handles of the selected rectangle: which coordinate each one drags, and where it sits.
-const HANDLES = [
-  { edge: 'x0', cursor: 'ew-resize', at: b => ({ x: b.x - HANDLE_PX / 2, y: b.y, width: HANDLE_PX, height: b.height }) },
-  { edge: 'x1', cursor: 'ew-resize', at: b => ({ x: b.x + b.width - HANDLE_PX / 2, y: b.y, width: HANDLE_PX, height: b.height }) },
-  { edge: 'y0', cursor: 'ns-resize', at: b => ({ x: b.x, y: b.y - HANDLE_PX / 2, width: b.width, height: HANDLE_PX }) },
-  { edge: 'y1', cursor: 'ns-resize', at: b => ({ x: b.x, y: b.y + b.height - HANDLE_PX / 2, width: b.width, height: HANDLE_PX }) },
-]
-
-const sameSel = (a, b) => a && b && a.list === b.list && a.i === b.i && (a.list === 'orphan' || a.q === b.q)
-
-function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, drawKind, onDraw }) {
-  const svgRef = useRef(null)
-  const drag = useRef(null)
-  // The box being drawn, in points: { x0, y0, x1, y1 } (corners in drawing order).
-  const [draft, setDraft] = useState(null)
-  const boxes = []
-  const add = (list, q, rects, label) =>
-    rects.forEach((r, i) => {
-      if (r.page === page.page) boxes.push({ list, q, i, label, box: rectToPx(r, page), rect: r })
-    })
-  paper.questions.forEach((q, k) => {
-    add('question', k, q.question_rects, `Q${q.number}`)
-    add('answer', k, q.answer_rects, `A${q.number}`)
-  })
-  add('orphan', null, paper.orphan_answers, null)
-
-  const toPt = e => clientToPt(e.clientX, e.clientY, svgRef.current.getBoundingClientRect(), page)
-
-  function move(e) {
-    const d = drag.current
-    if (!d) return
-    const pt = toPt(e)
-    if (d.edge) onResize(d.sel, { [d.edge]: d.edge[0] === 'x' ? pt.x : pt.y })
-    else onMove(d.sel, d.rect.x0 + pt.x - d.start.x, d.rect.y0 + pt.y - d.start.y)
-  }
-  // A drag keeps the box's index while it lasts; the box takes its place in order when it ends.
-  const endDrag = () => {
-    if (drag.current) onDragEnd()
-    drag.current = null
-  }
-
-  // Drawing: press on the page, drag, release.
-  function drawStart(e) {
-    if (!drawKind) return
-    e.preventDefault()
-    e.currentTarget.setPointerCapture?.(e.pointerId)
-    const pt = toPt(e)
-    setDraft({ x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y })
-  }
-  function drawMove(e) {
-    if (!draft) return
-    const pt = toPt(e)
-    setDraft(d => ({ ...d, x1: pt.x, y1: pt.y }))
-  }
-  function drawEnd() {
-    if (!draft) return
-    onDraw({ page: page.page, ...draft })
-    setDraft(null)
-  }
-
-  const draftBox = draft && rectToPx({
-    x0: Math.min(draft.x0, draft.x1), x1: Math.max(draft.x0, draft.x1),
-    y0: Math.min(draft.y0, draft.y1), y1: Math.max(draft.y0, draft.y1),
-  }, page)
-
-  return (
-    <svg
-      ref={svgRef}
-      data-testid="overlay"
-      data-drawing={drawKind || undefined}
-      viewBox={`0 0 ${page.width_px} ${page.height_px}`}
-      className="absolute inset-0 w-full h-full"
-      style={{ cursor: drawKind ? 'crosshair' : undefined, touchAction: drawKind ? 'none' : undefined }}
-      onClick={() => { if (!drawKind) onSelect(null) }}
-      onPointerDown={drawStart}
-      onPointerMove={drawMove}
-      onPointerUp={drawEnd}
-      onPointerCancel={() => setDraft(null)}
-    >
-      {boxes.map(b => {
-        const s = { list: b.list, q: b.q, i: b.i }
-        const on = sameSel(sel, s)
-        const inQuestion = sel && sel.list !== 'orphan' && b.q === sel.q
-        return (
-          <g key={`${b.list}-${b.q}-${b.i}`} data-kind={b.list} data-selected={on || undefined}
-            pointerEvents={drawKind ? 'none' : undefined}>
-            <rect
-              {...b.box}
-              data-testid={on ? 'selected-rect' : undefined}
-              fill={COLOUR[b.list]}
-              fillOpacity={on ? 0.3 : inQuestion ? 0.2 : 0.1}
-              stroke={COLOUR[b.list]}
-              strokeWidth={on || inQuestion ? 4 : 2}
-              strokeDasharray={b.list === 'orphan' ? '8 4' : undefined}
-              style={{ cursor: on ? 'move' : 'pointer', touchAction: on ? 'none' : undefined }}
-              onClick={e => { e.stopPropagation(); onSelect(s) }}
-              onPointerDown={on ? e => {
-                // Drag the selected box to move it.
-                e.stopPropagation()
-                e.currentTarget.setPointerCapture?.(e.pointerId)
-                drag.current = { sel: s, rect: b.rect, start: toPt(e) }
-              } : undefined}
-              onPointerMove={on ? move : undefined}
-              onPointerUp={on ? endDrag : undefined}
-              onPointerCancel={on ? endDrag : undefined}
-            />
-            {b.label && (
-              <text x={b.box.x + 6} y={b.box.y + 22} fontSize="20" fill={COLOUR[b.list]} pointerEvents="none">
-                {b.label}
-              </text>
-            )}
-            {on && HANDLES.map(h => (
-              <rect
-                key={h.edge}
-                data-testid={`handle-${h.edge}`}
-                {...h.at(b.box)}
-                fill={COLOUR[b.list]}
-                fillOpacity={0.6}
-                style={{ cursor: h.cursor, touchAction: 'none' }}
-                onClick={e => e.stopPropagation()}
-                onPointerDown={e => {
-                  e.stopPropagation()
-                  e.currentTarget.setPointerCapture?.(e.pointerId)
-                  drag.current = { sel: s, edge: h.edge }
-                }}
-                onPointerMove={move}
-                onPointerUp={endDrag}
-                onPointerCancel={endDrag}
-              />
-            ))}
-          </g>
-        )
-      })}
-      {draftBox && (
-        <rect data-testid="draft-rect" {...draftBox} fill={COLOUR[drawKind]} fillOpacity={0.15}
-          stroke={COLOUR[drawKind]} strokeWidth={2} strokeDasharray="6 3" pointerEvents="none" />
-      )}
-    </svg>
-  )
-}
-
-// What the selected box is, in words, and what can be done to it: delete it, and for an answer
-// box, give it to another question (or leave it unmatched).
-function SelectionPanel({ paper, sel, onDelete, onAssign }) {
-  const rect = getRect(paper, sel)
-  if (!rect) return null
-  const q = sel.list === 'orphan' ? null : paper.questions[sel.q]
-  const what = sel.list === 'orphan' ? 'Unmatched answer box'
-    : sel.list === 'answer' ? `Answer box of question ${q.number}`
-      : `Question box of question ${q.number}`
-  const canAssign = sel.list !== 'question' && paper.questions.length > 0
-  return (
-    <div role="region" aria-label="Selected box" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
-      <span className="font-medium text-gray-700">{what}</span>
-      <span className="text-gray-500">page {rect.page} · drag to move, drag an edge to resize</span>
-      {canAssign && (
-        <label className="flex items-center gap-1 text-gray-700">
-          Belongs to
-          <select
-            aria-label="Assign answer box to question"
-            value={sel.list === 'orphan' ? '' : String(sel.q)}
-            onChange={e => onAssign(e.target.value === '' ? null : Number(e.target.value))}
-            className="border border-gray-300 rounded px-1 py-0.5 text-xs"
-          >
-            <option value="">No question (not imported)</option>
-            {paper.questions.map((o, k) => <option key={k} value={k}>Question {o.number}</option>)}
-          </select>
-        </label>
-      )}
-      <button type="button" onClick={onDelete} className="ml-auto text-red-600 hover:underline">Delete box</button>
-    </div>
-  )
-}
-
-// The drawing tools: one press draws one box, for a question number asked for first.
-// `prompt` is the open number field ({ kind, text, error }); `drawing` the box being drawn
-// ({ kind, number }) once the number is accepted.
-function DrawToolbar({ answerOnly, prompt, drawing, onOpen, onText, onStart, onCancel }) {
-  const tools = answerOnly ? [['answer', 'Draw answer box']] : [['question', 'Draw question box'], ['answer', 'Draw answer box']]
-  const active = prompt?.kind ?? drawing?.kind ?? null
-  return (
-    <div className="mb-2 text-xs">
-      <div className="flex flex-wrap items-center gap-2">
-        {tools.map(([kind, label]) => (
-          <button
-            key={kind}
-            type="button"
-            aria-pressed={active === kind}
-            onClick={() => (active === kind ? onCancel() : onOpen(kind))}
-            className={`rounded border px-2 py-1 font-medium ${
-              active === kind ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-        {drawing ? (
-          <span role="status" className="text-gray-600">
-            Drag on the page to draw {drawing.kind === 'question' ? 'a question' : 'an answer'} box for {answerOnly ? 'answer' : 'question'} {drawing.number}. Esc cancels.
-          </span>
-        ) : !prompt && (
-          <span className="text-gray-500">Click a box to select it, or draw a new box.</span>
-        )}
-      </div>
-      {prompt && (
-        <form
-          className="mt-1 flex flex-wrap items-center gap-2"
-          onSubmit={e => { e.preventDefault(); onStart() }}
-        >
-          <label className="flex items-center gap-1 text-gray-700">
-            {prompt.kind === 'question' ? 'Question box for question' : `Answer box for ${answerOnly ? 'answer' : 'question'}`}
-            <input
-              type="text"
-              inputMode="numeric"
-              autoFocus
-              aria-label="Question number for the new box"
-              aria-invalid={prompt.error ? 'true' : undefined}
-              value={prompt.text}
-              onChange={e => onText(e.target.value.replace(/\D/g, ''))}
-              onKeyDown={e => { if (e.key === 'Escape') onCancel() }}
-              className="w-14 border border-gray-300 rounded px-1 text-sm"
-            />
-          </label>
-          <button type="submit" className="rounded border border-blue-600 px-2 py-1 font-medium text-blue-700 hover:bg-blue-50">
-            Start drawing
-          </button>
-          <button type="button" onClick={onCancel} className="text-gray-600 hover:underline">Cancel</button>
-          {prompt.error && <span role="alert" className="w-full text-red-600">{prompt.error}</span>}
-        </form>
-      )}
-    </div>
-  )
-}
-
-// A question's number; committed on blur or Enter, refused (with the reason) if it clashes.
-function NumberField({ paper, q, onCommit }) {
-  const number = paper.questions[q].number
-  const [text, setText] = useState(String(number))
-  const [error, setError] = useState(null)
-  useEffect(() => { setText(String(number)); setError(null) }, [number])
-  function commit() {
-    const n = Number(text)
-    const err = text.trim() === '' ? 'A question number must be a positive whole number' : renumberError(paper, q, n)
-    setError(err)
-    if (!err) onCommit(n)
-  }
-  return (
-    <span className="inline-flex flex-col">
-      <input
-        type="number"
-        min="1"
-        aria-label={`Number of question ${number}`}
-        aria-invalid={error ? 'true' : undefined}
-        value={text}
-        onChange={e => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={e => { if (e.key === 'Enter') commit() }}
-        className="w-14 border border-gray-300 rounded px-1 text-sm"
-      />
-      {error && <span role="alert" className="text-xs text-red-600">{error}</span>}
-    </span>
-  )
-}
+const reviewUrl = (jobId, key) => `/admin/import/jobs/${jobId}/review${key ? `?paper=${encodeURIComponent(key)}` : ''}`
 
 const SAVE_LABEL = { saving: 'Saving…', saved: 'Saved', error: 'Not saved' }
+// Two jobs saving at once (a paired review) show the state that most needs attention.
+const worstSave = (...states) => ['error', 'saving', 'saved'].find(s => states.includes(s)) ?? 'idle'
+
+// The linked answer paper's answers, placed onto question paper `paper`'s questions by the pair's
+// stored mapping, else by number: { [question label]: [{ label, k, answer }] } (`k`, the answer's
+// index in the answer paper).
+function placedAnswers(paper, answersPaper, mapping) {
+  const answers = answersPaper.questions
+    .map((a, k) => ({ label: String(a.number), k, answer: a }))
+    .filter(a => a.answer.answer_rects.length > 0)
+  const questions = paper.questions.map(q => ({ label: String(q.number) }))
+  const placed = startMapping(questions, answers, mapping)
+  return Object.fromEntries(questions.map(q => [q.label, answersOn(placed, answers, q.label)]))
+}
+
+// Under a question in a paired review: the answers landing on it from the answer booklet, each a
+// thumbnail that opens that answer's box, or "No answer".
+function LinkedAnswers({ placed, answersPaper, onOpen }) {
+  if (!placed.length) return <p className="text-xs text-amber-800">No answer</p>
+  return (
+    <ul className="mt-1 flex flex-wrap gap-1">
+      {placed.map(({ label, k, answer }) => {
+        const rect = answer.answer_rects[0]
+        const page = answersPaper.pages.find(p => p.page === rect.page)
+        return (
+          <li key={label}>
+            <button
+              type="button" onClick={() => onOpen(k, rect.page)} aria-label={`Open answer ${label}`}
+              title={`Answer ${label}, page ${rect.page}: open it in the answer booklet`}
+              className="block w-20 text-left text-[10px] text-green-800 hover:ring-2 hover:ring-green-500 rounded"
+            >
+              {page?.url ? <RectPreview url={page.url} page={page} rect={rect} alt={`Answer ${label}`} /> : null}
+              <span>A{label} · p{rect.page}</span>
+            </button>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
 
 export default function ReviewPage() {
   const { jobId } = useParams()
+  const [search] = useSearchParams()
   const navigate = useNavigate()
   // The review queue, when this page sits under the import layout: for "next job".
   const reviewQueue = useOutletContext()?.reviewQueue
-  const nextJob = (reviewQueue?.jobs ?? [])
-    .filter(j => j.id !== jobId)
-    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0] ?? null
-  // Drawing a new box (one per press of a tool): the number field first, `prompt`
-  // ({ kind, text, error }), then `drawing` ({ kind, number }) once its number is accepted.
-  const [prompt, setPrompt] = useState(null)
-  const [drawing, setDrawing] = useState(null)
-  const [review, setReview] = useState(null)
-  const [error, setError] = useState(null)
-  const [paperIdx, setPaperIdx] = useState(0)
-  const [pageNo, setPageNo] = useState(null)
-  const [sel, setSel] = useState(null)
-  const [saveState, setSaveState] = useState('idle')
-  const timer = useRef(null)
-  const latest = useRef(null)
+  const main = useJobReview(jobId)
+  const { review, matches, proposals } = main
+  // The paper the admin opened, { jobId, idx }; until then the one the page opens on.
+  const [chosen, setChosen] = useState(null)
   const [handoff, setHandoff] = useState(null)
   const refs = useReferenceData()
   // The admin's edits to the sidebar, by paper key; a paper never edited shows its own pre-fill.
@@ -324,30 +85,48 @@ export default function ReviewPage() {
   const [confirmError, setConfirmError] = useState(null)
   // After a confirm: the created paper's questions, awaiting the topic-review step.
   const [topicStep, setTopicStep] = useState(null)
-  // Papers linked to a paper of another job, by paper key: { filename, paper_key, ... }.
-  const [matches, setMatches] = useState({})
-  // Automatic matches of answer-only papers to confirmed papers, by key: { status, note, paper }.
-  const [proposals, setProposals] = useState({})
+  // A paired review: which booklet the editor shows and where it opens ({ at, view, focus }, `at`
+  // naming the paper it was chosen on; any other paper opens on its questions).
+  const [shown, setShown] = useState(null)
 
+  const papers = review?.proposal.papers ?? []
+  // Open on the paper the link names (?paper=q1), else the first undecided one.
+  const asked = papers.findIndex(p => p.key === search.get('paper'))
+  const paperIdx = chosen?.jobId === jobId ? chosen.idx : asked >= 0 ? asked : Math.max(papers.findIndex(p => !p.outcome), 0)
+  const paper = papers[paperIdx]
+  const answerOnly = isAnswerOnly(paper)
+  const link = paper ? matches[paper.key] ?? null : null
+
+  // A question paper linked to an answer-only paper is reviewed with it: its booklet, in another
+  // job or this one, is loaded alongside.
+  const paired = paper && !answerOnly && !paper.outcome && link ? link : null
+  const otherJob = paired && paired.job_id !== jobId ? paired.job_id : null
+  const partner = useJobReview(otherJob)
+  const partnerJob = otherJob ? partner : main
+  const answersIdx = paired ? (partnerJob.review?.proposal.papers.findIndex(p => p.key === paired.paper_key) ?? -1) : -1
+  const answersPaper = answersIdx >= 0 ? partnerJob.review.proposal.papers[answersIdx] : null
+  const placed = answersPaper ? placedAnswers(paper, answersPaper, paired.answer_map) : null
+
+  const at = `${jobId}:${paper?.key}`
+  const view = shown?.at === at ? shown.view : 'questions'
+  const focus = shown?.at === at ? shown.focus : null
+  const setView = v => setShown({ at, view: v, focus: null })
+
+  // An answer booklet whose every undecided paper is reviewed with its question paper in another
+  // job opens there instead.
   useEffect(() => {
-    let live = true
-    api.import.review(jobId)
-      .then(r => {
-        if (!live) return
-        // Shown in canonical order (questions by number, boxes in document order); saved so only
-        // with the first edit.
-        setReview({ ...r, proposal: { ...r.proposal, papers: r.proposal.papers.map(normalise) } })
-        setMatches(r.matches ?? {})
-        setProposals(r.proposals ?? {})
-        // Open on the first paper still undecided.
-        const first = r.proposal.papers.findIndex(p => !p.outcome)
-        if (first > 0) setPaperIdx(first)
-      })
-      .catch(e => { if (live) setError(e.message) })
-    return () => { live = false }
-  }, [jobId])
+    if (!review) return
+    const open = review.proposal.papers.filter(p => !p.outcome)
+    const elsewhere = open.map(p => matches[p.key]).filter(l => l && l.job_id !== jobId && l.job_status === 'review_ready')
+    if (open.length && elsewhere.length === open.length && open.every(isAnswerOnly)) {
+      navigate(reviewUrl(elsewhere[0].job_id, elsewhere[0].paper_key), { replace: true })
+    }
+  }, [review, matches, jobId, navigate])
 
-  latest.current = review
+  // "Next job": the oldest card of the queue other than this one (a pair counts as one).
+  const here = new Set([jobId, otherJob].filter(Boolean))
+  const nextGroup = groupJobs(reviewQueue?.jobs ?? []).find(g => !g.jobs.some(j => here.has(j.id))) ?? null
+  const nextUrl = nextGroup && (nextGroup.pair ? reviewUrl(nextGroup.pair.jobId, nextGroup.pair.key) : reviewUrl(nextGroup.jobs[0].id))
 
   // The sidebar's edits are mirrored to the server (debounced, one timer per paper) so the paper's
   // ingest_paper row stays current. Best effort: confirm sends the final metadata regardless.
@@ -366,26 +145,6 @@ export default function ReviewPage() {
   }
   useEffect(() => () => Object.values(metaTimers.current).forEach(clearTimeout), [])
 
-  const flush = useCallback(async () => {
-    clearTimeout(timer.current)
-    timer.current = null
-    setSaveState('saving')
-    try {
-      await api.import.saveProposal(jobId, toEditPayload(latest.current.proposal.papers))
-      // A newer edit may have been queued while this one was in flight; it keeps "saving".
-      if (!timer.current) setSaveState('saved')
-      setError(null)
-    } catch (e) {
-      setSaveState('error')
-      setError(e.message)
-    }
-  }, [jobId])
-
-  // Leaving the page with an edit still waiting for its debounce saves it now.
-  useEffect(() => () => { if (timer.current) flush() }, [flush])
-
-  const papers = review?.proposal.papers ?? []
-  const paper = papers[paperIdx]
   // Pre-filled from the paper's own cover; an old job has only the filename's guess for the booklet.
   const metadata = metadataEdits[paper?.key]
     ?? mergeSuggested(emptyMetadata, review?.paper_metadata?.[paper?.key] ?? review?.filename_metadata ?? {})
@@ -394,124 +153,35 @@ export default function ReviewPage() {
     setMetadataEdits(e => ({ ...e, [key]: m }))
     queueMetadataSave(key, m)
   }
-  const answerOnly = isAnswerOnly(paper)
   // Answers are all or none: a question paper that would be confirmed partly answered (its own
   // answer boxes plus a linked answer paper's, as the pair's mapping places them) is warned
-  // about, never blocked.
-  const unansweredText = paper && !answerOnly ? partlyAnsweredWarning(paper, matches[paper.key]?.answer_numbers ?? []) : null
-  // Every booklet page is listed; with none chosen the page shown is the first question's, else
-  // the paper's own first page.
-  const firstPage = paper && (firstPageOf(paper.questions[0] ?? {}) ?? paper.pages.find(p => !p.excluded_reason)?.page)
-  const page = paper
-    ? (paper.pages.find(p => p.page === (pageNo ?? firstPage)) ?? paper.pages[0])
-    : null
-  const selectedNumber = paper && sel && sel.list !== 'orphan' ? paper.questions[sel.q]?.number ?? null : null
+  // about, never blocked. A paired review counts the answer booklet's boxes as they stand.
+  const linkedNumbers = placed
+    ? paper.questions.filter(q => placed[String(q.number)].length).map(q => q.number)
+    : link?.answer_numbers ?? []
+  const unansweredText = paper && !answerOnly ? partlyAnsweredWarning(paper, linkedNumbers) : null
+
+  // Both booklets' waiting edits are saved before anything the server crops.
+  const saveAll = async () => {
+    await main.flushPending()
+    if (otherJob) await partner.flushPending()
+  }
 
   function choosePaper(i) {
-    setPaperIdx(i)
-    setPageNo(null)
-    setSel(null)
-    cancelDraw()
+    setChosen({ jobId, idx: i })
   }
-
-  function cancelDraw() {
-    setPrompt(null)
-    setDrawing(null)
-  }
-
-  // A drawing tool asks for its question number first: the selected question's, else for a
-  // question box the next free number (an answer box has no sensible guess, so none).
-  function openDraw(kind) {
-    const guess = selectedNumber ?? (kind === 'question' ? nextNumber(paper) : null)
-    setDrawing(null)
-    setPrompt({ kind, text: guess == null ? '' : String(guess), error: null })
-  }
-
-  function startDraw() {
-    const number = prompt.text === '' ? null : Number(prompt.text)
-    const err = drawError(paper, prompt.kind, number)
-    if (err) {
-      setPrompt({ ...prompt, error: err })
-      return
-    }
-    setPrompt(null)
-    setDrawing({ kind: prompt.kind, number })
-  }
-
-  function chooseQuestion(k) {
-    setSel({ list: isAnswerOnly(paper) ? 'answer' : 'question', q: k, i: 0 })
-    const p = firstPageOf(paper.questions[k])
-    if (p != null) setPageNo(p)
-  }
-
-  // Apply a pure edit to the current paper and queue a debounced save. `nextSel` is the
-  // selection afterwards, or a function of the edited paper giving it (default: cleared, since
-  // indexes may have shifted).
-  function edit(fn, nextSel = null) {
-    const next = fn(paper)
-    if (next === paper) return
-    if (typeof nextSel === 'function') nextSel = nextSel(next)
-    setReview(r => ({
-      ...r,
-      edited: true,
-      proposal: { ...r.proposal, papers: r.proposal.papers.map((p, i) => (i === paperIdx ? next : p)) },
-    }))
-    setSel(nextSel)
-    setSaveState('saving')
-    clearTimeout(timer.current)
-    timer.current = setTimeout(flush, SAVE_DELAY_MS)
-  }
-
-  const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s)
-  const onMove = (s, x0, y0) => edit(p => moveRect(p, s, x0, y0), s)
-  const onDragEnd = () => edit(normalise, next => followSelection(paper, next, sel))
-  // The selected box, wherever an edit's re-sort put it.
-  const followSel = next => followSelection(paper, next, sel)
-
-  // A drawn box goes to the question whose number was given before drawing; it is selected.
-  function onDraw(drawn) {
-    const { paper: next, sel: nextSel } = addRect(paper, drawing.kind, drawing.number, drawn)
-    setDrawing(null)
-    if (next !== paper) edit(() => next, nextSel)
-  }
-
-  function onAssign(toQ) {
-    const { paper: next, sel: nextSel } = assignAnswer(paper, sel, toQ)
-    if (next !== paper) edit(() => next, nextSel)
-  }
-
-  useEffect(() => {
-    function onKey(e) {
-      const t = e.target
-      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
-      if (e.key === 'Escape') {
-        if (prompt || drawing) cancelDraw()
-        else setSel(null)
-        return
-      }
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (!sel) return
-      e.preventDefault()
-      edit(p => deleteRect(p, sel))
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
 
   // Mark the current paper decided; carry on with the next undecided one, or leave when none is.
   function decided(outcome, jobStatus) {
-    setReview(r => ({
-      ...r,
-      proposal: { ...r.proposal, papers: r.proposal.papers.map((p, i) => (i === paperIdx ? { ...p, outcome } : p)) },
-    }))
+    main.markDecided(paper.key, outcome)
     setTopicStep(null)
     if (jobStatus === 'confirmed') {
       reviewQueue?.refresh()
-      navigate(nextJob ? `/admin/import/jobs/${nextJob.id}/review` : '/admin/import/review')
+      navigate(nextUrl ?? '/admin/import/review')
       return
     }
     const next = papers.findIndex((p, i) => i !== paperIdx && !p.outcome)
-    if (next >= 0) choosePaper(next)
+    choosePaper(next >= 0 ? next : paperIdx)
   }
 
   async function handleConfirmPaper() {
@@ -519,8 +189,8 @@ export default function ReviewPage() {
     setConfirming(true)
     setConfirmError(null)
     try {
-      // The server crops the saved proposal, so a pending edit goes first.
-      if (timer.current) await flush()
+      // The server crops the saved proposals, so pending edits go first.
+      await saveAll()
       const result = await api.import.confirmJobPaper(jobId, {
         paper_label: paper.key,
         subject_id: metadata.subject_id,
@@ -546,9 +216,9 @@ export default function ReviewPage() {
 
   // After a pair, Unmatch or "Not this one": what the paper has now. A pair that also updated the
   // paper's details (saved by the match route) shows them in the sidebar, without saving again.
-  function matched(key, { matches: link, proposal }, fields = null) {
-    setMatches(m => ({ ...m, [key]: link ?? null }))
-    setProposals(p => ({ ...p, [key]: proposal ?? null }))
+  function matched(key, { matches: newLink, proposal }, fields = null) {
+    main.setMatches(m => ({ ...m, [key]: newLink ?? null }))
+    main.setProposals(p => ({ ...p, [key]: proposal ?? null }))
     if (fields) {
       dropMetadataSave(key)
       setMetadataEdits(e => ({ ...e, [key]: { ...metadata, ...fields } }))
@@ -570,23 +240,42 @@ export default function ReviewPage() {
     }
   }
 
+  // "This is an answer booklet" / "This is a question booklet": the paper's boxes change sides and
+  // it is matched afresh, so the review is loaded again.
+  async function handleSwitchRole(role) {
+    const what = role === 'answer_only' ? 'an answer booklet: its boxes become answer boxes' : 'a question booklet: its answer boxes become question boxes'
+    if (!window.confirm(`Treat ${paperTitle(paper, paperIdx)} as ${what}, and match it again?`)) return
+    setConfirming(true)
+    setConfirmError(null)
+    try {
+      await saveAll()
+      await api.import.switchPaperRole(jobId, paper.key, role)
+      reviewQueue?.refresh()
+      main.reload()
+    } catch (e) {
+      setConfirmError(e.message)
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   async function handleManually(item) {
     setHandoff(item.label)
-    setError(null)
+    main.setError(null)
     try {
       const result = await api.import.manualPages(jobId, item.first_page, item.last_page)
       startManualImport(result)
       navigate('/admin/import/manual')
     } catch (e) {
-      setError(e.message)
+      main.setError(e.message)
       setHandoff(null)
     }
   }
 
-  if (error && !review) {
+  if (main.error && !review) {
     return (
       <div className="max-w-5xl mx-auto px-4 py-6">
-        <ErrorBanner message={error} />
+        <ErrorBanner message={main.error} />
         <Link to="/admin/import/review" className="text-blue-600 hover:underline text-sm">Back to review queue</Link>
       </div>
     )
@@ -625,27 +314,103 @@ export default function ReviewPage() {
   }
 
   const unrouted = review.proposal.unrouted ?? []
-  const flaggedPage = p => p.needs_review
-  const excludedPage = p => Boolean(p.excluded_reason)
+  const saveState = worstSave(main.saveState, otherJob ? partner.saveState : 'idle')
+  const showingAnswers = view === 'answers' && answersPaper
+  const linkedElsewhere = answerOnly && link && link.job_id !== jobId && !paper.outcome
+
+  const openAnswer = (k, pageNo) => {
+    setShown({ at, view: 'answers', focus: { page: pageNo, sel: { list: 'answer', q: k, i: 0 }, token: Date.now() } })
+  }
+
+  const sidebar = paper && (paper.outcome ? (
+    <p role="status" className="w-52 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
+  ) : (
+    <div className="shrink-0">
+      {answerOnly && (
+        <p className="w-52 mb-2 text-xs text-gray-600">
+          These are answers only, with no question paper in this booklet. Pair them with the paper they belong to.
+        </p>
+      )}
+      {paper.questions.length === 0 && (
+        <p className="w-52 mb-2 text-xs text-amber-800">
+          A paper without questions cannot be imported; skip it.
+        </p>
+      )}
+      {(needsPartner(paper) || pairingState({ link, proposal: proposals[paper.key] }) !== 'none') && (
+        <PairingBlock
+          key={paper.key}
+          jobId={jobId}
+          paper={paper}
+          link={link}
+          proposal={proposals[paper.key] ?? null}
+          metadata={metadata}
+          extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
+          refs={refs}
+          busy={confirming}
+          beforeSave={saveAll}  // the server crops the saved proposals
+          onMatched={(state, fields) => matched(paper.key, state, fields)}
+          onAttached={jobStatus => decided('attached', jobStatus)}
+        />
+      )}
+      {!link && (answerOnly || needsPartner(paper)) && (
+        <button
+          type="button" disabled={confirming} onClick={() => handleSwitchRole(answerOnly ? 'question' : 'answer_only')}
+          className="w-52 mb-3 text-xs text-gray-600 hover:text-gray-800 hover:underline text-left disabled:opacity-50"
+        >
+          {answerOnly ? 'This is a question booklet' : 'This is an answer booklet'}
+        </button>
+      )}
+      {answerOnly ? (
+        <div className="w-52 flex flex-col gap-2">
+          {confirmError && <ErrorBanner message={confirmError} />}
+          <button type="button" onClick={handleSkipPaper} disabled={confirming}
+            className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50">
+            Skip this paper
+          </button>
+        </div>
+      ) : (
+        <MetadataSidebar
+          metadata={metadata}
+          onChange={setMetadata}
+          refs={refs}
+          questionCount={paper.questions.length}
+          answerCount={placed ? linkedNumbers.length : paper.questions.filter(q => q.answer_rects.length > 0).length}
+          onNext={handleConfirmPaper}
+          onCancel={handleSkipPaper}
+          loading={confirming}
+          error={confirmError}
+          confirmLabel={paired ? 'Confirm paper and answers →' : 'Confirm paper →'}
+          cancelLabel="Skip this paper"
+          canConfirm={paper.questions.length > 0}
+          schoolCombobox
+          extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
+          warning={unansweredText && `${unansweredText}. Add them with the answer-box editor, or confirm anyway.`}
+        />
+      )}
+    </div>
+  ))
 
   return (
     <div className="px-4 py-4">
       <div className="flex items-center gap-4 mb-3">
         <Link to="/admin/import/review" className="text-sm text-blue-600 hover:underline">← Review queue</Link>
-        <h1 className="text-lg font-semibold text-gray-800 break-all">{review.filename}</h1>
-        {review.edited && <span className="text-xs text-gray-500">edited</span>}
+        <h1 className="text-lg font-semibold text-gray-800 break-all">
+          {review.filename}
+          {otherJob && partner.review && <span className="font-normal text-gray-500"> + {partner.review.filename}</span>}
+        </h1>
+        {(review.edited || partner.review?.edited) && <span className="text-xs text-gray-500">edited</span>}
         {saveState !== 'idle' && (
           <span role="status" data-state={saveState} className={`text-xs ${saveState === 'error' ? 'text-red-600' : 'text-gray-500'}`}>
             {SAVE_LABEL[saveState]}
           </span>
         )}
-        {nextJob && (
-          <Link to={`/admin/import/jobs/${nextJob.id}/review`} className="ml-auto text-sm text-blue-600 hover:underline">
-            Next job: <span className="break-all">{nextJob.filename}</span> →
+        {nextGroup && (
+          <Link to={nextUrl} className="ml-auto text-sm text-blue-600 hover:underline">
+            Next job: <span className="break-all">{nextGroup.jobs[0].filename}</span> →
           </Link>
         )}
       </div>
-      <ErrorBanner message={error} />
+      <ErrorBanner message={main.error || (otherJob ? partner.error : null)} />
 
       {unrouted.length > 0 && (
         <ul aria-label="Unrouted sections" className="mb-3 space-y-2">
@@ -687,218 +452,48 @@ export default function ReviewPage() {
         </div>
       )}
 
+      {linkedElsewhere && (
+        <p role="note" className="mb-3 text-sm bg-green-50 border border-green-200 rounded px-3 py-2">
+          Reviewed together with {link.filename} ({link.paper_key}).{' '}
+          <Link to={reviewUrl(link.job_id, link.paper_key)} className="text-blue-700 hover:underline">Open pair</Link>
+        </p>
+      )}
+
+      {paired && (
+        <div role="group" aria-label="Booklet" className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          {[['questions', 'Questions', review.filename], ['answers', 'Answers', fileName(paired, jobId)]].map(([v, label, file]) => (
+            <button
+              key={v} type="button" aria-pressed={view === v} disabled={v === 'answers' && !answersPaper}
+              onClick={() => setView(v)}
+              className={`rounded border px-3 py-1 ${view === v ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'} disabled:opacity-50`}
+            >
+              {label} · <span className="break-all">{file}</span>
+            </button>
+          ))}
+          {!answersPaper && <span className="text-xs text-gray-500">Loading the answer booklet…</span>}
+        </div>
+      )}
+
       {!paper ? (
         <p className="text-sm text-gray-500">No paper was proposed for this job.</p>
+      ) : showingAnswers ? (
+        <PaperEditor
+          key={`answers:${paired.job_id}:${paired.paper_key}:${focus?.token ?? ''}`}
+          paper={answersPaper}
+          onChange={next => partnerJob.setPaper(answersIdx, next)}
+          focus={focus}
+          aside={sidebar}
+        />
       ) : (
-        <div className="flex gap-4 items-start">
-          <nav aria-label="Pages" className="w-24 shrink-0 space-y-2 max-h-[80vh] overflow-y-auto">
-            {paper.pages.map(p => (
-              <button
-                key={p.page}
-                type="button"
-                data-flagged={flaggedPage(p) || undefined}
-                data-excluded={excludedPage(p) || undefined}
-                aria-current={page && p.page === page.page ? 'page' : undefined}
-                title={p.excluded_reason || p.review_reason || undefined}
-                onClick={() => setPageNo(p.page)}
-                className={`block w-full border-2 rounded text-xs ${
-                  page && p.page === page.page ? 'border-blue-600' : flaggedPage(p) ? 'border-amber-400' : 'border-gray-200'
-                } ${excludedPage(p) ? 'bg-gray-100 text-gray-400' : ''}`}
-              >
-                {p.url && <img src={p.url} alt={`Page ${p.page} thumbnail`} className={`w-full ${excludedPage(p) ? 'opacity-40' : ''}`} />}
-                <span className="block py-0.5">p{p.page}{flaggedPage(p) ? ' !' : ''}</span>
-                {excludedPage(p) && <span className="block pb-0.5 leading-tight">{p.excluded_reason}</span>}
-              </button>
-            ))}
-          </nav>
-
-          <div className="flex-1 min-w-0">
-            {page ? (
-              <>
-                {!paper.outcome && (
-                  <DrawToolbar
-                    answerOnly={answerOnly}
-                    prompt={prompt}
-                    drawing={drawing}
-                    onOpen={openDraw}
-                    onText={text => setPrompt(p => ({ ...p, text, error: null }))}
-                    onStart={startDraw}
-                    onCancel={cancelDraw}
-                  />
-                )}
-                {!paper.outcome && sel && !prompt && !drawing && (
-                  <SelectionPanel paper={paper} sel={sel} onDelete={() => edit(p => deleteRect(p, sel))} onAssign={onAssign} />
-                )}
-                {excludedPage(page) && (
-                  <p className="mb-2 text-sm text-gray-700 bg-gray-100 border border-gray-300 rounded px-3 py-1">
-                    Not used by the pipeline: {page.excluded_reason}. Draw boxes here if it holds questions.
-                  </p>
-                )}
-                {flaggedPage(page) && (
-                  <p className="mb-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-1">
-                    Page {page.page} needs review{page.review_reason ? `: ${page.review_reason}` : ''}
-                  </p>
-                )}
-                <div
-                  className="relative mx-auto max-w-3xl border border-gray-300"
-                  style={{ aspectRatio: `${page.width_px} / ${page.height_px}` }}
-                >
-                  {page.url ? (
-                    <img src={page.url} alt={`Page ${page.page}`} className="absolute inset-0 w-full h-full" />
-                  ) : (
-                    <p className="p-4 text-sm text-gray-500">The image for this page is missing.</p>
-                  )}
-                  <Overlay
-                    page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} onMove={onMove}
-                    onDragEnd={onDragEnd} drawKind={paper.outcome ? null : drawing?.kind} onDraw={onDraw}
-                  />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-gray-500">This paper has no pages.</p>
-            )}
-          </div>
-
-          <aside aria-label="Questions" className="w-64 shrink-0 max-h-[80vh] overflow-y-auto">
-            {paper.warnings?.map((w, i) => (
-              <p key={i} className="mb-2 text-xs text-amber-800">{w}</p>
-            ))}
-            {paper.questions.length === 0 ? (
-              <p className="text-sm text-gray-500">No questions were found for this paper.</p>
-            ) : (
-              <ul className="space-y-1">
-                {paper.questions.map((q, k) => {
-                  const active = sel != null && sel.list !== 'orphan' && sel.q === k
-                  const onQuestionRect = active && sel.list === 'question'
-                  const rect = onQuestionRect ? getRect(paper, sel) : null
-                  return (
-                    <li key={q.number} className={`rounded border px-2 py-1 ${
-                      active ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          data-flagged={q.flags.length > 0 || undefined}
-                          aria-pressed={active}
-                          onClick={() => chooseQuestion(k)}
-                          className="flex-1 text-left text-sm"
-                        >
-                          <span className="font-medium">{answerOnly ? 'Answer' : 'Question'} {q.number}</span>
-                          {!answerOnly && q.answer_rects.length > 0 && (
-                            <span
-                              role="img" aria-label="has an answer" title="Has an answer"
-                              className="ml-1.5 inline-block h-2 w-2 rounded-full bg-green-600 align-middle"
-                            />
-                          )}
-                          {answerOnly && (
-                            <span className="text-xs text-gray-500">
-                              {' '}({q.answer_rects.length} rectangle{q.answer_rects.length === 1 ? '' : 's'})
-                            </span>
-                          )}
-                          {!answerOnly && q.answer_rects.length === 0 && (
-                            <span className="block text-xs text-amber-800">No answer</span>
-                          )}
-                          {q.flags.map(f => (
-                            <span key={f} className="block text-xs text-amber-800">{f}</span>
-                          ))}
-                        </button>
-                        <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), followSel)} />
-                      </div>
-                      {active && (
-                        <div className="mt-1 flex flex-wrap gap-1 text-xs">
-                          {k > 0 && (
-                            <button type="button" className="text-blue-700 hover:underline"
-                              onClick={() => edit(p => mergeWithPrevious(p, k))}>
-                              Merge with previous
-                            </button>
-                          )}
-                          {rect && sel.i > 0 && (
-                            <button type="button" className="text-blue-700 hover:underline"
-                              onClick={() => edit(p => splitBetween(p, k, sel.i))}>
-                              Split before selected rectangle
-                            </button>
-                          )}
-                          {rect && (
-                            <button type="button" className="text-blue-700 hover:underline"
-                              onClick={() => edit(p => splitThrough(p, k, sel.i, (rect.y0 + rect.y1) / 2))}>
-                              Split selected rectangle in half
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-            {paper.orphan_answers.length > 0 && (
-              <p className="mt-2 text-xs text-gray-600">
-                {paper.orphan_answers.length} answer rectangle{paper.orphan_answers.length === 1 ? '' : 's'} not matched to a question (grey, dashed).
-                They are not imported.
-              </p>
-            )}
-          </aside>
-
-          {paper.outcome ? (
-            <p role="status" className="w-52 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
-          ) : (
-            <div className="shrink-0">
-              {answerOnly && (
-                <p className="w-52 mb-2 text-xs text-gray-600">
-                  These are answers only, with no question paper in this booklet. Pair them with the paper they belong to.
-                </p>
-              )}
-              {paper.questions.length === 0 && (
-                <p className="w-52 mb-2 text-xs text-amber-800">
-                  A paper without questions cannot be imported; skip it.
-                </p>
-              )}
-              {(needsPartner(paper) || pairingState({ link: matches[paper.key], proposal: proposals[paper.key] }) !== 'none') && (
-                <PairingBlock
-                  key={paper.key}
-                  jobId={jobId}
-                  paper={paper}
-                  link={matches[paper.key] ?? null}
-                  proposal={proposals[paper.key] ?? null}
-                  metadata={metadata}
-                  extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
-                  refs={refs}
-                  busy={confirming}
-                  beforeSave={async () => { if (timer.current) await flush() }}  // the server crops the saved proposal
-                  onMatched={(state, fields) => matched(paper.key, state, fields)}
-                  onAttached={jobStatus => decided('attached', jobStatus)}
-                />
-              )}
-              {answerOnly ? (
-                <div className="w-52 flex flex-col gap-2">
-                  {confirmError && <ErrorBanner message={confirmError} />}
-                  <button type="button" onClick={handleSkipPaper} disabled={confirming}
-                    className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50">
-                    Skip this paper
-                  </button>
-                </div>
-              ) : (
-                <MetadataSidebar
-                  metadata={metadata}
-                  onChange={setMetadata}
-                  refs={refs}
-                  questionCount={paper.questions.length}
-                  answerCount={paper.questions.filter(q => q.answer_rects.length > 0).length}
-                  onNext={handleConfirmPaper}
-                  onCancel={handleSkipPaper}
-                  loading={confirming}
-                  error={confirmError}
-                  confirmLabel="Confirm paper →"
-                  cancelLabel="Skip this paper"
-                  canConfirm={paper.questions.length > 0}
-                  schoolCombobox
-                  extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
-                  warning={unansweredText && `${unansweredText}. Add them with the answer-box editor, or confirm anyway.`}
-                />
-              )}
-            </div>
-          )}
-        </div>
+        <PaperEditor
+          key={`${jobId}:${paper.key}`}
+          paper={paper}
+          onChange={next => main.setPaper(paperIdx, next)}
+          renderAnswers={placed ? q => (
+            <LinkedAnswers placed={placed[String(q.number)]} answersPaper={answersPaper} onOpen={openAnswer} />
+          ) : null}
+          aside={sidebar}
+        />
       )}
     </div>
   )

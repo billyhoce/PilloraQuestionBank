@@ -22,7 +22,7 @@ from app.pdf.image_processing import downscale_for_ai
 from app.routes.auth import require_admin
 from app.services.ingest import confirm_import, delete_paper, upload_pages
 from app.services.answer_coverage import job_coverage
-from app.services.ingest_matching import match_info, match_row
+from app.services.ingest_matching import match_info, match_row, reject_suggestion
 from app.services.ingest_papers import (
     MatchError,
     get_row as get_paper_row,
@@ -31,6 +31,7 @@ from app.services.ingest_papers import (
     reject_proposed_paper,
     set_answer_map,
     set_metadata as set_paper_metadata,
+    switch_role,
     sync_job_papers,
     unlink_paper,
 )
@@ -388,13 +389,20 @@ def _job_out(job: IngestJob) -> dict:
     }
 
 
-def _paper_summary(row: IngestPaper, coverage: dict | None = None, extracted_school: str | None = None) -> dict:
+def _paper_summary(
+    row: IngestPaper, coverage: dict | None = None, extracted_school: str | None = None,
+    partner: dict | None = None, suggestion: dict | None = None,
+) -> dict:
     """One proposed paper as the job list shows it: enough for an at-a-glance review queue card.
     ``answer_coverage`` (``none``/``partial``/``all``, of its own answer boxes) and ``unanswered``
     (its question numbers without one) come from the job's current proposal; ``extracted_school``
-    is the school name read from its cover (pre-fills the queue's "Match this paper" popup, #93)."""
+    is the school name read from its cover (pre-fills the queue's "Match this paper" popup, #93).
+    ``partner`` is the paper it is linked to and ``suggestion`` (answer-only) the question paper
+    suggested for it, each ``{ingest_paper_id, job_id, filename, paper_key}``: the queue groups a
+    linked pair into one card and offers suggestions as "Looks like a pair"."""
     coverage = coverage or {"answer_coverage": "none", "unanswered": []}
     return {
+        "id": row.id,
         "key": row.paper_key,
         "role": row.role,
         "status": row.status,
@@ -408,7 +416,10 @@ def _paper_summary(row: IngestPaper, coverage: dict | None = None, extracted_sch
         "paper_number": row.paper_number,
         "linked": row.matched_ingest_paper_id is not None,
         "match_status": row.match_status,
+        "match_note": row.match_note,
         "extracted_school": extracted_school,
+        "partner": partner,
+        "suggestion": suggestion,
         **coverage,
     }
 
@@ -426,10 +437,38 @@ def _papers_by_job(db: Session, jobs: list[IngestJob]) -> dict:
     )
     coverage = {j.id: job_coverage(j) for j in jobs}
     meta = {j.id: (j.report or {}).get("paper_metadata") or {} for j in jobs}
+    others = _partner_rows(db, rows)
     for r in rows:
         extracted = (meta[r.job_id].get(r.paper_key) or {}).get("extracted") or {}
-        by_job[r.job_id].append(_paper_summary(r, coverage[r.job_id].get(r.paper_key), extracted.get("school")))
+        partner = others.get(r.matched_ingest_paper_id)
+        suggested = others.get(r.suggested_ingest_paper_id) if r.match_status == "suggested" else None
+        if suggested is not None and (
+            r.matched_ingest_paper_id is not None or suggested[0].status != "pending"
+            or suggested[0].matched_ingest_paper_id is not None
+            or (suggested[1].id != r.job_id and suggested[1].status != "review_ready")
+        ):
+            suggested = None  # no longer holds (see ingest_matching.suggestion)
+        by_job[r.job_id].append(_paper_summary(
+            r, coverage[r.job_id].get(r.paper_key), extracted.get("school"),
+            _partner_out(partner), _partner_out(suggested),
+        ))
     return by_job
+
+
+def _partner_rows(db: Session, rows: list[IngestPaper]) -> dict:
+    """The papers ``rows`` are linked to or suggested with, with their jobs, by id (one query)."""
+    ids = {i for r in rows for i in (r.matched_ingest_paper_id, r.suggested_ingest_paper_id) if i is not None}
+    if not ids:
+        return {}
+    pairs = db.query(IngestPaper, IngestJob).join(IngestJob, IngestJob.id == IngestPaper.job_id).filter(IngestPaper.id.in_(ids))
+    return {p.id: (p, j) for p, j in pairs}
+
+
+def _partner_out(pair) -> dict | None:
+    if pair is None:
+        return None
+    paper, job = pair
+    return {"ingest_paper_id": paper.id, "job_id": str(job.id), "filename": job.filename, "paper_key": paper.paper_key}
 
 
 def _get_own_job(db: Session, job_id: uuid.UUID, user) -> IngestJob:
@@ -861,6 +900,56 @@ def reject_job_paper_proposal(
     return _match_state(db, job, paper_key)
 
 
+@router.delete("/jobs/{job_id}/papers/{paper_key}/suggestion")
+def reject_job_paper_suggestion(
+    job_id: uuid.UUID,
+    paper_key: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"Not a pair": reject the pending question paper suggested for an answer-only paper and re-run
+    matching for both. The response is what this paper has now."""
+    job = _get_own_job(db, job_id, current_user)
+    if job.status != "review_ready":
+        raise HTTPException(status_code=409, detail=f"A {job.status} job's papers cannot be matched")
+    db.refresh(job, with_for_update=True)
+    row = get_paper_row(db, job, paper_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"This job has no paper {paper_key!r}")
+    if reject_suggestion(db, row) is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Paper {paper_key!r} has no suggested partner")
+    db.commit()
+    return _match_state(db, job, paper_key)
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+@router.post("/jobs/{job_id}/papers/{paper_key}/role")
+def switch_job_paper_role(
+    job_id: uuid.UUID,
+    paper_key: str,
+    payload: RoleIn,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """"This is an answer booklet" / "This is a question booklet": make a pending paper answers
+    only (its boxes become answer boxes) or a question paper, release its link, and re-match it.
+    The response is what this paper has now, plus its ``role``."""
+    job = _get_own_job(db, job_id, current_user)
+    db.refresh(job, with_for_update=True)
+    try:
+        row = switch_role(db, job, paper_key, payload.role)
+    except MatchError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status, detail=e.message)
+    db.commit()
+    log_job_event(job.id, f"paper {paper_key} is now {'answers only' if row.role == 'answer_only' else 'a question paper'}")
+    return {"role": row.role, **_match_state(db, job, paper_key)}
+
+
 class JobSkipIn(BaseModel):
     paper_label: str
 
@@ -892,6 +981,7 @@ def confirm_job(
     return {
         **_confirm_response(db, paper.id), "job_status": "confirmed" if settled else "review_ready",
         "answers_from": answers.get("answers_from"), "unmatched": answers.get("unmatched", []),
+        "answers_job_settled": answers.get("answers_job_settled", False),
     }
 
 

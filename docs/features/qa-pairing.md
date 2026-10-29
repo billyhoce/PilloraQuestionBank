@@ -5,14 +5,16 @@ uploaded on its own, or answers for a paper already in the bank. Admin only; any
 job. The job lifecycle around it (upload, worker, review queue, review page, confirm/skip) is in
 [auto-import.md](./auto-import.md); the rationale is in [ADR 0002](../adr/0002-qa-booklet-pairing.md).
 
-**Code:** `app/services/ingest_matching.py`, `app/services/match_candidates.py`,
-`app/services/answer_mapping.py`, `app/services/answer_coverage.py`, `app/services/ingest_papers.py`,
+**Code:** `app/services/ingest_matching.py`, `app/services/match_evidence.py`,
+`app/services/match_candidates.py`, `app/services/answer_mapping.py`, `app/services/answer_coverage.py`, `app/services/ingest_papers.py`,
 `app/services/ingest_confirm.py`, `app/routes/ingest.py`, `frontend/src/features/import/`
 (`PairingBlock.jsx`, `MatchDialog.jsx`, `AnswerMappingTable.jsx`, `pairing.js`, `answerMapping.js`,
-`answerCoverage.js`, `ReviewQueuePage.jsx`, `reviewQueueText.js`, `SchoolCombobox.jsx`)
+`answerCoverage.js`, `ReviewQueuePage.jsx`, `reviewQueueText.js`, `queueGroups.js`, `ReviewPage.jsx`,
+`SchoolCombobox.jsx`)
 **Related:** [auto-import.md](./auto-import.md), [ingestion-pipeline.md](./ingestion-pipeline.md),
 [ai-labelling.md](./ai-labelling.md), [manage-papers.md](./manage-papers.md),
-[DATA_MODEL.md](../DATA_MODEL.md)
+[DATA_MODEL.md](../DATA_MODEL.md), [ADR 0004](../adr/0004-scored-pending-matching.md) (scored
+pending matching, paired review)
 
 ## Terms
 
@@ -23,7 +25,11 @@ job. The job lifecycle around it (upload, worker, review queue, review page, con
 - **Pending paper:** a proposed paper of a job under review that is not yet decided. Decisions:
   question paper → `confirmed` or `skipped`; answer-only paper → `attached` or `skipped`.
 - **Link:** two pending papers (one of each role) paired so that confirming the question paper brings
-  the answers in. **Proposal:** a bank paper suggested for an answer-only paper.
+  the answers in. **Proposal:** a bank paper suggested for an answer-only paper. **Suggestion:** a
+  pending question paper that looks like an answer-only paper's partner, on weaker evidence; the
+  admin pairs it or turns it down.
+- **Pair (review):** a question paper and its linked answer-only paper in another booklet, reviewed
+  as one queue card and one page ([Reviewing a pair](#reviewing-a-pair)).
 
 ## Answer-only papers
 
@@ -50,9 +56,15 @@ job. The job lifecycle around it (upload, worker, review queue, review page, con
 - Details are read per paper from its own cover ([ai-labelling.md](./ai-labelling.md)). A re-run
   refreshes them only while the paper is pending and the admin has not edited them.
 - **Seven-field key:** school, year, level, subject, exam type, stream, paper number.
-- **Paper number** is compared trimmed and case-folded only: `"2A"` = `" 2a "`, but ≠ `"02A"`.
+- **Paper number** is compared normalised: `P1` = `Paper 1` = `1` = `I` = `01`; a letter is kept
+  (`"2A"` = `" p02a "`, but ≠ `"2"`).
 - A school read from the cover that matches no school is kept and shown (in amber, "not in the
-  list") but counts as blank until the admin picks a school or types a new one.
+  list") but counts as blank until the admin picks a school or types a new one. Matching still
+  compares it between pending papers (two covers both printing "BPGHS").
+- **School aliases:** confirming a paper whose cover school matched nothing, with a school picked,
+  remembers the printed name as that school's alias. Later covers printing it resolve to the school
+  ([ai-labelling.md](./ai-labelling.md)), and the other pending papers whose cover printed it get the
+  school at once and are matched again.
 - Editing a pending paper's details (review sidebar, or the popup's tick box) re-runs
   [automatic matching](#automatic-matching) for it. Only while the job is `review_ready`.
 
@@ -101,11 +113,12 @@ about, never blocked, except where noted.
 
 ## Automatic matching
 
-**Code:** `app/services/ingest_matching.py`
+**Code:** `app/services/ingest_matching.py`, `app/services/match_evidence.py`
 
 Matching runs for every pending answer-only paper, and from the question side for every pending
 question paper. The outcome is one of: a **proposal** (one bank paper), an **auto link** (one pending
-question paper), **manual** (ambiguous or partial, with a note), or nothing.
+question paper), a **suggestion** (one pending question paper, on weaker evidence), **manual**
+(ambiguous or partial, with a note), or nothing.
 
 ```mermaid
 flowchart TD
@@ -115,45 +128,89 @@ flowchart TD
   F -- yes --> B{Bank papers with the key<br/>not fully answered, not rejected}
   B -- one --> P[Propose it: Attach / Not this one]
   B -- several --> M1["manual: N papers have this key"]
-  B -- none --> Q{Pending question papers with the key<br/>unlinked, no answers of their own, not rejected}
-  Q -- one --> AL[Auto-link both papers]
-  Q -- several --> M2["manual: N pending question papers have this key"]
-  Q -- none --> PA
-  F -- no --> PA{Bank papers sharing school,<br/>year and subject?}
+  B -- none --> S
+  F -- no --> S{Score pending question papers<br/>unlinked, no answers of their own, not rejected}
+  S -- "clear winner, strong" --> AL[Auto-link both papers]
+  S -- "clear winner, weaker" --> SG[Suggest it: Pair / Not a pair]
+  S -- "close race" --> M2["manual: N pending question papers could be its partner"]
+  S -- "nothing scores" --> PA{Bank papers sharing school,<br/>year and subject?}
   PA -- yes --> M3["manual: partial: … differ / unknown …"]
   PA -- no --> N[Nothing]
 ```
 
+**Scoring a pending pair** (bank papers keep the exact seven-field key: attaching writes to the bank):
+
+- **Ruled out** when a field known on both sides differs (school, year, level, subject, exam type,
+  stream, paper number), when the filenames name different papers ("P1" / "P2"), or when no answer
+  number is one of the question numbers. A blank field never rules a pair out.
+  - The school is *known* when picked or typed as new; two different new names differ. A cover's
+    unresolved school is only a hint: the same text counts as the same school, other text says
+    nothing.
+- **Evidence**, one point each unless noted:
+  - every field that agrees, and the same unresolved cover school
+  - the same filename once role words are dropped (Qns, Questions, Soln, Solutions, Ans, Answers,
+    Marking scheme, Paper, …): **3**; similar filenames (most words shared): **2**
+  - the answer numbers fit the question numbers (at least 80 % of them)
+  - uploaded by the same admin within an hour
+- **Deciding** (thresholds in `MatchConfig`, with their reasons): the best partner must lead the
+  next by 2 points. Then 6 or more links them (a full seven-field key alone scores 7), 4–5 suggests
+  it. A closer race at 4 or more is `manual`; below 4, nothing.
+- The suggestion's note names its evidence ("same year, exam type; same filename apart from words
+  like Qns / Soln; uploaded together").
+
+**Other rules:**
+
 - **Eligible pending partners:** in another `review_ready` job, or in the paper's **own** job (a
   booklet whose papers the pipeline did not pair), whatever that job's status.
-- **Question side:** a pending, unlinked question paper with all seven fields known and **no answers
-  of its own** looks for pending answer-only papers with its key. One → that answer paper is matched
-  from its side (a single bank match still wins over the link). Several → the question paper and all
-  of them become `manual` ("N pending answer papers have this key"). A question paper never matches a
-  bank paper (that would be a duplicate).
+- **Question side:** a pending, unlinked question paper with **no answers of its own** scores the
+  pending answer-only papers the same way. A clear winner is then matched from its own side (which
+  decides, and a single bank match still wins over the link). A close race makes the question paper
+  and the close ones `manual` ("N pending answer papers could be its answers"). A question paper
+  never matches a bank paper (that would be a duplicate).
+- A suggestion holds only while both papers are pending and unlinked and the partner's job is under
+  review; the queue and the review page drop one that no longer holds.
 - **Partial hints** never apply to a new school (no bank paper has it).
 - **Admin links** are never touched. **Auto links** are recomputed from scratch each time, so a detail
-  edit that breaks the key drops them; a freed partner is re-matched at once.
+  edit that breaks them drops them; a freed partner is re-matched at once.
 - **Rejected pairs** are skipped by every rule ([Rejecting a match](#rejecting-a-match)).
-- **Settling** a paper (confirm, attach, skip) clears its proposal.
+- **Settling** a paper (confirm, attach, skip) clears its proposal and suggestion.
 - `manual` leaves the paper unpaired; the Pairing block offers **Match this paper…**.
 
 **When it runs:**
 
 - At the end of the worker's `report` stage, in the same transaction as the proposal: every paper of
   the job, which also links the job's question papers to older jobs' (or its own) answer papers.
-- When a pending paper's details are edited.
-- After **Unmatch** (both papers), **Not this one**, and skipping or attaching a linked paper (its partner).
+- When a pending paper's details are edited, or its role is switched.
+- After **Unmatch** (both papers), **Not this one**, **Not a pair** (both papers), and skipping or
+  attaching a linked paper (its partner).
 - On every new bank paper (auto-import confirm or manual import): pending answer-only papers in
   `review_ready` jobs sharing its school, year and subject are re-matched, so the new paper becomes a
   ready-to-attach proposal. This never fails the confirm.
+- When a confirm teaches a school alias: the pending papers given that school.
+
+## Switching a paper's role
+
+**Code:** `app/services/ingest_papers.py` (`switch_role`), `ReviewPage.jsx`, `ReviewQueuePage.jsx`
+
+A solutions booklet is often the question paper reprinted with worked answers, and the pipeline may
+read it as a question paper, which can never pair with the real question paper.
+
+- **This is an answer booklet** (a pending question paper with no answers and no link: below the
+  Pairing block on the review page, or on its queue line) makes it answer-only: every box of each
+  question becomes one of its answer boxes, in document order. **This is a question booklet** (an
+  answer-only paper with no link) does the reverse; an entry with no box is dropped.
+- Asks first. Rewrites the paper in the proposal and in the admin's edit; its key stays.
+- Releases any link or proposal **without** rejecting it, then matches the paper again, so a switched
+  solutions booklet usually links to its question paper at once.
+- Refused unless the job is `review_ready` and the paper pending. A Retry that regenerates the
+  proposal brings back the pipeline's role.
 
 ## Rejecting a match
 
 **Code:** `app/services/ingest_matching.py`, `app/services/ingest_papers.py`
 
-Turning down one wrong pair rejects only that pair. Automatic matching never proposes or links it
-again; both papers stay free to match anything else. Nothing lifts a rejection, not even a detail
+Turning down one wrong pair rejects only that pair. Automatic matching never proposes, suggests or
+links it again; both papers stay free to match anything else. Nothing lifts a rejection, not even a detail
 edit; the admin can still pair it by hand (rejected pairs are listed in the popup).
 
 - **Unmatch** (either side of a link, automatic or by hand): breaks the link on both papers, rejects
@@ -161,6 +218,8 @@ edit; the admin can still pair it by hand (rejected pairs are listed in the popu
 - **Not this one** (an answer-only paper with a proposed bank paper): rejects that bank paper and
   re-matches the paper, which may propose another, auto-link a pending question paper, or find
   nothing.
+- **Not a pair** (a suggestion, on the queue or the Pairing block): rejects that pending pair and
+  re-matches both papers.
 - **Pairing by hand** with a paper that is already paired elsewhere releases the old link **without**
   rejecting it, so automatic matching may propose that pair again later.
 - The review page shows the paper's new state in place of the old link or proposal.
@@ -180,7 +239,7 @@ answer-only paper, on every paper that needs a partner or has a link or proposal
 
 | State | Shown | Actions |
 |---|---|---|
-| No partner | "No match found" / "N possible matches" (exact candidates for the paper's current details) | **Match this paper…** |
+| No partner | "No match found" / "N possible matches" (exact candidates for the paper's current details); with a suggestion, "Looks like the answers to <file> (<key>): <evidence>" | **Match this paper…**; **Pair** / **Not a pair** for a suggestion |
 | Linked to a pending paper | "Paired with <file> (<key>)" ("this file" for the same booklet), the partner's details, "matched automatically" or "matched by an admin" | **Check answers…**, **Change match…**, **Unmatch** |
 | Answer-only paper with a proposed bank paper | "Answers match <paper>" | **Attach…**, **Change match…**, **Not this one** |
 
@@ -200,7 +259,7 @@ Opened by **Match this paper…**, **Change match…**, or a queue card's **Matc
   paper. Pickers are type-to-search over existing entries; school is the
   [new-school combobox](#new-schools). Clearing a field means "any".
 - **Search** re-runs as the fields change:
-  - only filled fields are compared, each **exactly** (paper number trimmed and case-folded; no fuzzy
+  - only filled fields are compared, each **exactly** (paper number normalised as above; no fuzzy
     matching);
   - **Exact matches** (every filled field agrees, up to 50) are listed; when there are none, **Best
     matches**: the top 10 by number of agreeing fields, each differing field highlighted ("paper no.
@@ -235,21 +294,50 @@ Opened by **Match this paper…**, **Change match…**, or a queue card's **Matc
 
 ### From the review queue
 
-**Code:** `frontend/src/features/import/ReviewQueuePage.jsx`, `reviewQueueText.js`
+**Code:** `frontend/src/features/import/ReviewQueuePage.jsx`, `reviewQueueText.js`, `queueGroups.js`
 
-- Each paper line on a [Review queue](./auto-import.md) card that needs a partner and is **not
-  linked** has a **Match** button opening the same popup without opening the job. A linked paper's
-  match is changed or undone on the review page.
+- **One card per pair:** jobs linked to each other (a paper of one linked to a paper of the other,
+  both waiting for review) share one card, "Questions and answers, reviewed together", with a row
+  per file ("Questions · P1 Qns.pdf", "Answers · P1 Soln.pdf"). Its **Review** opens the question
+  paper's [paired review](#reviewing-a-pair). A card sorts by its oldest job. A same-booklet pair is
+  already one card.
+- **Looks like a pair:** above the cards, every [suggestion](#automatic-matching) as "<questions
+  file> + <answers file> (evidence)" with **Pair** (links them, answers placed by number until
+  checked) and **Not a pair**.
+- Each paper line on a card that needs a partner and is **not linked** has a **Match** button opening
+  the same popup without opening the job. A linked paper's match is changed or undone on the review
+  page. A question paper with no answers also has **This is an answer booklet**
+  ([Switching a paper's role](#switching-a-papers-role)).
 - Pre-filled from the card's details, with the cover's unresolved school name.
 - The queue has no page images, so only the candidates' thumbnails show; the mapping table loads its
   own.
-- After a pair or attach the popup closes and the queue refreshes (the card shows the new state, or
-  leaves once every paper is decided).
-- Card match states: answer-only "Linked to a question paper", "Matching paper found", "Needs
-  matching — several candidates", "Not matched to a question paper"; question paper "Answers linked
-  from another upload".
+- After a pair, attach, suggestion or role switch the queue refreshes (cards merge once linked, or
+  leave once every paper is decided).
+- Card match states: answer-only "Linked to a question paper", "Matching paper found", "Looks like the
+  answers to <file>", "Needs matching — several candidates", "Not matched to a question paper";
+  question paper "Answers linked from another upload".
 - On Auto import, the **All jobs** list's **Unmatched answers** filter shows jobs with a pending
   answer-only paper that is not linked.
+
+### Reviewing a pair
+
+**Code:** `frontend/src/features/import/ReviewPage.jsx`, `PaperEditor.jsx`, `useJobReview.js`
+
+A question paper linked to an answer-only paper is reviewed with it, on the question paper's page.
+
+- **Booklet toggle** above the pages: **Questions · <file>** and **Answers · <file>**. Each shows
+  that booklet's pages and boxes, editable as usual; each saves to its own job. The header names both
+  files and shows one save state.
+- **Question list:** under each question, the answers that will land on it (by the pair's mapping,
+  else by number) as thumbnails, "A3 · p5"; clicking one opens it in the answer booklet, selected.
+  A question no answer lands on says "No answer". Edits to either booklet show at once.
+- **Sidebar:** the question paper's Pairing block and details. The partly-answered warning counts the
+  answer booklet's boxes as they stand. **Confirm paper and answers** saves both booklets' pending
+  edits, then confirms ([Confirming a linked pair](#confirming-a-linked-pair)).
+- **Opening the answer booklet itself:** when every undecided paper of it is linked to a question
+  paper of another job under review, it opens the pair instead. Otherwise its linked paper says
+  "Reviewed together with <file> (<key>)" with **Open pair**.
+- **Next job** skips the pair's other job.
 
 ## The answer mapping table
 
@@ -327,5 +415,5 @@ also attaches those answers and settles both.
   [Manage Papers](./manage-papers.md).
 - **Duplicate-paper protection (#81)** waits on a live-DB check. The bank has no uniqueness on the
   seven-field key, so duplicates are possible and matching treats them as "several". Planned:
-  normalise paper numbers on write ("P1", "Paper 1", "I" → "1"; letters kept), add a unique index,
-  and turn a duplicate confirm into "this paper already exists — attach to it instead?".
+  store paper numbers normalised (matching already compares them so), add a unique index, and turn
+  a duplicate confirm into "this paper already exists — attach to it instead?".

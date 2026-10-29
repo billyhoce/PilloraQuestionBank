@@ -25,6 +25,7 @@ export function matchState(p) {
   if (p.role === 'answer_only') {
     if (p.linked) return { text: 'Linked to a question paper', tone: 'green' }
     if (p.match_status === 'proposed') return { text: 'Matching paper found', tone: 'green' }
+    if (p.suggestion) return { text: `Looks like the answers to ${p.suggestion.filename}`, tone: 'amber' }
     if (p.match_status === 'manual') return { text: 'Needs matching — several candidates', tone: 'amber' }
     return { text: 'Not matched to a question paper', tone: 'amber' }
   }
@@ -38,4 +39,10 @@ export function needsPartner(p) {
   if (p.status !== 'pending' || p.linked) return false
   if (p.answer_coverage === 'none' && !p.unanswered?.length) return false
   return p.role === 'answer_only' || p.answer_coverage === 'none'
+}
+
+// Whether a queue line offers "This is an answer booklet": a pending, unlinked question paper with
+// questions but no answers of its own, which is what a solutions booklet read as questions looks like.
+export function mayBeAnswers(p) {
+  return p.role !== 'answer_only' && needsPartner(p)
 }

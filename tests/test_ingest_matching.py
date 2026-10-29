@@ -44,12 +44,16 @@ def test_single_exact_match_is_proposed(db_session, admin_user, meta):
     assert state(r) == ("proposed", target.id, None)
 
 
-def test_paper_number_is_trimmed_and_casefolded_only(db_session, admin_user, meta):
+def test_paper_number_is_normalised(db_session, admin_user, meta):
     target = add_paper(db_session, admin_user, {**meta, "paper_number": " 2a "})
     _, r = answers_job(db_session, admin_user, {**meta, "paper_number": "2A"})
     match_row(db_session, r)
     assert r.proposed_paper_id == target.id
-    r.paper_number = "02A"  # not normalised any further
+    for spelling in ("02A", "P2A", "Paper 2a"):
+        r.paper_number = spelling
+        match_row(db_session, r)
+        assert r.proposed_paper_id == target.id, spelling
+    r.paper_number = "2"  # the letter is kept
     match_row(db_session, r)
     assert r.match_status == "manual" and "paper number" in r.match_note
 

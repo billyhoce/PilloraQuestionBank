@@ -8,8 +8,9 @@ attaches every proposed paper.
 `app/services/ingest_confirm.py`, `app/services/ingest_papers.py`, `app/services/ingest_events.py`,
 `app/worker/` (`main.py`, `store.py`, `edges.py`, `sweep.py`, `reconcile.py`), `app/ai/job_cost.py`,
 `app/storage/`, `frontend/src/features/import/` (`AutoImport.jsx`, `UploadQueue.jsx`,
-`PdfDropZone.jsx`, `JobHistory.jsx`, `JobDetail.jsx`, `ReviewQueuePage.jsx`, `ReviewPage.jsx`,
-`proposalReducer.js`, `MetadataSidebar.jsx`, `SchoolCombobox.jsx`)
+`PdfDropZone.jsx`, `JobHistory.jsx`, `JobDetail.jsx`, `ReviewQueuePage.jsx`, `queueGroups.js`,
+`ReviewPage.jsx`, `PaperEditor.jsx`, `useJobReview.js`, `proposalReducer.js`, `MetadataSidebar.jsx`,
+`SchoolCombobox.jsx`)
 **Related:** [ingestion-pipeline.md](./ingestion-pipeline.md) (what the worker does to a booklet,
 stage by stage), [qa-pairing.md](./qa-pairing.md) (answer-only papers, attach, matching),
 [manual-import.md](./manual-import.md), [manage-papers.md](./manage-papers.md),
@@ -203,7 +204,11 @@ import, or Manual import when one is in progress in this tab.
 appear without a reload; ones that arrive while the page is open are tagged **New**. Failed jobs are
 not here; they stay on the Auto import board.
 
-Each card shows:
+- A question booklet and the answer booklet linked to it share **one card**, reviewed together; a
+  **Looks like a pair** strip above the cards offers suggested pairs with **Pair** / **Not a pair**
+  ([qa-pairing.md](./qa-pairing.md#from-the-review-queue)).
+
+Each card shows, per job:
 - filename and **Review**, age badge, page count, papers and how many are still to decide, warnings,
   and "Pages flagged for a closer look" when a task needs review
 - one line per proposed paper:
@@ -214,15 +219,21 @@ Each card shows:
     question paper: "Answers linked from another upload") and, for a question paper its own booklet
     only partly answers, "Q5–Q7 have no answers"
   - **Match** on a pending paper that needs a partner, opening the "Match this paper" popup
-    ([qa-pairing.md](./qa-pairing.md))
+    ([qa-pairing.md](./qa-pairing.md)), and **This is an answer booklet** on a question paper with
+    no answers ([switching a role](./qa-pairing.md#switching-a-papers-role))
   - decided papers greyed with their outcome
 - **Only jobs with unmatched answers** narrows the list.
 
 ## Review page
 
 `/admin/import/jobs/:jobId/review`, from the review queue or All jobs. The header links back to the
-queue and on to the **next job** (the oldest other one waiting). It opens on the first undecided
-paper.
+queue and on to the **next job** (the oldest other card waiting; a pair counts as one). It opens on
+the paper named by `?paper=` (the queue's link to a pair), else the first undecided paper.
+
+- **A question paper linked to an answer booklet** is reviewed with it: a toggle switches the page
+  view between the two booklets, each question lists the answers landing on it, and one confirm
+  takes both. An answer booklet whose papers are all reviewed that way opens its pair instead
+  ([qa-pairing.md](./qa-pairing.md#reviewing-a-pair)).
 
 - **Paper tabs** when the booklet holds several papers (`q1 / a1`, or "Answers a1" for an
   answer-only paper), each showing its outcome once decided.
@@ -302,7 +313,9 @@ paper**).
 - A question paper that would be confirmed partly answered shows "Q5–Q7 have no answers. Add them
   with the answer-box editor, or confirm anyway." Confirm stays enabled.
 - A paper that needs or has a partner shows the Pairing block (**Match this paper…**, Unmatch,
-  "Not this one"): [qa-pairing.md](./qa-pairing.md).
+  "Not this one", a suggestion's **Pair** / **Not a pair**): [qa-pairing.md](./qa-pairing.md). An
+  unlinked paper with no answers also offers **This is an answer booklet** (and an answer-only one
+  **This is a question booklet**).
 - Sidebar edits save in the background (800 ms debounce) while the paper is pending, and re-run
   matching. Best effort: Confirm sends the final values anyway.
 

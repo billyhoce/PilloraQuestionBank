@@ -43,9 +43,10 @@ def test_best_matches_stop_at_ten():
     assert len(rank({"year": 2024, "paper_number": "1"}, items)["best"]) == 10
 
 
-def test_paper_number_is_trimmed_and_casefolded_only():
-    got = rank({"paper_number": " 2a "}, [item("x", paper_number="2A"), item("y", paper_number="02A")])
-    assert names(got["exact"]) == ["x"]
+def test_paper_number_is_normalised():
+    items = [item("x", paper_number="2A"), item("y", paper_number="P02a"), item("z", paper_number="2")]
+    got = rank({"paper_number": " 2a "}, items)
+    assert names(got["exact"]) == ["x", "y"]
 
 
 def test_a_new_school_matches_the_same_new_name_and_never_an_id():

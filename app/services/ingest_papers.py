@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.orm import IngestJob, IngestPaper, School
+from app.models.orm import IngestJob, IngestPaper, School, SchoolAlias
 from app.services.answer_coverage import NONE, current_papers, job_coverage
 
 METADATA_FIELDS = ("school_id", "year", "level_id", "subject_id", "exam_type_id", "stream_id", "paper_number")
@@ -39,6 +39,14 @@ def _clean(metadata: dict | None) -> dict[str, Any]:
     return out
 
 
+def _cover_school(metadata: dict | None, cleaned: dict) -> str | None:
+    """The school the cover printed, when it resolved to no school ("BPGHS"), else None."""
+    if cleaned["school_id"] is not None:
+        return None
+    name = (((metadata or {}).get("extracted") or {}).get("school") or "").strip()
+    return name[:128] or None
+
+
 def sync_job_papers(db: Session, job: IngestJob) -> list[IngestPaper]:
     """Upsert one row per proposal paper (on ``(job_id, paper_key)``), with its role and the
     metadata the worker read: ``report["paper_metadata"][key]`` (source ``cover``), else the old
@@ -59,13 +67,18 @@ def sync_job_papers(db: Session, job: IngestJob) -> list[IngestPaper]:
                 meta, source = _clean(report["filename_metadata"]), "filename"
             else:
                 meta, source = _clean(None), None
-            row = IngestPaper(job_id=job.id, paper_key=key, role=role, status="pending", metadata_source=source, **meta)
+            row = IngestPaper(
+                job_id=job.id, paper_key=key, role=role, status="pending", metadata_source=source,
+                cover_school_name=_cover_school(per_paper.get(key), meta), **meta,
+            )
             db.add(row)
         else:
             row.role = role
             if row.status == "pending" and row.metadata_source != "admin" and key in per_paper:
-                for f, v in _clean(per_paper[key]).items():  # a re-run's fresher cover reading
+                meta = _clean(per_paper[key])
+                for f, v in meta.items():  # a re-run's fresher cover reading
                     setattr(row, f, v)
+                row.cover_school_name = _cover_school(per_paper[key], meta)
                 row.metadata_source = "cover"
         rows.append(row)
     db.flush()
@@ -126,6 +139,39 @@ def create_new_school(db: Session, metadata: dict) -> dict:
     return {**out, "school_id": school.id}
 
 
+def learn_school_alias(db: Session, job: IngestJob, key: str, school_id: int | None) -> None:
+    """Paper ``key`` is being confirmed as a paper of ``school_id``: if its cover printed a school
+    that matched none ("BPGHS"), remember that name as an alias of the school, so later covers
+    resolve it, and give the school to the other pending papers whose cover printed the same name
+    (re-matching them, best effort). Does not commit."""
+    from app.ai.filename_extractor import alias_key
+    from app.services.ingest_matching import match_row
+
+    row = get_row(db, job, key)
+    if row is None or school_id is None or not (row.cover_school_name or "").strip():
+        return
+    alias = alias_key(row.cover_school_name)
+    if db.scalar(select(SchoolAlias).where(SchoolAlias.alias == alias)) is None:
+        db.add(SchoolAlias(alias=alias, school_id=school_id))
+    waiting = [
+        r for r in db.scalars(select(IngestPaper).where(
+            IngestPaper.status == "pending", IngestPaper.school_id.is_(None), IngestPaper.id != row.id,
+            IngestPaper.cover_school_name.isnot(None),
+        ))
+        if alias_key(r.cover_school_name) == alias and not r.new_school_name
+    ]
+    for r in waiting:
+        r.school_id, r.cover_school_name = school_id, None
+    db.flush()
+    try:
+        with db.begin_nested():
+            for r in waiting:
+                match_row(db, r)
+    except Exception:
+        from app.logger import log
+        log.warning("learn_school_alias: re-matching failed", exc_info=True)
+
+
 def set_metadata(db: Session, job: IngestJob, key: str, metadata: dict, source: str = "admin") -> IngestPaper | None:
     """Store ``metadata`` (the seven fields, plus ``new_school_name`` for a school not in the list
     yet) on the paper's row. ``source`` becomes ``admin`` only if a value actually changed. Does not
@@ -152,7 +198,7 @@ def set_status(db: Session, job: IngestJob, key: str, status: str, paper_id: int
     if paper_id is not None:
         row.paper_id = paper_id
     if status != "pending":
-        row.match_status = row.proposed_paper_id = row.match_note = None  # a settled paper has no proposal
+        row.match_status = row.proposed_paper_id = row.match_note = row.suggested_ingest_paper_id = None  # a settled paper has no proposal
 
 
 # --- matching an answer-only paper to a question paper (manual, #82) -------------------------
@@ -213,7 +259,7 @@ def _clear_link(row: IngestPaper) -> None:
         other.matched_ingest_paper_id = None
     for r in (row, other):
         if r is not None:
-            r.match_status = None
+            r.match_status = r.suggested_ingest_paper_id = None
             r.match_note = None
             r.proposed_paper_id = None
             r.answer_map = None
@@ -267,7 +313,7 @@ def link_papers(
     row.matched_ingest_paper_id = other.id
     other.matched_ingest_paper_id = row.id
     for r in (row, other):  # an admin's link: no automatic status
-        r.match_status = r.match_note = r.proposed_paper_id = None
+        r.match_status = r.match_note = r.proposed_paper_id = r.suggested_ingest_paper_id = None
         r.answer_map = None
     answer_row(row).answer_map = mapping
     db.flush()
@@ -295,6 +341,67 @@ def set_answer_map(db: Session, job: IngestJob, key: str, mapping: dict | None) 
         raise MatchError(409, f"Paper {key!r} is not paired with a pending paper")
     answers.answer_map = mapping
     db.flush()
+
+
+def _source_order(rect: dict) -> tuple:
+    return (rect["page"], rect["y0"], rect["x0"])
+
+
+def _with_role(paper: dict, role: str) -> dict:
+    """Proposal ``paper`` turned into a ``role`` paper. Into ``answer_only``: every box of a question
+    becomes one of its answer boxes, in source order (a solutions booklet's question boxes hold the
+    worked answers). Into ``question``: the answer boxes become question boxes, and an entry with no
+    box is dropped (a question needs one)."""
+    questions = []
+    for q in paper.get("questions") or []:
+        if role == "answer_only":
+            rects = sorted([*q.get("question_rects", []), *q.get("answer_rects", [])], key=_source_order)
+            questions.append({**q, "question_rects": [], "answer_rects": rects})
+        elif q.get("answer_rects"):
+            questions.append({**q, "question_rects": list(q["answer_rects"]), "answer_rects": []})
+    return {**paper, "role": role, "questions": questions}
+
+
+def switch_role(db: Session, job: IngestJob, key: str, role: str) -> IngestPaper:
+    """"This is an answer booklet" / "This is a question booklet": make paper ``key`` an
+    ``answer_only`` or a ``question`` paper. Rewrites the paper in the worker's proposal and in the
+    admin's edit (its label, so its key, stays), releases any link or proposal without rejecting it,
+    and re-matches it. A Retry that regenerates the proposal brings the pipeline's role back.
+    ``409`` unless the job is ``review_ready`` and the paper pending. Does not commit."""
+    from app.services.ingest_confirm import paper_key
+    from app.services.ingest_matching import match_row
+
+    if role not in PARTNER_ROLE:
+        raise MatchError(422, "A paper is either a question paper or answers only")
+    if job.status != "review_ready":
+        raise MatchError(409, "This job is not awaiting review")
+    row = _row_or_sync(db, job, key)
+    if row is None:
+        raise MatchError(404, f"This job has no paper {key!r}")
+    if row.status != "pending":
+        raise MatchError(409, f"Paper {key!r} was already {row.status}")
+    if row.role == role:
+        return row
+    for attr in ("proposal", "proposal_edited"):
+        proposal = getattr(job, attr)
+        if proposal is not None:
+            papers = [
+                _with_role(p, role) if paper_key(p, i) == key else p
+                for i, p in enumerate(proposal.get("papers", []))
+            ]
+            setattr(job, attr, {**proposal, "papers": papers})
+    partner = row.matched_ingest_paper
+    if row.matched_ingest_paper_id is not None:
+        _clear_link(row)
+    else:
+        row.match_status = row.match_note = row.proposed_paper_id = row.suggested_ingest_paper_id = None
+    row.role = role
+    db.flush()
+    match_row(db, row)
+    if partner is not None and partner.matched_ingest_paper_id is None:
+        match_row(db, partner)
+    db.flush()
+    return row
 
 
 def unlink_paper(db: Session, job: IngestJob, key: str) -> None:
@@ -335,7 +442,8 @@ def reject_proposed_paper(db: Session, job: IngestJob, key: str) -> None:
 
 
 def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
-    """The job's linked papers by paper key: the partner's ingest paper id, job id, filename, key and
+    """The job's linked papers by paper key: the partner's ingest paper id, job id, filename, key, its
+    job's status and
     ``details`` (its seven fields and ``new_school_name``), ``matched_by`` (``auto`` or ``admin``),
     ``answer_numbers`` and ``answer_map``. ``answer_numbers`` are the partner's question numbers that
     have an answer box; for a question paper they are where its confirm puts the linked answers, by
@@ -356,6 +464,7 @@ def paper_links(db: Session, job: IngestJob) -> dict[str, dict]:
         out[row.paper_key] = {
             "ingest_paper_id": other.id, "job_id": str(other.job_id),
             "filename": other_job.filename if other_job else None, "paper_key": other.paper_key,
+            "job_status": other_job.status if other_job else None,
             "details": {**{f: getattr(other, f) for f in METADATA_FIELDS}, "new_school_name": other.new_school_name},
             "matched_by": "auto" if row.match_status == "auto" else "admin",
             "answer_numbers": paper_answer_numbers(other_job, other.paper_key) if other_job else [],

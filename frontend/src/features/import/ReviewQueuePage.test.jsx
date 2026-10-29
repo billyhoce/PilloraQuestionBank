@@ -11,6 +11,7 @@ vi.mock('../../api/client', () => ({
   api: {
     import: {
       listJobs: vi.fn(), paperCandidates: vi.fn(), matchJobPaper: vi.fn(), attachJobPaper: vi.fn(), answerMappingTable: vi.fn(),
+      rejectSuggestion: vi.fn(), switchPaperRole: vi.fn(),
     },
     subjects: { list: vi.fn() }, streams: { list: vi.fn() }, levels: { list: vi.fn() },
     schools: { list: vi.fn() }, examTypes: { list: vi.fn() }, schoolLevels: { list: vi.fn() },
@@ -156,6 +157,58 @@ describe('ReviewQueuePage', () => {
     expect(api.import.attachJobPaper).toHaveBeenCalledWith('new', { key: 'a1', paper_id: 7, mapping: { 1: '1' } })
     await waitFor(() => expect(screen.queryByText('Match this paper')).toBeNull())
     expect(api.import.listJobs).toHaveBeenCalledWith('review_ready')
+  })
+
+  it('shows a linked question booklet and answer booklet as one card reviewed together', async () => {
+    const qjob = { ...OLD, id: 'qj', filename: 'P1 Qns.pdf', papers: [paper('q1', 'question', {
+      linked: true, partner: { job_id: 'aj', paper_key: 'a1', filename: 'P1 Soln.pdf', ingest_paper_id: 2 },
+    })] }
+    const ajob = { ...NEWER, id: 'aj', filename: 'P1 Soln.pdf', papers: [paper('a1', 'answer_only', {
+      linked: true, partner: { job_id: 'qj', paper_key: 'q1', filename: 'P1 Qns.pdf', ingest_paper_id: 1 },
+    })] }
+    api.import.listJobs.mockResolvedValue(listing([ajob, qjob]))
+    renderPage()
+    const cards = await screen.findAllByTestId('review-card')
+    expect(cards).toHaveLength(1)
+    const card = within(cards[0])
+    expect(card.getByText('Questions and answers, reviewed together')).toBeInTheDocument()
+    expect(card.getByText('P1 Qns.pdf')).toBeInTheDocument()
+    expect(card.getByText('P1 Soln.pdf')).toBeInTheDocument()
+    expect(card.getByText('Questions')).toBeInTheDocument()
+    expect(card.getByText('Answers')).toBeInTheDocument()
+    expect(card.getByRole('link', { name: 'Review' })).toHaveAttribute('href', '/admin/import/jobs/qj/review?paper=q1')
+  })
+
+  it('offers a suggested pair, and pairs or turns it down', async () => {
+    const suggested = { ...NEWER, filename: 'P2 solutions.pdf', papers: [paper('a1', 'answer_only', {
+      match_status: 'suggested', match_note: 'same year; uploaded together',
+      suggestion: { job_id: 'old', paper_key: 'q2', filename: 'P2 questions.pdf', ingest_paper_id: 9 },
+    })] }
+    api.import.listJobs.mockResolvedValue(listing([suggested, OLD]))
+    api.import.matchJobPaper.mockResolvedValue({})
+    api.import.rejectSuggestion.mockResolvedValue({})
+    renderPage()
+    const strip = within(await screen.findByRole('region', { name: 'Suggested pairs' }))
+    expect(strip.getByText(/same year; uploaded together/)).toBeInTheDocument()
+    expect(screen.getByText(/Looks like the answers to P2 questions.pdf/)).toBeInTheDocument()
+    await userEvent.click(strip.getByRole('button', { name: 'Pair P2 solutions.pdf' }))
+    expect(api.import.matchJobPaper).toHaveBeenCalledWith('new', 'a1', 9)
+    await userEvent.click(strip.getByRole('button', { name: 'Not a pair: P2 solutions.pdf' }))
+    expect(api.import.rejectSuggestion).toHaveBeenCalledWith('new', 'a1')
+  })
+
+  it('turns a question paper with no answers into an answer booklet after asking', async () => {
+    const bare = paper('q1', 'question', { answer_coverage: 'none', unanswered: [1, 2] })
+    api.import.listJobs.mockResolvedValue(listing([{ ...OLD, papers: [bare] }]))
+    api.import.switchPaperRole.mockResolvedValue({ role: 'answer_only' })
+    const ask = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    renderPage()
+    const button = await screen.findByRole('button', { name: 'q1 is an answer booklet' })
+    await userEvent.click(button)
+    expect(api.import.switchPaperRole).not.toHaveBeenCalled()
+    await userEvent.click(button)
+    expect(api.import.switchPaperRole).toHaveBeenCalledWith('old', 'q1', 'answer_only')
+    ask.mockRestore()
   })
 
   it('says when there is nothing to review', async () => {

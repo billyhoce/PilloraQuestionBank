@@ -358,3 +358,34 @@ def test_a_failed_extraction_keeps_no_names(mock_cls, mock_fetch):
 
 def test_the_school_may_be_read_as_printed_when_it_is_not_listed():
     assert "as printed" in _EXTRACTION_TOOL["input_schema"]["properties"]["school"]["description"]
+
+
+# ---------------------------------------------------------------------------
+# Levels named by bare numbers under several school levels ("4": Primary 4 and Secondary 4)
+# ---------------------------------------------------------------------------
+
+
+def _numbered_levels():
+    out = []
+    for i, (school_level, name) in enumerate([("Primary", "4"), ("Secondary", "4"), ("Secondary", "3")], start=10):
+        lv = MagicMock(); lv.name = name; lv.id = i; lv.school_level.name = school_level
+        out.append(lv)
+    return out
+
+
+def test_bare_number_levels_are_offered_and_resolved_by_school_level():
+    ref = {**_make_ref_data(), "levels": _numbered_levels()}
+    prompt = build_system_prompt(ref)
+    assert "  - Primary 4" in prompt and "  - Secondary 4" in prompt
+    base = {"school": None, "year": None, "subject": None, "exam_type": None, "paper_number": None}
+    assert resolve_metadata({**base, "level": "Secondary 4"}, ref)["level_id"] == 11
+    assert resolve_metadata({**base, "level": "primary 4"}, ref)["level_id"] == 10
+    assert resolve_metadata({**base, "level": "4"}, ref)["level_id"] is None  # ambiguous
+    assert resolve_metadata({**base, "level": "3"}, ref)["level_id"] == 12  # one level has it
+
+
+def test_a_learned_alias_resolves_the_school():
+    ref = {**_make_ref_data(), "school_aliases": {"ri": 1}}
+    base = {"year": None, "subject": None, "level": None, "exam_type": None, "paper_number": None}
+    assert resolve_metadata({**base, "school": " RI"}, ref)["school_id"] == 1
+    assert resolve_metadata({**base, "school": "Raffles"}, ref)["school_id"] is None
