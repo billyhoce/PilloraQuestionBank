@@ -10,7 +10,8 @@ function Badge({ n, tone, label }) {
 
 // The import area: Auto import (drop PDFs, watch them process), Review queue (finished jobs
 // waiting for a decision) and Manual import, as three pages under one sub-navigation. The review
-// queue is polled here once and handed to the pages through the outlet context.
+// queue is polled here once and handed to the pages through the outlet context. A job's review page
+// has no sub-navigation, to give the page under review the whole window; it links back itself.
 export default function ImportLayout() {
   const reviewQueue = useReviewQueue()
   const uploads = useUploadQueue()
@@ -24,17 +25,17 @@ export default function ImportLayout() {
       to: '/admin/import/review',
       label: 'Review queue',
       badge: <Badge n={toReview} tone="blue" label={`${toReview} ready for review`} />,
-      // A job's own review page belongs to the queue.
-      also: '/admin/import/jobs/',
     },
     { to: '/admin/import/manual', label: 'Manual import' },
   ]
+
+  if (pathname.startsWith('/admin/import/jobs/')) return <Outlet context={{ reviewQueue }} />
 
   return (
     <div>
       <nav aria-label="Import" className="flex gap-1 px-4 pt-3 border-b border-gray-200 bg-white">
         {tabs.map(t => {
-          const active = pathname === t.to || pathname.startsWith(`${t.to}/`) || (t.also && pathname.startsWith(t.also))
+          const active = pathname === t.to || pathname.startsWith(`${t.to}/`)
           return (
             <Link
               key={t.to}

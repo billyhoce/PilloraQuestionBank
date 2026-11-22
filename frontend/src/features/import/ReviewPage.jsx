@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
@@ -65,6 +65,20 @@ function LinkedAnswers({ placed, answersPaper, onOpen }) {
       })}
     </ul>
   )
+}
+
+// Exactly as tall as the window below its own top, so the page under review fits the screen
+// without scrolling it.
+function FillWindow({ className, children }) {
+  const ref = useRef(null)
+  const [top, setTop] = useState(0)
+  useLayoutEffect(() => {
+    const measure = () => setTop(ref.current.getBoundingClientRect().top + window.scrollY)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  return <div ref={ref} className={className} style={{ height: `calc(100dvh - ${top}px)` }}>{children}</div>
 }
 
 export default function ReviewPage() {
@@ -323,16 +337,16 @@ export default function ReviewPage() {
   }
 
   const sidebar = paper && (paper.outcome ? (
-    <p role="status" className="w-52 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
+    <p role="status" className="w-72 shrink-0 text-sm text-gray-600">This paper was {paper.outcome}.</p>
   ) : (
-    <div className="shrink-0">
+    <div className="w-72 shrink-0">
       {answerOnly && (
-        <p className="w-52 mb-2 text-xs text-gray-600">
+        <p className="w-72 mb-2 text-xs text-gray-600">
           These are answers only, with no question paper in this booklet. Pair them with the paper they belong to.
         </p>
       )}
       {paper.questions.length === 0 && (
-        <p className="w-52 mb-2 text-xs text-amber-800">
+        <p className="w-72 mb-2 text-xs text-amber-800">
           A paper without questions cannot be imported; skip it.
         </p>
       )}
@@ -355,13 +369,13 @@ export default function ReviewPage() {
       {!link && (answerOnly || needsPartner(paper)) && (
         <button
           type="button" disabled={confirming} onClick={() => handleSwitchRole(answerOnly ? 'question' : 'answer_only')}
-          className="w-52 mb-3 text-xs text-gray-600 hover:text-gray-800 hover:underline text-left disabled:opacity-50"
+          className="w-72 mb-3 text-xs text-gray-600 hover:text-gray-800 hover:underline text-left disabled:opacity-50"
         >
           {answerOnly ? 'This is a question booklet' : 'This is an answer booklet'}
         </button>
       )}
       {answerOnly ? (
-        <div className="w-52 flex flex-col gap-2">
+        <div className="w-72 flex flex-col gap-2">
           {confirmError && <ErrorBanner message={confirmError} />}
           <button type="button" onClick={handleSkipPaper} disabled={confirming}
             className="text-xs text-red-600 hover:text-red-700 text-center disabled:opacity-50">
@@ -383,6 +397,7 @@ export default function ReviewPage() {
           cancelLabel="Skip this paper"
           canConfirm={paper.questions.length > 0}
           schoolCombobox
+          width="w-72"
           extractedSchool={review.paper_metadata?.[paper.key]?.extracted?.school ?? null}
           warning={unansweredText && `${unansweredText}. Add them with the answer-box editor, or confirm anyway.`}
         />
@@ -390,32 +405,38 @@ export default function ReviewPage() {
     </div>
   ))
 
-  return (
-    <div className="px-4 py-4">
-      <div className="flex items-center gap-4 mb-3">
-        <Link to="/admin/import/review" className="text-sm text-blue-600 hover:underline">← Review queue</Link>
-        <h1 className="text-lg font-semibold text-gray-800 break-all">
-          {review.filename}
-          {otherJob && partner.review && <span className="font-normal text-gray-500"> + {partner.review.filename}</span>}
-        </h1>
-        {(review.edited || partner.review?.edited) && <span className="text-xs text-gray-500">edited</span>}
-        {saveState !== 'idle' && (
-          <span role="status" data-state={saveState} className={`text-xs ${saveState === 'error' ? 'text-red-600' : 'text-gray-500'}`}>
-            {SAVE_LABEL[saveState]}
-          </span>
-        )}
-        {nextGroup && (
-          <Link to={nextUrl} className="ml-auto text-sm text-blue-600 hover:underline">
-            Next job: <span className="break-all">{nextGroup.jobs[0].filename}</span> →
-          </Link>
-        )}
-      </div>
+  // Above the page strip; in the job column when there is no paper (so no strip).
+  const back = <Link to="/admin/import/review" className="text-sm text-blue-600 hover:underline">← Review queue</Link>
+
+  // The job's header and the paper's decision, in the column right of the page.
+  const header = (
+    <div className="w-72 flex flex-col gap-2 text-sm">
+      {!paper && back}
+      <h1 className="font-semibold text-gray-800 break-all">
+        {review.filename}
+        {otherJob && partner.review && <span className="font-normal text-gray-500"> + {partner.review.filename}</span>}
+      </h1>
+      {(review.edited || partner.review?.edited || saveState !== 'idle') && (
+        <div className="flex gap-2 text-xs">
+          {(review.edited || partner.review?.edited) && <span className="text-gray-500">edited</span>}
+          {saveState !== 'idle' && (
+            <span role="status" data-state={saveState} className={saveState === 'error' ? 'text-red-600' : 'text-gray-500'}>
+              {SAVE_LABEL[saveState]}
+            </span>
+          )}
+        </div>
+      )}
+      {nextGroup && (
+        <Link to={nextUrl} className="text-xs text-blue-600 hover:underline">
+          Next job: <span className="break-all">{nextGroup.jobs[0].filename}</span> →
+        </Link>
+      )}
       <ErrorBanner message={main.error || (otherJob ? partner.error : null)} />
 
       {unrouted.length > 0 && (
-        <ul aria-label="Unrouted sections" className="mb-3 space-y-2">
+        <ul aria-label="Unrouted sections" className="space-y-2">
           {unrouted.map(u => (
-            <li key={u.label} className="text-sm bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            <li key={u.label} className="text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
               <span className="font-medium">Section {u.label} was not extracted</span>
               {u.first_page != null && <span> (pages {u.first_page}–{u.last_page})</span>}
               <span>: {u.reason}</span>
@@ -424,7 +445,7 @@ export default function ReviewPage() {
                   type="button"
                   disabled={handoff === u.label}
                   onClick={() => handleManually(u)}
-                  className="ml-3 text-blue-700 hover:underline"
+                  className="block mt-1 text-blue-700 hover:underline"
                 >
                   Handle manually
                 </button>
@@ -435,7 +456,7 @@ export default function ReviewPage() {
       )}
 
       {papers.length > 1 && (
-        <div role="tablist" aria-label="Papers" className="flex gap-1 mb-3 border-b border-gray-200">
+        <div role="tablist" aria-label="Papers" aria-orientation="vertical" className="flex flex-col border-l border-gray-200">
           {papers.map((p, i) => (
             <button
               key={i}
@@ -443,7 +464,7 @@ export default function ReviewPage() {
               role="tab"
               aria-selected={i === paperIdx}
               onClick={() => choosePaper(i)}
-              className={`px-3 py-1.5 text-sm -mb-px border-b-2 ${i === paperIdx ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500'}`}
+              className={`-ml-px px-3 py-1 text-left border-l-2 ${i === paperIdx ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500'}`}
             >
               {paperTitle(p, i)}
               {p.outcome && <span className="ml-1 text-xs text-gray-500">({p.outcome})</span>}
@@ -453,36 +474,40 @@ export default function ReviewPage() {
       )}
 
       {linkedElsewhere && (
-        <p role="note" className="mb-3 text-sm bg-green-50 border border-green-200 rounded px-3 py-2">
+        <p role="note" className="text-xs bg-green-50 border border-green-200 rounded px-2 py-1.5">
           Reviewed together with {link.filename} ({link.paper_key}).{' '}
           <Link to={reviewUrl(link.job_id, link.paper_key)} className="text-blue-700 hover:underline">Open pair</Link>
         </p>
       )}
 
       {paired && (
-        <div role="group" aria-label="Booklet" className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+        <div role="group" aria-label="Booklet" className="flex flex-col gap-1 text-xs">
           {[['questions', 'Questions', review.filename], ['answers', 'Answers', fileName(paired, jobId)]].map(([v, label, file]) => (
             <button
               key={v} type="button" aria-pressed={view === v} disabled={v === 'answers' && !answersPaper}
               onClick={() => setView(v)}
-              className={`rounded border px-3 py-1 ${view === v ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'} disabled:opacity-50`}
+              className={`rounded border px-2 py-1 text-left ${view === v ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'} disabled:opacity-50`}
             >
               {label} · <span className="break-all">{file}</span>
             </button>
           ))}
-          {!answersPaper && <span className="text-xs text-gray-500">Loading the answer booklet…</span>}
+          {!answersPaper && <span className="text-gray-500">Loading the answer booklet…</span>}
         </div>
       )}
+    </div>
+  )
 
+  return (
+    <FillWindow className="-m-6 p-3 flex gap-3">
       {!paper ? (
-        <p className="text-sm text-gray-500">No paper was proposed for this job.</p>
+        <p className="flex-1 text-sm text-gray-500">No paper was proposed for this job.</p>
       ) : showingAnswers ? (
         <PaperEditor
           key={`answers:${paired.job_id}:${paired.paper_key}:${focus?.token ?? ''}`}
           paper={answersPaper}
           onChange={next => partnerJob.setPaper(answersIdx, next)}
           focus={focus}
-          aside={sidebar}
+          stripTop={back}
         />
       ) : (
         <PaperEditor
@@ -492,9 +517,13 @@ export default function ReviewPage() {
           renderAnswers={placed ? q => (
             <LinkedAnswers placed={placed[String(q.number)]} answersPaper={answersPaper} onOpen={openAnswer} />
           ) : null}
-          aside={sidebar}
+          stripTop={back}
         />
       )}
-    </div>
+      <div className="shrink-0 h-full overflow-y-auto flex flex-col gap-3">
+        {header}
+        {sidebar}
+      </div>
+    </FillWindow>
   )
 }

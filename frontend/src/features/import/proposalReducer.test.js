@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  addRect, assignAnswer, deleteRect, drawError, followSelection, mergeWithPrevious, moveRect, normalise, renumber, renumberError,
+  addRect, assignAnswer, changeBetween, deleteRect, drawError, followSelection, mergeWithPrevious, moveRect, normalise, renumber, renumberError,
   resizeRect, splitBetween, splitThrough, toEditPayload,
 } from './proposalReducer'
 
@@ -232,5 +232,32 @@ describe('moving, drawing and reassigning boxes', () => {
     const p = base()
     expect(assignAnswer(p, { list: 'question', q: 0, i: 0 }, 1).paper).toBe(p)
     expect(assignAnswer(p, { list: 'answer', q: 0, i: 0 }, 0).paper).toBe(p)
+  })
+})
+
+describe('changeBetween (where an undo lands)', () => {
+  it('selects the box that came back where it was, on its page', () => {
+    const before = paper()
+    const moved = moveRect(before, { list: 'question', q: 1, i: 1 }, 30, 60)
+    // undoing the move: `before` is shown again
+    expect(changeBetween(moved, before)).toEqual({ page: 3, sel: { list: 'question', q: 1, i: 1 } })
+  })
+
+  it('opens the page of a box that went away, with nothing selected', () => {
+    const before = paper()
+    const { paper: drawn } = addRect(before, 'answer', 1, { page: 3, x0: 10, y0: 150, x1: 60, y1: 190 })
+    // undoing the draw
+    expect(changeBetween(drawn, before)).toEqual({ page: 3, sel: null })
+  })
+
+  it('takes the first page of a change touching several, and a box that changed question counts', () => {
+    const before = paper()
+    const merged = mergeWithPrevious(before, 1)
+    // undoing the merge: question 2's boxes come back, the first on page 2
+    expect(changeBetween(merged, before)).toEqual({ page: 2, sel: { list: 'question', q: 1, i: 0 } })
+  })
+
+  it('is null when no box differs', () => {
+    expect(changeBetween(paper(), paper())).toBeNull()
   })
 })

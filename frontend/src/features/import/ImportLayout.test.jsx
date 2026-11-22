@@ -38,9 +38,9 @@ describe('ImportLayout', () => {
     expect(api.import.listJobs).toHaveBeenCalledWith('review_ready')
   })
 
-  it('treats a job review page as part of the review queue', async () => {
+  it('leaves the sub-navigation off a job review page, still sharing the queue', async () => {
     renderAt('/admin/import/jobs/x/review')
-    expect(screen.getByRole('link', { name: /Review queue/ })).toHaveAttribute('aria-current', 'page')
-    await screen.findByLabelText('2 ready for review')
+    expect(screen.queryByRole('navigation', { name: 'Import' })).not.toBeInTheDocument()
+    expect(await screen.findByTestId('child')).toHaveTextContent('2 in queue')
   })
 })

@@ -288,3 +288,41 @@ export function assignAnswer(paper, sel, toQ) {
     : withRects(without, target, [...rectsOf(without, target), rect]))
   return { paper: next, sel: selectionOf(next, rect) }
 }
+
+// Every box of `paper` with what it belongs to, as a comparable key (list, question number, page
+// and edges), and the box itself.
+function boxKeys(paper) {
+  const key = (list, number, r) => `${list}:${number}:${r.page}:${r.x0}:${r.y0}:${r.x1}:${r.y1}`
+  return [
+    ...paper.questions.flatMap(q => [
+      ...q.question_rects.map(r => ({ key: key('question', q.number, r), rect: r })),
+      ...q.answer_rects.map(r => ({ key: key('answer', q.number, r), rect: r })),
+    ]),
+    ...(paper.orphan_answers ?? []).map(r => ({ key: key('orphan', null, r), rect: r })),
+  ]
+}
+
+// The boxes of `a` that `b` does not have (compared by key, so a box counts as changed when it
+// moved, was resized or now belongs elsewhere), first in document order.
+function boxesMissingFrom(a, b) {
+  const left = new Map()
+  for (const { key } of boxKeys(b)) left.set(key, (left.get(key) ?? 0) + 1)
+  return boxKeys(a)
+    .filter(({ key }) => {
+      const n = left.get(key) ?? 0
+      if (n > 0) left.set(key, n - 1)
+      return n === 0
+    })
+    .map(({ rect }) => rect)
+    .sort(byPosition)
+}
+
+// Where paper `after` differs from `before`, to show it (an undo): { page, sel } with the first box
+// `after` has that `before` did not (selected), else the page of the first box it lost (nothing
+// selected); null when no box differs.
+export function changeBetween(before, after) {
+  const gained = boxesMissingFrom(after, before)[0]
+  if (gained) return { page: gained.page, sel: selectionOf(after, gained) }
+  const lost = boxesMissingFrom(before, after)[0]
+  return lost ? { page: lost.page, sel: null } : null
+}

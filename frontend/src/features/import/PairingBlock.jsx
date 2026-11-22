@@ -98,7 +98,7 @@ export default function PairingBlock({
     onMatched(s)
   })
 
-  const box = 'w-52 mb-2 text-xs border rounded px-2 py-1.5 space-y-1'
+  const box = 'w-full mb-2 text-xs border rounded px-2 py-1.5 space-y-1'
   if (result) {
     return <div className={`${box} bg-green-50 border-green-200`}><AttachResult result={result} onContinue={() => onAttached(result.job_status)} /></div>
   }

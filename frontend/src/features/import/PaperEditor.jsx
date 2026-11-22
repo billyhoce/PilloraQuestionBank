@@ -1,13 +1,29 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clientToPt, firstPageOf, rectToPx } from './reviewGeometry'
 import {
-  addRect, assignAnswer, deleteRect, drawError, followSelection, getRect, mergeWithPrevious, moveRect, nextNumber, normalise,
+  addRect, assignAnswer, changeBetween, deleteRect, drawError, followSelection, getRect, mergeWithPrevious, moveRect, nextNumber, normalise,
   renumber, renumberError, resizeRect, splitBetween, splitThrough,
 } from './proposalReducer'
 import { isAnswerOnly } from './pairing'
+import { breakGesture, emptyHistory, record, redo, undo } from './editHistory'
 
 const HANDLE_PX = 14
 const COLOUR = { question: '#2563eb', answer: '#16a34a', orphan: '#6b7280' }
+
+// Keyboard and wheel: an arrow key moves the selected box NUDGE_PT points (Shift: ten times that),
+// or with nothing selected turns the page (down/right next, up/left previous).
+const NUDGE_PT = 1
+const NUDGE = 'nudge'
+const ARROWS = {
+  ArrowLeft: { dx: -1, dy: 0, page: -1 },
+  ArrowRight: { dx: 1, dy: 0, page: 1 },
+  ArrowUp: { dx: 0, dy: -1, page: -1 },
+  ArrowDown: { dx: 0, dy: 1, page: 1 },
+}
+// A wheel gesture turns at most one page per this long, so one notch is one page even when the
+// device sends a burst of events.
+const WHEEL_TURN_MS = 250
+const MAX_ZOOM = 5
 
 // Edge handles of the selected rectangle: which coordinate each one drags, and where it sits.
 const HANDLES = [
@@ -19,7 +35,7 @@ const HANDLES = [
 
 const sameSel = (a, b) => a && b && a.list === b.list && a.i === b.i && (a.list === 'orphan' || a.q === b.q)
 
-function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, drawKind, onDraw }) {
+function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragStart, onDragEnd, drawKind, onDraw }) {
   const svgRef = useRef(null)
   const drag = useRef(null)
   // The box being drawn, in points: { x0, y0, x1, y1 } (corners in drawing order).
@@ -101,7 +117,8 @@ function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, draw
               fill={COLOUR[b.list]}
               fillOpacity={on ? 0.3 : inQuestion ? 0.2 : 0.1}
               stroke={COLOUR[b.list]}
-              strokeWidth={on || inQuestion ? 4 : 2}
+              strokeWidth={on || inQuestion ? 2 : 1}
+              vectorEffect="non-scaling-stroke"
               strokeDasharray={b.list === 'orphan' ? '8 4' : undefined}
               style={{ cursor: on ? 'move' : 'pointer', touchAction: on ? 'none' : undefined }}
               onClick={e => { e.stopPropagation(); onSelect(s) }}
@@ -110,6 +127,7 @@ function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, draw
                 e.stopPropagation()
                 e.currentTarget.setPointerCapture?.(e.pointerId)
                 drag.current = { sel: s, rect: b.rect, start: toPt(e) }
+                onDragStart()
               } : undefined}
               onPointerMove={on ? move : undefined}
               onPointerUp={on ? endDrag : undefined}
@@ -125,14 +143,16 @@ function Overlay({ page, paper, sel, onSelect, onResize, onMove, onDragEnd, draw
                 key={h.edge}
                 data-testid={`handle-${h.edge}`}
                 {...h.at(b.box)}
+                // Invisible: only the grab area along each edge, with its resize cursor.
                 fill={COLOUR[b.list]}
-                fillOpacity={0.6}
+                fillOpacity={0}
                 style={{ cursor: h.cursor, touchAction: 'none' }}
                 onClick={e => e.stopPropagation()}
                 onPointerDown={e => {
                   e.stopPropagation()
                   e.currentTarget.setPointerCapture?.(e.pointerId)
                   drag.current = { sel: s, edge: h.edge }
+                  onDragStart()
                 }}
                 onPointerMove={move}
                 onPointerUp={endDrag}
@@ -281,9 +301,10 @@ const excludedPage = p => Boolean(p.excluded_reason)
 // decided paper (`paper.outcome`) is read-only. Remount it (a `key`) to open another paper.
 // `renderAnswers(q, k)`, if given, shows under each question where its answers come from (a
 // linked answer booklet), instead of its own answer boxes' dot. `focus` ({ page, sel }) opens it on
-// a page with a box selected (remount it to jump again). `aside` is the column after the question
-// list.
-export default function PaperEditor({ paper, onChange, renderAnswers = null, focus = null, aside = null }) {
+// a page with a box selected (remount it to jump again). It fills its parent's height, which must
+// be definite: the page is scaled to fit it and the side columns scroll. `stripTop` sits above the
+// page strip.
+export default function PaperEditor({ paper, onChange, renderAnswers = null, focus = null, stripTop = null }) {
   // Drawing a new box (one per press of a tool): the number field first, `prompt`
   // ({ kind, text, error }), then `drawing` ({ kind, number }) once its number is accepted.
   const [prompt, setPrompt] = useState(null)
@@ -324,24 +345,74 @@ export default function PaperEditor({ paper, onChange, renderAnswers = null, foc
   }
 
   function chooseQuestion(k) {
-    setSel({ list: answerOnly ? 'answer' : 'question', q: k, i: 0 })
+    select({ list: answerOnly ? 'answer' : 'question', q: k, i: 0 })
     const p = firstPageOf(paper.questions[k])
     if (p != null) setPageNo(p)
   }
 
+  // The last edits, for Ctrl+Z / Ctrl+Y (editHistory.js). Kept while this paper is open: it is
+  // lost when the editor is remounted (another paper, or the other booklet of a pair).
+  const history = useRef(emptyHistory)
+
   // Apply a pure edit to the paper and hand it on. `nextSel` is the selection afterwards, or a
   // function of the edited paper giving it (default: cleared, since indexes may have shifted).
-  function edit(fn, nextSel = null) {
+  // Edits sharing a `gesture` (one drag, one run of nudges) undo as one step.
+  function edit(fn, nextSel = null, gesture = null) {
     const next = fn(paper)
     if (next === paper) return
     if (typeof nextSel === 'function') nextSel = nextSel(next)
+    history.current = record(history.current, paper, gesture)
     onChange(next)
     setSel(nextSel)
   }
 
-  const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s)
-  const onMove = (s, x0, y0) => edit(p => moveRect(p, s, x0, y0), s)
-  const onDragEnd = () => edit(normalise, next => followSelection(paper, next, sel))
+  // Undo or redo, then show what changed: its page, with the box that came back selected (an edit
+  // made on another page is not undone out of sight).
+  function step(fn) {
+    const r = fn(history.current, paper)
+    if (!r) return
+    history.current = r.history
+    const at = changeBetween(paper, r.paper)
+    onChange(r.paper)
+    if (at) setPageNo(at.page)
+    setSel(at?.sel ?? null)
+  }
+
+  // Selecting a box ends a run of nudges: the next one is its own undo step.
+  function select(s) {
+    history.current = breakGesture(history.current)
+    setSel(s)
+  }
+
+  // Open page `n`; a selected box left behind on another page is deselected, so the arrow keys
+  // never move a box out of sight.
+  function goToPage(n) {
+    setPageNo(n)
+    const r = sel && getRect(paper, sel)
+    if (r && r.page !== n) select(null)
+  }
+  function turnPage(d) {
+    const i = paper.pages.findIndex(p => p.page === page?.page)
+    const to = paper.pages[i + d]
+    if (to) goToPage(to.page)
+  }
+
+  // One drag is one gesture: pressing on a box or a handle starts it.
+  const dragGesture = useRef(null)
+  const onDragStart = () => { dragGesture.current = {} }
+  const onResize = (s, edges) => edit(p => resizeRect(p, s, edges), s, dragGesture.current)
+  const onMove = (s, x0, y0) => edit(p => moveRect(p, s, x0, y0), s, dragGesture.current)
+  const onDragEnd = () => edit(normalise, next => followSelection(paper, next, sel), dragGesture.current)
+
+  // An arrow key moves the selected box NUDGE_PT (Shift: ×10); one run of presses is one gesture.
+  function nudge(dx, dy) {
+    const r = getRect(paper, sel)
+    if (!r) return
+    edit(p => {
+      const moved = moveRect(p, sel, r.x0 + dx, r.y0 + dy)
+      return moved === p ? p : normalise(moved)
+    }, next => followSelection(paper, next, sel), NUDGE)
+  }
   // The selected box, wherever an edit's re-sort put it.
   const followSel = next => followSelection(paper, next, sel)
 
@@ -363,7 +434,24 @@ export default function PaperEditor({ paper, onChange, renderAnswers = null, foc
       if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
       if (e.key === 'Escape') {
         if (prompt || drawing) cancelDraw()
-        else setSel(null)
+        else select(null)
+        return
+      }
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && !readOnly && (e.key === 'z' || e.key === 'Z' || e.key === 'y')) {
+        e.preventDefault()
+        step(e.key === 'y' || e.shiftKey ? redo : undo)
+        return
+      }
+      const arrow = ARROWS[e.key]
+      if (arrow && !mod && !e.altKey) {
+        e.preventDefault()
+        if (sel && !readOnly) {
+          const d = e.shiftKey ? NUDGE_PT * 10 : NUDGE_PT
+          nudge(arrow.dx * d, arrow.dy * d)
+        } else {
+          turnPage(arrow.page)
+        }
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
@@ -375,32 +463,121 @@ export default function PaperEditor({ paper, onChange, renderAnswers = null, foc
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  return (
-    <div className="flex gap-4 items-start">
-      <nav aria-label="Pages" className="w-24 shrink-0 space-y-2 max-h-[80vh] overflow-y-auto">
-        {paper.pages.map(p => (
-          <button
-            key={p.page}
-            type="button"
-            data-flagged={flaggedPage(p) || undefined}
-            data-excluded={excludedPage(p) || undefined}
-            aria-current={page && p.page === page.page ? 'page' : undefined}
-            title={p.excluded_reason || p.review_reason || undefined}
-            onClick={() => setPageNo(p.page)}
-            className={`block w-full border-2 rounded text-xs ${
-              page && p.page === page.page ? 'border-blue-600' : flaggedPage(p) ? 'border-amber-400' : 'border-gray-200'
-            } ${excludedPage(p) ? 'bg-gray-100 text-gray-400' : ''}`}
-          >
-            {p.url && <img src={p.url} alt={`Page ${p.page} thumbnail`} className={`w-full ${excludedPage(p) ? 'opacity-40' : ''}`} />}
-            <span className="block py-0.5">p{p.page}{flaggedPage(p) ? ' !' : ''}</span>
-            {excludedPage(p) && <span className="block pb-0.5 leading-tight">{p.excluded_reason}</span>}
-          </button>
-        ))}
-      </nav>
+  // Zoom: 1 fits the whole page in its column; up to MAX_ZOOM. `anchor` keeps the point under the
+  // pointer still while zooming (applied once the new size is laid out).
+  const [zoom, setZoom] = useState(1)
+  const pageColumn = useRef(null)
+  const anchor = useRef(null)
+  const lastTurn = useRef(0)
+  useLayoutEffect(() => {
+    const el = pageColumn.current
+    const a = anchor.current
+    if (!el || !a) return
+    anchor.current = null
+    el.scrollLeft = a.x * a.ratio - a.cx
+    el.scrollTop = a.y * a.ratio - a.cy
+  }, [zoom])
+  // A new page opens at its top (zoomed in, the column scrolls); its thumbnail is brought into view.
+  const strip = useRef(null)
+  useEffect(() => {
+    if (pageColumn.current) pageColumn.current.scrollTop = 0
+    strip.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest' })
+  }, [page?.page])
 
-      <div className="flex-1 min-w-0">
+  // The wheel over the page: with Ctrl, zoom; at fit, one page per notch (a burst of wheel events,
+  // as from a trackpad, turns at most one page per WHEEL_TURN_MS); zoomed in, it scrolls the page.
+  // A native listener, since React's wheel handler is passive and cannot stop the browser's own.
+  function handleWheel(e) {
+    const el = pageColumn.current
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      const next = Math.min(MAX_ZOOM, Math.max(1, zoom * Math.exp(-e.deltaY * 0.002)))
+      if (next === zoom) return
+      const box = el.getBoundingClientRect()
+      const cx = e.clientX - box.left
+      const cy = e.clientY - box.top
+      anchor.current = { x: el.scrollLeft + cx, y: el.scrollTop + cy, cx, cy, ratio: next / zoom }
+      setZoom(next)
+      return
+    }
+    if (zoom > 1 || e.deltaY === 0) return
+    e.preventDefault()
+    if (e.timeStamp - lastTurn.current < WHEEL_TURN_MS) return
+    lastTurn.current = e.timeStamp
+    turnPage(e.deltaY > 0 ? 1 : -1)
+  }
+  const onWheel = useRef(null)
+  useEffect(() => { onWheel.current = handleWheel })
+  useEffect(() => {
+    const el = pageColumn.current
+    if (!el) return undefined
+    const listener = e => onWheel.current(e)
+    el.addEventListener('wheel', listener, { passive: false })
+    return () => el.removeEventListener('wheel', listener)
+  }, [])
+
+  return (
+    <div className="flex-1 min-w-0 h-full flex gap-3">
+      <div className="w-36 shrink-0 h-full flex flex-col gap-2">
+        {stripTop && <div className="shrink-0">{stripTop}</div>}
+        <nav ref={strip} aria-label="Pages" className="flex-1 min-h-0 space-y-2 overflow-y-auto">
+          {paper.pages.map(p => (
+            <button
+              key={p.page}
+              type="button"
+              data-flagged={flaggedPage(p) || undefined}
+              data-excluded={excludedPage(p) || undefined}
+              aria-current={page && p.page === page.page ? 'page' : undefined}
+              title={p.excluded_reason || p.review_reason || undefined}
+              onClick={() => goToPage(p.page)}
+              className={`block w-full border-2 rounded text-xs ${
+                page && p.page === page.page ? 'border-blue-600' : flaggedPage(p) ? 'border-amber-400' : 'border-gray-200'
+              } ${excludedPage(p) ? 'bg-gray-100 text-gray-400' : ''}`}
+            >
+              {p.url && <img src={p.url} alt={`Page ${p.page} thumbnail`} className={`w-full ${excludedPage(p) ? 'opacity-40' : ''}`} />}
+              <span className="block py-0.5">p{p.page}{flaggedPage(p) ? ' !' : ''}</span>
+              {excludedPage(p) && <span className="block pb-0.5 leading-tight">{p.excluded_reason}</span>}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* The page is scaled to fit this column whole, both ways (container query units), times the
+          zoom; zoomed in, the column scrolls. */}
+      <div
+        ref={pageColumn}
+        data-testid="page-column"
+        className={`flex-1 min-w-0 h-full ${zoom > 1 ? 'overflow-auto' : 'overflow-hidden'}`}
+        style={{ containerType: 'size' }}
+      >
         {page ? (
-          <>
+          <div
+            className="relative mx-auto border border-gray-300 bg-white"
+            style={{
+              aspectRatio: `${page.width_px} / ${page.height_px}`,
+              width: `calc(min(100cqw, 100cqh * ${page.width_px} / ${page.height_px}) * ${zoom})`,
+            }}
+          >
+            {page.url ? (
+              <img src={page.url} alt={`Page ${page.page}`} className="absolute inset-0 w-full h-full" />
+            ) : (
+              <p className="p-4 text-sm text-gray-500">The image for this page is missing.</p>
+            )}
+            <Overlay
+              page={page} paper={paper} sel={sel} onSelect={select} onResize={onResize} onMove={onMove}
+              onDragStart={onDragStart} onDragEnd={onDragEnd} drawKind={readOnly ? null : drawing?.kind} onDraw={onDraw}
+            />
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">This paper has no pages.</p>
+        )}
+      </div>
+
+      {/* Beside the page, so the page can take the window's full height: the tools and notes for
+          the page shown, then the question list, which scrolls on its own. */}
+      <div className="w-64 shrink-0 h-full flex flex-col">
+        {page && (
+          <div className="shrink-0">
             {!readOnly && (
               <DrawToolbar
                 answerOnly={answerOnly}
@@ -412,122 +589,113 @@ export default function PaperEditor({ paper, onChange, renderAnswers = null, foc
                 onCancel={cancelDraw}
               />
             )}
+            <p className="mb-2 text-xs text-gray-500">
+              {sel && !readOnly ? 'Arrow keys move the box (Shift: further). ' : 'Arrow keys or the wheel turn pages. '}
+              Ctrl+wheel zooms.{readOnly ? '' : ' Ctrl+Z undoes, Ctrl+Y redoes.'}
+              {zoom > 1 && (
+                <>
+                  {' '}<span className="text-gray-700">{Math.round(zoom * 100)}%</span>{' '}
+                  <button type="button" onClick={() => setZoom(1)} className="text-blue-700 hover:underline">Fit page</button>
+                </>
+              )}
+            </p>
             {!readOnly && sel && !prompt && !drawing && (
               <SelectionPanel paper={paper} sel={sel} onDelete={() => edit(p => deleteRect(p, sel))} onAssign={onAssign} />
             )}
             {excludedPage(page) && (
-              <p className="mb-2 text-sm text-gray-700 bg-gray-100 border border-gray-300 rounded px-3 py-1">
+              <p className="mb-2 text-xs text-gray-700 bg-gray-100 border border-gray-300 rounded px-2 py-1">
                 Not used by the pipeline: {page.excluded_reason}. Draw boxes here if it holds questions.
               </p>
             )}
             {flaggedPage(page) && (
-              <p className="mb-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-1">
+              <p className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                 Page {page.page} needs review{page.review_reason ? `: ${page.review_reason}` : ''}
               </p>
             )}
-            <div
-              className="relative mx-auto max-w-3xl border border-gray-300"
-              style={{ aspectRatio: `${page.width_px} / ${page.height_px}` }}
-            >
-              {page.url ? (
-                <img src={page.url} alt={`Page ${page.page}`} className="absolute inset-0 w-full h-full" />
-              ) : (
-                <p className="p-4 text-sm text-gray-500">The image for this page is missing.</p>
-              )}
-              <Overlay
-                page={page} paper={paper} sel={sel} onSelect={setSel} onResize={onResize} onMove={onMove}
-                onDragEnd={onDragEnd} drawKind={readOnly ? null : drawing?.kind} onDraw={onDraw}
-              />
-            </div>
-          </>
-        ) : (
-          <p className="text-sm text-gray-500">This paper has no pages.</p>
+          </div>
         )}
-      </div>
-
-      <aside aria-label="Questions" className="w-64 shrink-0 max-h-[80vh] overflow-y-auto">
-        {paper.warnings?.map((w, i) => (
-          <p key={i} className="mb-2 text-xs text-amber-800">{w}</p>
-        ))}
-        {paper.questions.length === 0 ? (
-          <p className="text-sm text-gray-500">No questions were found for this paper.</p>
-        ) : (
-          <ul className="space-y-1">
-            {paper.questions.map((q, k) => {
-              const active = sel != null && sel.list !== 'orphan' && sel.q === k
-              const onQuestionRect = active && sel.list === 'question'
-              const rect = onQuestionRect ? getRect(paper, sel) : null
-              const ownDot = !answerOnly && !renderAnswers
-              return (
-                <li key={q.number} className={`rounded border px-2 py-1 ${
-                  active ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      data-flagged={q.flags.length > 0 || undefined}
-                      aria-pressed={active}
-                      onClick={() => chooseQuestion(k)}
-                      className="flex-1 text-left text-sm"
-                    >
-                      <span className="font-medium">{answerOnly ? 'Answer' : 'Question'} {q.number}</span>
-                      {ownDot && q.answer_rects.length > 0 && (
-                        <span
-                          role="img" aria-label="has an answer" title="Has an answer"
-                          className="ml-1.5 inline-block h-2 w-2 rounded-full bg-green-600 align-middle"
-                        />
-                      )}
-                      {answerOnly && (
-                        <span className="text-xs text-gray-500">
-                          {' '}({q.answer_rects.length} rectangle{q.answer_rects.length === 1 ? '' : 's'})
-                        </span>
-                      )}
-                      {ownDot && q.answer_rects.length === 0 && (
-                        <span className="block text-xs text-amber-800">No answer</span>
-                      )}
-                      {q.flags.map(f => (
-                        <span key={f} className="block text-xs text-amber-800">{f}</span>
-                      ))}
-                    </button>
-                    <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), followSel)} />
-                  </div>
-                  {renderAnswers && renderAnswers(q, k)}
-                  {active && !readOnly && (
-                    <div className="mt-1 flex flex-wrap gap-1 text-xs">
-                      {k > 0 && (
-                        <button type="button" className="text-blue-700 hover:underline"
-                          onClick={() => edit(p => mergeWithPrevious(p, k))}>
-                          Merge with previous
-                        </button>
-                      )}
-                      {rect && sel.i > 0 && (
-                        <button type="button" className="text-blue-700 hover:underline"
-                          onClick={() => edit(p => splitBetween(p, k, sel.i))}>
-                          Split before selected rectangle
-                        </button>
-                      )}
-                      {rect && (
-                        <button type="button" className="text-blue-700 hover:underline"
-                          onClick={() => edit(p => splitThrough(p, k, sel.i, (rect.y0 + rect.y1) / 2))}>
-                          Split selected rectangle in half
-                        </button>
-                      )}
+        <aside aria-label="Questions" className="flex-1 min-h-0 overflow-y-auto">
+          {paper.warnings?.map((w, i) => (
+            <p key={i} className="mb-2 text-xs text-amber-800">{w}</p>
+          ))}
+          {paper.questions.length === 0 ? (
+            <p className="text-sm text-gray-500">No questions were found for this paper.</p>
+          ) : (
+            <ul className="space-y-1">
+              {paper.questions.map((q, k) => {
+                const active = sel != null && sel.list !== 'orphan' && sel.q === k
+                const onQuestionRect = active && sel.list === 'question'
+                const rect = onQuestionRect ? getRect(paper, sel) : null
+                const ownDot = !answerOnly && !renderAnswers
+                return (
+                  <li key={q.number} className={`rounded border px-2 py-1 ${
+                    active ? 'border-blue-600 bg-blue-50' : q.flags.length ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        data-flagged={q.flags.length > 0 || undefined}
+                        aria-pressed={active}
+                        onClick={() => chooseQuestion(k)}
+                        className="flex-1 text-left text-sm"
+                      >
+                        <span className="font-medium">{answerOnly ? 'Answer' : 'Question'} {q.number}</span>
+                        {ownDot && q.answer_rects.length > 0 && (
+                          <span
+                            role="img" aria-label="has an answer" title="Has an answer"
+                            className="ml-1.5 inline-block h-2 w-2 rounded-full bg-green-600 align-middle"
+                          />
+                        )}
+                        {answerOnly && (
+                          <span className="text-xs text-gray-500">
+                            {' '}({q.answer_rects.length} rectangle{q.answer_rects.length === 1 ? '' : 's'})
+                          </span>
+                        )}
+                        {ownDot && q.answer_rects.length === 0 && (
+                          <span className="block text-xs text-amber-800">No answer</span>
+                        )}
+                        {q.flags.map(f => (
+                          <span key={f} className="block text-xs text-amber-800">{f}</span>
+                        ))}
+                      </button>
+                      <NumberField paper={paper} q={k} onCommit={n => edit(p => renumber(p, k, n), followSel)} />
                     </div>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-        {paper.orphan_answers.length > 0 && (
-          <p className="mt-2 text-xs text-gray-600">
-            {paper.orphan_answers.length} answer rectangle{paper.orphan_answers.length === 1 ? '' : 's'} not matched to a question (grey, dashed).
-            They are not imported.
-          </p>
-        )}
-      </aside>
-
-      {aside}
+                    {renderAnswers && renderAnswers(q, k)}
+                    {active && !readOnly && (
+                      <div className="mt-1 flex flex-wrap gap-1 text-xs">
+                        {k > 0 && (
+                          <button type="button" className="text-blue-700 hover:underline"
+                            onClick={() => edit(p => mergeWithPrevious(p, k))}>
+                            Merge with previous
+                          </button>
+                        )}
+                        {rect && sel.i > 0 && (
+                          <button type="button" className="text-blue-700 hover:underline"
+                            onClick={() => edit(p => splitBetween(p, k, sel.i))}>
+                            Split before selected rectangle
+                          </button>
+                        )}
+                        {rect && (
+                          <button type="button" className="text-blue-700 hover:underline"
+                            onClick={() => edit(p => splitThrough(p, k, sel.i, (rect.y0 + rect.y1) / 2))}>
+                            Split selected rectangle in half
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          {paper.orphan_answers.length > 0 && (
+            <p className="mt-2 text-xs text-gray-600">
+              {paper.orphan_answers.length} answer rectangle{paper.orphan_answers.length === 1 ? '' : 's'} not matched to a question (grey, dashed).
+              They are not imported.
+            </p>
+          )}
+        </aside>
+      </div>
     </div>
   )
 }

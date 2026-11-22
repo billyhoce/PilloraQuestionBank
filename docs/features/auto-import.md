@@ -226,9 +226,16 @@ Each card shows, per job:
 
 ## Review page
 
-`/admin/import/jobs/:jobId/review`, from the review queue or All jobs. The header links back to the
-queue and on to the **next job** (the oldest other card waiting; a pair counts as one). It opens on
-the paper named by `?paper=` (the queue's link to a pair), else the first undecided paper.
+`/admin/import/jobs/:jobId/review`, from the review queue or All jobs. It opens on the paper named
+by `?paper=` (the queue's link to a pair), else the first undecided paper.
+
+- **Fits the window:** no import sub-navigation; the page under review starts right below the site
+  header and is scaled to fit the window whole. Left to right: **← Review queue** above the page
+  strip, page, drawing tools and page notes above the question list, then the job column. Each side
+  column scrolls on its own.
+- **Job column:** the filename, Saving…/Saved and "edited", the **next job**
+  (the oldest other card waiting; a pair counts as one), errors, sections not extracted, paper
+  tabs, the booklet toggle of a pair, then the metadata sidebar.
 
 - **A question paper linked to an answer booklet** is reviewed with it: a toggle switches the page
   view between the two booklets, each question lists the answers landing on it, and one confirm
@@ -246,7 +253,11 @@ the paper named by `?paper=` (the queue's link to a pair), else the first undeci
     questions." Boxes drawn there are cropped and imported like any other.
   - The page shown first is the first question's.
 - **Page view:** question rectangles in blue, answer rectangles in green, unmatched answers (orphans)
-  in grey dashed.
+  in grey dashed; outlines are a thin line at any zoom (thicker for the selected question).
+  - **Turning pages:** the arrow keys while no box is selected (down/right next, up/left
+    previous), or the wheel, one page per notch. Turning away from a selected box deselects it.
+  - **Zoom:** Ctrl+wheel zooms in around the pointer, up to 5×, and back out to the whole page
+    (the minimum). Zoomed in, the wheel scrolls the page instead of turning it; **Fit page** resets.
 - **Question list:** always sorted by question number; each question with its number, its flags,
   and a green dot when it has an answer box or an amber "No answer" when it has none (answer pages'
   problems show on the page, not on each question). Clicking one selects it and jumps to its page. Paper warnings sit above it. Unmatched answer
@@ -267,7 +278,13 @@ sections not extracted and warnings cannot be changed.
   page and at least 4 pt in each direction.
 - The **Selected box** bar names the box, offers **Delete box**, and for an answer box a **Belongs
   to** menu: move it to another question, or to "No question" (an orphan, not imported). An orphan
-  can be given to a question the same way. Delete/Backspace deletes; Esc deselects.
+  can be given to a question the same way. Delete/Backspace deletes; Esc deselects. The arrow keys
+  move the selected box 1 pt (Shift: 10 pt).
+- **Undo:** Ctrl+Z undoes the last edit, Ctrl+Y (or Ctrl+Shift+Z) redoes, up to the last 10 edits.
+  A whole drag, or a run of arrow-key presses on one box, is one step. Undo and redo open the page
+  of what changed, with the restored box selected; when the change touched several pages, the
+  first; when it removed a box (undoing a draw), its page with nothing selected. The history lasts while the
+  paper is open: switching paper tab or booklet clears it. An undo is saved like any edit.
 - **Draw question box** / **Draw answer box** (answer-only papers have only the latter) first asks
   which question the box belongs to, then the admin drags on the page. One box per press; Esc
   cancels.
@@ -290,7 +307,7 @@ sections not extracted and warnings cannot be changed.
   its place in the list. Renumbering a question moves it the same way.
 - Deleting a question's last question box deletes the question; its answer boxes become orphans.
 - **Saving:** edits save automatically 800 ms after the last change and on leaving the page. The
-  header shows Saving… / Saved / Not saved (with the reason) and "edited". The generated proposal is
+  job column shows Saving… / Saved / Not saved (with the reason) and "edited". The generated proposal is
   kept underneath, but there is no "reset to original".
 - Edits are accepted only while the job is `review_ready`, and are refused whole if any rule breaks:
   a box off its paper's pages or outside the page, a box with no area, a repeated or non-positive

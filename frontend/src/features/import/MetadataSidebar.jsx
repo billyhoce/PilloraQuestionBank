@@ -23,10 +23,10 @@ function SelectField({ label, value, onChange, options }) {
 // `schoolCombobox` swaps the school dropdown for the type-to-search SchoolCombobox (the review page),
 // which also takes a school not in the list as `metadata.new_school_name` (created on confirm);
 // `extractedSchool` is the school name read from the cover, shown there while it matches no school.
-// `warning` is shown above the confirm button without disabling it.
+// `warning` is shown above the confirm button without disabling it. `width` is a Tailwind width class.
 export default function MetadataSidebar({ metadata, onChange, refs, questionCount, answerCount, onNext, onCancel, loading, error,
   confirmLabel = 'Confirm & Import →', cancelLabel = 'Cancel Import', canConfirm = true,
-  schoolCombobox = false, extractedSchool = null, warning = null }) {
+  schoolCombobox = false, extractedSchool = null, warning = null, width = 'w-52' }) {
   function set(key, val) {
     onChange({ ...metadata, [key]: val })
   }
@@ -48,7 +48,7 @@ export default function MetadataSidebar({ metadata, onChange, refs, questionCoun
     ? extractedSchool : null
 
   return (
-    <div className="w-52 flex-shrink-0 flex flex-col gap-3 p-4 bg-white border-l border-gray-200 overflow-y-auto">
+    <div className={`${width} flex-shrink-0 flex flex-col gap-3 p-4 bg-white border-l border-gray-200 overflow-y-auto`}>
       {!refs ? (
         <div className="flex justify-center py-4"><Spinner /></div>
       ) : (

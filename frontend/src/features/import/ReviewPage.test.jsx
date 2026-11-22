@@ -222,6 +222,69 @@ describe('ReviewPage', () => {
       expect(screen.getAllByText(/^Question \d$/)).toHaveLength(3)
     })
 
+    it('turns pages with the arrow keys and the wheel while no box is selected', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.keyboard('{ArrowDown}')
+      expect(screen.getByAltText('Page 3')).toBeInTheDocument()
+      await userEvent.keyboard('{ArrowRight}')  // the last page: stays
+      expect(screen.getByAltText('Page 3')).toBeInTheDocument()
+      await userEvent.keyboard('{ArrowLeft}')
+      expect(screen.getByAltText('Page 2')).toBeInTheDocument()
+      const column = screen.getByTestId('page-column')
+      fireEvent.wheel(column, { deltaY: 100 })
+      expect(screen.getByAltText('Page 3')).toBeInTheDocument()
+      fireEvent.wheel(column, { deltaY: -100 })  // the same burst: no second turn
+      expect(screen.getByAltText('Page 3')).toBeInTheDocument()
+    })
+
+    const questionBox = () => document.querySelector('g[data-kind="question"] rect')
+
+    it('moves the selected box with the arrow keys, undoing the run of presses in one step', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(questionBox())
+      await userEvent.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}{Shift>}{ArrowDown}{/Shift}')
+      expect(screen.getByAltText('Page 2')).toBeInTheDocument()  // the page did not turn
+      // 1 pt per press, 10 with Shift; 2 px = 1 pt.
+      expect(questionBox()).toHaveAttribute('x', '26')
+      expect(questionBox()).toHaveAttribute('y', '60')
+      await userEvent.keyboard('{Control>}z{/Control}')
+      expect(questionBox()).toHaveAttribute('x', '20')
+      expect(questionBox()).toHaveAttribute('y', '40')
+      await userEvent.keyboard('{Control>}y{/Control}')
+      expect(questionBox()).toHaveAttribute('x', '26')
+      await waitFor(() => expect(api.import.saveProposal).toHaveBeenCalled(), { timeout: 3000 })
+      expect(api.import.saveProposal.mock.calls.at(-1)[1].papers[0].questions[0].question_rects[0]).toMatchObject({ x0: 13, y0: 30 })
+    })
+
+    it('undoing an edit made on another page goes back to that page and selects the box', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(questionBox())
+      await userEvent.keyboard('{ArrowRight}{Escape}{ArrowDown}')
+      expect(screen.getByAltText('Page 3')).toBeInTheDocument()
+      await userEvent.keyboard('{Control>}z{/Control}')
+      expect(screen.getByAltText('Page 2')).toBeInTheDocument()
+      expect(screen.getByTestId('selected-rect')).toHaveAttribute('x', '20')
+      expect(screen.getByRole('region', { name: 'Selected box' })).toHaveTextContent('Question box of question 1')
+    })
+
+    it('undoes a whole drag in one step', async () => {
+      renderPage()
+      await screen.findByAltText('Page 2')
+      await userEvent.click(questionBox())
+      overlayAtOneToOne()
+      const box = screen.getByTestId('selected-rect')
+      fireEvent.pointerDown(box, { clientX: 40, clientY: 80, pointerId: 1 })
+      fireEvent.pointerMove(box, { clientX: 50, clientY: 90, pointerId: 1 })
+      fireEvent.pointerMove(box, { clientX: 60, clientY: 100, pointerId: 1 })
+      fireEvent.pointerUp(box, { clientX: 60, clientY: 100, pointerId: 1 })
+      expect(questionBox()).toHaveAttribute('x', '40')
+      await userEvent.keyboard('{Control>}z{/Control}')
+      expect(questionBox()).toHaveAttribute('x', '20')
+    })
+
     // The overlay shows the 200x400 px page image at 1:1, so 2 px = 1 pt.
     const overlayAtOneToOne = () => {
       const svg = screen.getByTestId('overlay')
