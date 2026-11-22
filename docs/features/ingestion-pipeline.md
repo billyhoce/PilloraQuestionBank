@@ -132,9 +132,10 @@ Decides which pages are which and writes the plan (`segments.json`).
   preamble above the first question with none open ("Answer all the questions.", a section
   heading), which is left out of every rectangle.
 - A rectangle is trimmed to its ink on three sides but keeps the blank space below its question:
-  that is the working space. Two exceptions: a graph-paper page ends at its ink, and a question's
-  last rectangle ends at an answer line (`Answer …… cm [1]`), recognised by position alone: its
-  bottom row of text starts right of 30% of the column, has 40pt+ of blank above it and nothing below.
+  that is the working space. Two exceptions: a graph-paper page ends at its ink, and a rectangle
+  whose bottom row is an answer line (`Answer …… cm [1]`) ends there, on every page of the question,
+  not just its last. The line is recognised by position alone: it starts right of 30% of the column,
+  has 40pt+ of blank above it and nothing below.
 - Flagged `needs_review`: a textless page inside a digital paper, a content page with no question
   number and no open question, a paper with no question numbers at all (every page left for review),
   and the page where question numbering resumes after a gap (Q3 → Q5): a paper almost never skips a

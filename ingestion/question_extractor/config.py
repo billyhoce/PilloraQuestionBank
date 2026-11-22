@@ -353,7 +353,7 @@ class ExtractConfig:
     crop_pad: float = 2.0
     """Ink clearance left on all four sides of a trimmed crop."""
     answer_line_min_start: float = 0.3
-    """A question's last crop ends at its bottom line when that line starts at
+    """A crop ends at its bottom line when that line starts at
     least this fraction of the crop's width right of ``x_cut`` (an answer line,
     ``Answer ...... cm [1]``), with the two checks below.
 

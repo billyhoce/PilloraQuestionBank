@@ -13,8 +13,10 @@ question is the space the candidate writes in, so it belongs to the question it
 was left for. Two exceptions, both for the same reason. On a graph-grid page the
 grid is the writing space, so what lies below it is margin and goes. And a
 question that ends with an answer line (``Answer ...... cm [1]``) has its working
-space *above* that line, so a question's last crop ends there — see
-:func:`_answer_line_bottom`.
+space *above* that line, so any crop of it ends there — see
+:func:`_answer_line_bottom`. That holds on every page a question spans, not just
+its last: a part continued onto the next page has no answer line yet, so a crop
+whose bottom row *is* one has no working space running on below it.
 
 It runs *after* the boundaries are decided and only ever makes a rectangle
 smaller, so which content belongs to which question is settled before this module
@@ -96,15 +98,6 @@ def trim_bands(
     rectangle holds no ink in the content column keeps its untrimmed rectangle.
     """
     geometry = {geom.number: geom for geom in pages}
-    # Each question's last crop: the only one an answer line may end, since the
-    # question's working space can run on past every earlier page.
-    last: dict[int, Band] = {}
-    for result in results:
-        for band in result.bands:
-            held = last.get(band.number)
-            if held is None or (band.page, band.segment) > (held.page, held.segment):
-                last[band.number] = band
-
     with pymupdf.open(pdf_path) as doc:
         for result in results:
             geom = geometry.get(result.page)
@@ -122,7 +115,6 @@ def trim_bands(
                     calibration.for_page(result.page),
                     config,
                     result.grid,
-                    is_last=last.get(band.number) is band,
                 )
 
     trimmed = sum(
@@ -143,13 +135,8 @@ def _trim(
     calibration: Calibration,
     config: ExtractConfig,
     grid: GridPage | None = None,
-    is_last: bool = False,
 ) -> None:
-    """Replace one band's rectangle with its trimmed version.
-
-    ``is_last`` marks the question's last crop, the only one whose bottom an
-    answer line may pull up.
-    """
+    """Replace one band's rectangle with its trimmed version."""
     ink, pixel_ink = _ink_box(
         band.rect, page, geom, lines, figures, calibration, config, grid
     )
@@ -174,7 +161,7 @@ def _trim(
         trimmed = pymupdf.Rect(
             trimmed.x0, trimmed.y0, trimmed.x1, min(trimmed.y1, ink.y1 + config.crop_pad)
         )
-    elif is_last:
+    else:
         answer_bottom = _answer_line_bottom(band, lines, figures, calibration, config, ink)
         if answer_bottom is not None:
             log.debug(
@@ -311,7 +298,7 @@ def _answer_line_bottom(
     """Bottom of the band's answer line, if its last row of text is one; else ``None``.
 
     A paper that prints answer lines puts the working space *above* each one, so
-    the blank below a question's last answer line is page margin, not space to
+    the blank below a crop's last answer line is page margin, not space to
     write in. The line is recognised by where it sits, never by what it says —
     ``Answer ____``, a bare run of dots and ``x = ......`` all look the same here:
 
