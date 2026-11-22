@@ -17,12 +17,16 @@ Two x-values describe a paper's layout:
 ``x_cut`` is found by clustering the x-position of every line's leading token.
 A well-formed question page yields one cluster in the gutter (the numbers) and
 one in the content column; ``x_cut`` is the midpoint of the gap between them.
+
+A page that sets its question numbers further right than the rest of the paper
+gets its own ``x_cut`` (:func:`with_page_cuts`); :meth:`Calibration.for_page`
+is what every per-page reader goes through.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from .config import ExtractConfig
 from .furniture import Furniture
@@ -44,20 +48,29 @@ class Calibration:
     """Left edge of the content column."""
     confident: bool
     """False when no distinct gutter cluster was found and a fallback was used."""
+    page_cuts: dict[int, float] = field(default_factory=dict)
+    """``x_cut`` of each page that indents its question numbers past the paper's."""
+
+    def for_page(self, page: int) -> Calibration:
+        """This calibration as seen from one page: ``x_cut`` is that page's own."""
+        cut = self.page_cuts.get(page)
+        return self if cut is None else replace(self, x_cut=cut, page_cuts={})
 
     def entry(self) -> dict:
-        """JSON-ready: the five fields by name."""
+        """JSON-ready: the fields by name, ``page_cuts`` keyed by page number as text."""
         return {
             "x_cut": self.x_cut,
             "content_right": self.content_right,
             "gutter_x": self.gutter_x,
             "content_x": self.content_x,
             "confident": self.confident,
+            "page_cuts": {str(page): cut for page, cut in self.page_cuts.items()},
         }
 
     @classmethod
     def from_entry(cls, entry: dict) -> Calibration:
-        return cls(**entry)
+        page_cuts = {int(page): cut for page, cut in entry.get("page_cuts", {}).items()}
+        return cls(**{**entry, "page_cuts": page_cuts})
 
 
 def gutter_candidates(
@@ -203,6 +216,62 @@ def _split_columns(
         x_cut,
     )
     return gutter_x, fallback, x_cut, False
+
+
+def with_page_cuts(
+    calibration: Calibration,
+    pages: list[PageGeometry],
+    furniture: Furniture,
+    config: ExtractConfig,
+) -> Calibration:
+    """``calibration`` with an ``x_cut`` of their own for pages that need one.
+
+    The answer booklet of BPGHS 2020 EM P1 indents Q1 and Q2 on its first page to
+    x=54-56, where every other page sets its numbers at x=33-41. The paper's cut,
+    52.0, read them as body text and the page as a continuation with no question
+    open, so neither question got an answer. The rule for a shifted number in
+    :func:`_split_columns` could not save them: on that scan the content column's
+    cluster chains rightwards from 53.5, so they are not left of it.
+    """
+    cuts: dict[int, float] = {}
+    for geom in pages:
+        if not geom.has_text:
+            continue
+        cut = _indented_cut(furniture.body_lines(geom), calibration.x_cut, config)
+        if cut is not None:
+            log.info(
+                "page %d: question numbers set right of x_cut=%.1f; using x_cut=%.1f on this page",
+                geom.number,
+                calibration.x_cut,
+                cut,
+            )
+            cuts[geom.number] = cut
+    return replace(calibration, page_cuts=cuts) if cuts else calibration
+
+
+def _indented_cut(body_lines: list[TextLine], x_cut: float, config: ExtractConfig) -> float | None:
+    """A page's own ``x_cut``, or ``None`` when the paper's serves it.
+
+    Asked only of a page with no question number left of the paper's cut. The
+    page's numbers must stand ``min_gutter_gap`` clear of every other line right
+    of that cut, so a number inside the text — a lone ``2`` among a display's
+    fragments, set left of the next fragment but right of the prose — never
+    qualifies.
+    """
+    if any(line.leading_x <= x_cut and is_anchor_token(line.leading_token) for line in body_lines):
+        return None
+    right = [line for line in body_lines if line.leading_x > x_cut]
+    text = [line.leading_x for line in right if not is_anchor_token(line.leading_token)]
+    if not text:
+        return None
+    content_x = min(text)
+    gutter = [
+        line.leading_x
+        for line in right
+        if is_anchor_token(line.leading_token)
+        and line.leading_x <= content_x - config.min_gutter_gap
+    ]
+    return (max(gutter) + content_x) / 2.0 if gutter else None
 
 
 def _content_right(right_edges: list[float], page_right: float, config: ExtractConfig) -> float:

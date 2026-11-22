@@ -39,7 +39,13 @@ from pathlib import Path
 import pymupdf
 
 from .boundaries import PageResult, Question, build_questions
-from .calibration import Calibration, CalibrationError, calibrate, find_question_pages
+from .calibration import (
+    Calibration,
+    CalibrationError,
+    calibrate,
+    find_question_pages,
+    with_page_cuts,
+)
 from .config import ExtractConfig
 from .furniture import Furniture, detect_furniture
 from .geometry import PageGeometry, TextLine, extract_document
@@ -240,6 +246,16 @@ def locate_questions(
             calibration = calibrate(pages, furniture, calibration_pages, config)
         except CalibrationError as exc:
             raise ExtractionError(f"{pdf_path.name}: {exc}") from exc
+        calibration = with_page_cuts(
+            calibration,
+            [
+                geom
+                for geom in pages
+                if geom.number >= resolved_start and (end_page is None or geom.number <= end_page)
+            ],
+            furniture,
+            config,
+        )
 
         if resolved_start > 1:
             reason = (

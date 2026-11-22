@@ -10,8 +10,11 @@ the question.
 This stage shrinks each rectangle onto the question's own ink, on three sides.
 The bottom is left where the boundary stage put it: the blank space under a
 question is the space the candidate writes in, so it belongs to the question it
-was left for. A graph-grid page is the exception, and for the same reason: there
-the grid is the writing space, so what lies below it is margin and goes.
+was left for. Two exceptions, both for the same reason. On a graph-grid page the
+grid is the writing space, so what lies below it is margin and goes. And a
+question that ends with an answer line (``Answer ...... cm [1]``) has its working
+space *above* that line, so a question's last crop ends there — see
+:func:`_answer_line_bottom`.
 
 It runs *after* the boundaries are decided and only ever makes a rectangle
 smaller, so which content belongs to which question is settled before this module
@@ -93,6 +96,14 @@ def trim_bands(
     rectangle holds no ink in the content column keeps its untrimmed rectangle.
     """
     geometry = {geom.number: geom for geom in pages}
+    # Each question's last crop: the only one an answer line may end, since the
+    # question's working space can run on past every earlier page.
+    last: dict[int, Band] = {}
+    for result in results:
+        for band in result.bands:
+            held = last.get(band.number)
+            if held is None or (band.page, band.segment) > (held.page, held.segment):
+                last[band.number] = band
 
     with pymupdf.open(pdf_path) as doc:
         for result in results:
@@ -108,9 +119,10 @@ def trim_bands(
                     geom,
                     lines,
                     result.figures,
-                    calibration,
+                    calibration.for_page(result.page),
                     config,
                     result.grid,
+                    is_last=last.get(band.number) is band,
                 )
 
     trimmed = sum(
@@ -131,8 +143,13 @@ def _trim(
     calibration: Calibration,
     config: ExtractConfig,
     grid: GridPage | None = None,
+    is_last: bool = False,
 ) -> None:
-    """Replace one band's rectangle with its trimmed version."""
+    """Replace one band's rectangle with its trimmed version.
+
+    ``is_last`` marks the question's last crop, the only one whose bottom an
+    answer line may pull up.
+    """
     ink, pixel_ink = _ink_box(
         band.rect, page, geom, lines, figures, calibration, config, grid
     )
@@ -157,6 +174,21 @@ def _trim(
         trimmed = pymupdf.Rect(
             trimmed.x0, trimmed.y0, trimmed.x1, min(trimmed.y1, ink.y1 + config.crop_pad)
         )
+    elif is_last:
+        answer_bottom = _answer_line_bottom(band, lines, figures, calibration, config, ink)
+        if answer_bottom is not None:
+            log.debug(
+                "page %d: question %d ends at its answer line (y=%.1f)",
+                band.page,
+                band.number,
+                answer_bottom,
+            )
+            trimmed = pymupdf.Rect(
+                trimmed.x0,
+                trimmed.y0,
+                trimmed.x1,
+                min(trimmed.y1, answer_bottom + config.crop_pad),
+            )
 
     # The pixel pass looks only at the region the ink occupies, not at the answer
     # space kept below it. That space is blank but for the divider rule marking the
@@ -268,6 +300,71 @@ def _ink_box(
     return box, pixel_ink
 
 
+def _answer_line_bottom(
+    band: Band,
+    lines: list[TextLine],
+    figures: PageFigures,
+    calibration: Calibration,
+    config: ExtractConfig,
+    ink: pymupdf.Rect,
+) -> float | None:
+    """Bottom of the band's answer line, if its last row of text is one; else ``None``.
+
+    A paper that prints answer lines puts the working space *above* each one, so
+    the blank below a question's last answer line is page margin, not space to
+    write in. The line is recognised by where it sits, never by what it says —
+    ``Answer ____``, a bare run of dots and ``x = ......`` all look the same here:
+
+    1. The bottom row of text starts right of ``answer_line_min_start`` across the
+       crop, where a part's own text, opening on its label at the left, never does.
+    2. Nothing lies below it: no text, figure, grid or scanned ink.
+    3. At least ``answer_line_min_gap`` of blank space separates it from the ink
+       above, which is what tells it from a mark wrapped onto a line of its own or
+       a centred formula, both printed hard under the question's text. With nothing
+       above it at all the band's top is the edge, so a last page holding only
+       working space and the answer line still qualifies.
+
+    The row is every text line overlapping the bottom one, since a PDF often sets
+    ``Answer``, the dots and ``[3]`` as separate lines.
+    """
+    rect = band.rect
+    column = band.partition if band.partition is not None else rect
+    inked: list[tuple[TextLine, pymupdf.Rect]] = []
+    for line in lines:
+        if line.y1 <= rect.y0 or line.y0 >= rect.y1:
+            continue
+        box = line.content_ink(calibration.x_cut)
+        if box is not None:
+            inked.append((line, box))
+    if not inked:
+        return None
+
+    bottom, row = max(inked, key=lambda pair: pair[0].y1)
+    above: list[pymupdf.Rect] = []
+    for line, box in inked:
+        if line is bottom:
+            continue
+        if line.overlaps_row(bottom):
+            row = _grown(row, box)
+        else:
+            above.append(box)
+
+    if row.x0 - column.x0 < config.answer_line_min_start * column.width:
+        return None
+    if ink.y1 > row.y1 + config.answer_line_below_tolerance:
+        return None
+
+    for figure in overlapping_figures(figures.figures, rect.y0, rect.y1, config):
+        if figure.x1 > calibration.x_cut:
+            above.append(
+                pymupdf.Rect(figure.x0, max(figure.y0, rect.y0), figure.x1, min(figure.y1, rect.y1))
+            )
+    ceiling = max((box.y1 for box in above if box.y0 < row.y0), default=rect.y0)
+    if row.y0 - ceiling < config.answer_line_min_gap:
+        return None
+    return row.y1
+
+
 def _grown(box: pymupdf.Rect | None, addition: pymupdf.Rect) -> pymupdf.Rect:
     """``box`` widened to hold ``addition``, or ``addition`` if there is no box.
 
@@ -377,8 +474,8 @@ def _shrink(
 ) -> pymupdf.Rect:
     """``rect`` pulled in to ``ink`` plus a pad, never growing.
 
-    Three edges only - :func:`_trim` takes the fourth on a grid page, where the
-    reasoning below inverts. The blank space *below* a question is the space the
+    Three edges only - :func:`_trim` takes the fourth on a grid page and under a
+    question's closing answer line, where the reasoning below inverts. The blank space *below* a question is the space the
     candidate is meant to write in, so it belongs to the question it was left for
     — the same reasoning :func:`boundaries._snap_boundary` already applies to a
     large undivided gap. Trimming it turns a question with a page of working space

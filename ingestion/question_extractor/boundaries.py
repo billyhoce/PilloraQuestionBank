@@ -438,6 +438,7 @@ def build_questions(
         calibration,
         config,
     )
+    gaps = _numbering_gaps(anchors_by_page)
 
     questions: dict[int, Question] = {}
     results: list[PageResult] = []
@@ -561,7 +562,7 @@ def build_questions(
                     band_limits.top,
                     bottom,
                     figures,
-                    calibration,
+                    calibration.for_page(geom.number),
                     config,
                     is_continuation=True,
                     band_limits=band_limits,
@@ -602,7 +603,7 @@ def build_questions(
                 top,
                 bottom,
                 figures,
-                calibration,
+                calibration.for_page(geom.number),
                 config,
                 is_continuation=False,
                 band_limits=band_limits,
@@ -617,6 +618,19 @@ def build_questions(
             result.review_reason = "no question boundaries could be derived"
             log.warning("page %d: no question boundaries could be derived", geom.number)
 
+        if geom.number in gaps and not result.needs_review:
+            # A paper almost never skips a number, so a gap is a question whose
+            # number was missed and whose content sits, unseen, in the question
+            # above. Flagging the page where the numbering resumes turns that
+            # silent miss into one a reviewer is shown. Already warned by
+            # ``filter_sequence``; only the flag is set here.
+            before, after = gaps[geom.number]
+            result.needs_review = True
+            result.review_reason = (
+                f"question numbering jumps from {before} to {after} - a question "
+                f"may have been missed"
+            )
+
         result.bands = page_bands
         for band in page_bands:
             question = questions.setdefault(band.number, Question(number=band.number))
@@ -625,6 +639,24 @@ def build_questions(
 
     ordered = [questions[number] for number in sorted(questions)]
     return ordered, results
+
+
+def _numbering_gaps(anchors_by_page: dict[int, list[Anchor]]) -> dict[int, tuple[int, int]]:
+    """Pages where the kept numbering resumes after skipping a number, mapped to
+    the first jump on that page as ``(number before, number after)``.
+
+    The anchors are already sequence-filtered, so they rise throughout and any
+    step larger than one is a gap. Where the paper's numbering starts is not a
+    gap: a section B legitimately opens at Q15.
+    """
+    gaps: dict[int, tuple[int, int]] = {}
+    previous: int | None = None
+    for page in sorted(anchors_by_page):
+        for anchor in anchors_by_page[page]:
+            if previous is not None and anchor.number > previous + 1:
+                gaps.setdefault(page, (previous, anchor.number))
+            previous = anchor.number
+    return gaps
 
 
 def _detect_anchors(
@@ -643,7 +675,9 @@ def _detect_anchors(
     for geom in pages:
         if not geom.has_text:
             continue
-        found = find_page_anchors(furniture.body_lines(geom), calibration, config)
+        found = find_page_anchors(
+            furniture.body_lines(geom), calibration.for_page(geom.number), config
+        )
         per_page[geom.number] = found
         flat.extend(found)
 

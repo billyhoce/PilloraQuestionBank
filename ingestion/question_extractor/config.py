@@ -59,7 +59,9 @@ class ExtractConfig:
     """
     default_top_margin: float = 40.0
     default_bottom_margin: float = 40.0
-    """Body band fallbacks for papers with no repeated header/footer."""
+    """Body band fallbacks for papers with no repeated header/footer. The top one
+    gives way to body text printed above it, since with no header that text can
+    only be the page's first question."""
 
     # --- x_cut / margin calibration --------------------------------------
     cluster_tol: float = 3.0
@@ -350,6 +352,31 @@ class ExtractConfig:
     """Trim whitespace off each crop once the boundaries have been decided."""
     crop_pad: float = 2.0
     """Ink clearance left on all four sides of a trimmed crop."""
+    answer_line_min_start: float = 0.3
+    """A question's last crop ends at its bottom line when that line starts at
+    least this fraction of the crop's width right of ``x_cut`` (an answer line,
+    ``Answer ...... cm [1]``), with the two checks below.
+
+    Measured over the sample papers: answer lines start 0.36-0.63 of the way
+    across, while a last part's own text (``(b) Explain ...``) starts at 0.00-0.07
+    because its part label sits at the left. The gap check does the real work, so
+    this only has to keep left-starting text out."""
+    answer_line_min_gap: float = 40.0
+    """...and at least this much blank space, in points, sits between that line
+    and the nearest ink above it: the working space an answer line is printed
+    under. Without it, a mark wrapped onto a line of its own (the FMS key's Q7
+    ``[4]``, 1pt under its text) or a centred formula (Clementi's Q7, starting at
+    0.40) passes the start test and would lose the working space below it.
+
+    Measured over the sample papers: gaps that are not working space are 0-7pt
+    between lines of text and at most 24.6pt between parts; the smallest working
+    space above a real answer line is 64pt. 40pt sits about 1.6x clear of both,
+    roughly three lines of text."""
+    answer_line_below_tolerance: float = 1.0
+    """...and nothing reaches more than this many points below the line. The ink
+    box it is tested against is built from the same glyph boxes as the line, so
+    this only absorbs rounding; on a scan, the pixel fallback's ink rounds outward
+    onto its pixel grid, under half a point at the render zoom."""
     trim_luminance: int = 250
     """Grey level below which a pixel counts as ink.
 

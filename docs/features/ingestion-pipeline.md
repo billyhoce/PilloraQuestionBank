@@ -120,16 +120,25 @@ Decides which pages are which and writes the plan (`segments.json`).
 - If `scan` did not finish, a scan is `skipped` → reported `not_routed` with the OCR error, flagged;
   a picture-page section is located off its own thin text layer.
 - Calibration counts every question number left of the content column as gutter (a scan's pages
-  shift; some papers indent one number further). The numbering kept is the longest rising run, so a
-  stray number (a graph's axis label) is dropped rather than shutting out every question after it.
+  shift; some papers indent one number further). A page with no number left of the paper's cut,
+  whose numbers stand clear of its own text column, gets its own cut for its numbers and crops
+  (one booklet indents Q1–Q2 on its first page only). The numbering kept is the longest rising run,
+  so a stray number (a graph's axis label) is dropped rather than shutting out every question after it.
 - Header and footer: besides text repeating at one height, a page's first and last rows inside the
   margin are furniture when their text repeats on 3+ pages; on a scan, the rows stacked inside them
-  are peeled the same way (its header and footer drift from page to page).
+  are peeled the same way (its header and footer drift from page to page). A paper with no header
+  gets a 40pt top margin, which moves up to clear any text printed above it.
 - Not flagged: blank pages and pages after an end-of-paper marker (skipped with a reason), and a
   preamble above the first question with none open ("Answer all the questions.", a section
   heading), which is left out of every rectangle.
+- A rectangle is trimmed to its ink on three sides but keeps the blank space below its question:
+  that is the working space. Two exceptions: a graph-paper page ends at its ink, and a question's
+  last rectangle ends at an answer line (`Answer …… cm [1]`), recognised by position alone: its
+  bottom row of text starts right of 30% of the column, has 40pt+ of blank above it and nothing below.
 - Flagged `needs_review`: a textless page inside a digital paper, a content page with no question
-  number and no open question, a paper with no question numbers at all (every page left for review).
+  number and no open question, a paper with no question numbers at all (every page left for review),
+  and the page where question numbering resumes after a gap (Q3 → Q5): a paper almost never skips a
+  number, so a gap is a missed question hiding in the one above it.
 - Per-rectangle flags: `pixel_ink` (bounds measured from pixels, not text) and `grid_page` (a
   graph-paper page, boxed onto the grid).
 - **Render** draws each page with its rectangles in red (`pNN.png`) and writes a clean review image

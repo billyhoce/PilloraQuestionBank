@@ -116,5 +116,5 @@ STAGE = Stage(
         ctx.path(ctx.section, "manifest.json"),
         ctx.path(ctx.section, DETECTIONS_NAME),
     ],
-    version=3,  # v3: content above the first question with none open is a preamble, not flagged
+    version=6,  # v6: a question's last crop ends at a right-aligned answer line
 )

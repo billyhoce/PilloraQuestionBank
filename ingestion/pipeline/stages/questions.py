@@ -100,4 +100,5 @@ STAGE = Stage(
     outputs=lambda ctx: [
         ctx.path(ctx.section, name) for name in ("manifest.json", "tables.json", LABELLED_NAME)
     ],
+    version=2,  # v2: a paper with no header keeps text printed above the 40pt top margin
 )

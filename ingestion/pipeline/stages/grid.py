@@ -70,5 +70,5 @@ STAGE = Stage(
     inputs=plan_inputs,
     settings=extract_settings,
     outputs=lambda ctx: [ctx.path(ctx.section, GRID_NAME)],
-    version=2,  # v2: a scanned page with no long rule is straightened by its text
+    version=3,  # v3: a paper with no header keeps text printed above the 40pt top margin
 )

@@ -58,6 +58,7 @@ def draw_debug_overlay(
     rect = page.rect
 
     if calibration is not None:
+        calibration = calibration.for_page(result.page)
         _draw_calibration_lines(page, rect, calibration)
         _draw_anchors(page, result, calibration)
     _draw_partitions(page, result)

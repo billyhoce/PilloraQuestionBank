@@ -274,6 +274,23 @@ def _margin_rows(geom: PageGeometry, config: ExtractConfig, top: bool) -> list[l
     return rows
 
 
+def _above_first_line(
+    geom: PageGeometry, furniture: Furniture, top: float, config: ExtractConfig
+) -> float:
+    """``top``, moved up clear of any body text printed above it.
+
+    The fixed margin stands in for a header the paper does not have, so whatever
+    sits above it is the question itself: BPGHS 2020 EM P1 starts its pages at
+    y=15-30, and a 40pt margin dropped each of those question numbers, merging the
+    question into the one before it. A leading row repeated down the paper is still
+    cut off afterwards by the header-row rule.
+    """
+    above = [line.y0 for line in geom.lines if line.y0 < top and not furniture.is_furniture(line)]
+    if not above:
+        return top
+    return max(geom.rect.y0, min(above) - config.furniture_pad)
+
+
 def _assign_bands(
     pages: list[PageGeometry], furniture: Furniture, config: ExtractConfig, drift: bool = False
 ) -> None:
@@ -311,6 +328,8 @@ def _assign_bands(
 
     for geom in pages:
         default_top = geom.rect.y0 + config.default_top_margin
+        if median_top is None:
+            default_top = _above_first_line(geom, furniture, default_top, config)
         default_bottom = geom.rect.y1 - config.default_bottom_margin
         top = raw_tops.get(geom.number, median_top if median_top is not None else default_top)
         bottom = raw_bottoms.get(
