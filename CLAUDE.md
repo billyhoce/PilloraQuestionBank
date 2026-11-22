@@ -45,9 +45,9 @@ Issues: GitHub `billyhoce/PilloraQuestionBank` via `gh` ([docs/agents/](docs/age
   paper failing must not stop the rest. Every threshold lives in its package's config dataclass with
   its justification. Only `question_extractor/geometry.py` touches PyMuPDF extraction, only
   `question_extractor/ocr.py` runs Tesseract, only `ingester/request.py` calls Claude.
-- Ingestion stages: declare inputs/settings/outputs for the fingerprint and bump the stage `version`
-  when its output changes, or stale results are silently reused. Keep `pipeline/store.py`'s Protocol
-  free of SQLite specifics (the worker implements it on Postgres).
+- Ingestion stages: declare every file a stage leaves behind in `outputs`; a missing one is what
+  makes a run redo the task after a lost scratch folder. Keep `pipeline/store.py`'s Protocol free of
+  SQLite specifics (the worker implements it on Postgres).
 - Union PyMuPDF rects with explicit `min`/`max`, not `|` — a zero-width stroke counts as empty and is dropped.
 - Premium is one rule written twice: `premium_gate` (Python) and `restrict_premium_pool` (SQL) in
   `app/services/premium.py` — change both. A paper's premium school level comes from its **level**,

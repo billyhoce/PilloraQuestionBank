@@ -6,7 +6,7 @@ stages of the registry (:func:`wrap_registry`) and by resolving each job's scrat
 
 * **scratch** -- ``<scratch>/<job_id>/`` is the job's folder. Resolving it fetches ``source.pdf``
   from S3 when it is not there: the first ``register`` finds its input, and after a restart
-  that lost the folder the booklet is back before any stage (or the fingerprint check) reads it.
+  that lost the folder the booklet is back before any stage reads it.
   Artefacts that were lost with the folder are not fetched: ``Runner.revalidate`` finds their
   outputs missing and the tasks run again (slower, never wrong);
 * ``register`` -- before the stage, the PDF check (:func:`check_pdf`): a corrupt, password-protected

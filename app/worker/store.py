@@ -15,7 +15,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -160,7 +159,6 @@ class SqlStore:
                         traceback=None,
                         warnings=[],
                         needs_review=False,
-                        fingerprint=None,
                         started_at=now,
                         finished_at=None,
                         duration_ms=None,
@@ -179,13 +177,7 @@ class SqlStore:
                 self._current = (claimed.id, row.job_id)
                 self._touch_worker(db, row.job_id)
                 db.commit()
-                # The row is cleared; the caller still sees what the last run left.
-                return replace(
-                    claimed,
-                    fingerprint=before.fingerprint,
-                    warnings=before.warnings,
-                    needs_review=before.needs_review,
-                )
+                return claimed
             return None
 
     def heartbeat(self, task_id: int, lease_seconds: float) -> bool:
@@ -203,13 +195,12 @@ class SqlStore:
         task_id: int,
         outcome: Outcome,
         *,
-        fingerprint: str | None = None,
         spawn: Sequence[TaskSpec] = (),
     ) -> bool:
         if outcome.status not in (DONE, SKIPPED):
             raise ValueError(f"complete() takes done or skipped, not {outcome.status}")
         with self._session() as db:
-            finished = self._finish(db, task_id, outcome, fingerprint)
+            finished = self._finish(db, task_id, outcome)
             if finished and spawn:
                 self._add_tasks(db, spawn)
             db.commit()
@@ -220,12 +211,12 @@ class SqlStore:
         if outcome.status != FAILED:
             raise ValueError(f"fail() takes failed, not {outcome.status}")
         with self._session() as db:
-            finished = self._finish(db, task_id, outcome, None)
+            finished = self._finish(db, task_id, outcome)
             db.commit()
         self._release(task_id)
         return finished
 
-    def _finish(self, db: Session, task_id: int, outcome: Outcome, fingerprint: str | None) -> bool:
+    def _finish(self, db: Session, task_id: int, outcome: Outcome) -> bool:
         row = db.execute(
             select(IngestTask.started_at, IngestTask.job_id, IngestTask.stage, IngestTask.section, IngestTask.attempts)
             .where(IngestTask.id == task_id, IngestTask.status == RUNNING)
@@ -245,7 +236,6 @@ class SqlStore:
                 traceback=outcome.traceback or None,
                 warnings=list(outcome.warnings),
                 needs_review=outcome.needs_review,
-                fingerprint=fingerprint if outcome.status == DONE else None,
                 lease_until=None,
                 finished_at=now,
                 duration_ms=duration,
@@ -450,7 +440,6 @@ class SqlStore:
             traceback=row.traceback or "",
             warnings=tuple(row.warnings or ()),
             needs_review=bool(row.needs_review),
-            fingerprint=row.fingerprint,
             lease_until=_aware(row.lease_until),
             started_at=_aware(row.started_at),
             finished_at=_aware(row.finished_at),

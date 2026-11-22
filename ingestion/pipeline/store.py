@@ -71,7 +71,6 @@ class Task:
     traceback: str = ""  # of the exception a failed stage raised (truncated)
     warnings: tuple[str, ...] = ()
     needs_review: bool = False
-    fingerprint: str | None = None  # of the inputs a ``done`` task's artefacts were made from
     lease_until: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -85,12 +84,8 @@ class Task:
 class Store(Protocol):
     # --- the runner's loop ------------------------------------------------
     def claim_ready(self, lease_seconds: float) -> Task | None:
-        """Atomically take the oldest ready task (earliest job first) as running.
-
-        The stored fingerprint, warnings and review flag are cleared (a runner killed
-        mid-task must not leave a fingerprint vouching for half-written artefacts), but
-        the returned :class:`Task` still carries the previous run's values, so the runner
-        can complete a task whose fingerprint still matches without running it."""
+        """Atomically take the oldest ready task (earliest job first) as running, clearing
+        what its previous run recorded (reason, error, warnings, review flag)."""
 
     def heartbeat(self, task_id: int, lease_seconds: float) -> bool:
         """Extend a running task's lease; ``False`` when it is no longer ours."""
@@ -100,12 +95,10 @@ class Store(Protocol):
         task_id: int,
         outcome: Outcome,
         *,
-        fingerprint: str | None = None,
         spawn: Sequence[TaskSpec] = (),
     ) -> bool:
-        """Record a ``done`` or ``skipped`` outcome on a running task, with the fingerprint
-        of the inputs it ran on (kept for a ``done`` task only) and the tasks its fan-out
-        creates, **in one transaction**: a crash cannot leave a finished fan-out stage
+        """Record a ``done`` or ``skipped`` outcome on a running task and the tasks its
+        fan-out creates, **in one transaction**: a crash cannot leave a finished fan-out stage
         whose tasks were never created (``report`` would then run early). ``spawn`` is
         ignored, and ``False`` returned, when the task is no longer ours."""
 
@@ -121,8 +114,7 @@ class Store(Protocol):
 
     def reopen(self, task_ids: Sequence[int]) -> None:
         """Return finished tasks (``done``, ``skipped``, ``failed``, ``blocked``) to
-        ``pending`` with no attempts used, keeping their fingerprint, warnings and review
-        flag so the run that follows can still reuse an unchanged result. Running, ready
+        ``pending`` with no attempts used; each runs again when claimed. Running, ready
         and pending tasks are left alone."""
 
     # --- bookkeeping the runner also needs --------------------------------

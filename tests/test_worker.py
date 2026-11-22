@@ -289,7 +289,7 @@ def test_retry_drops_saved_edits_only_when_the_proposal_changes(setup, regenerat
     with factory() as db:
         db.get(IngestJob, job).proposal_edited = edited
         report = db.scalars(select(IngestTask).where(IngestTask.job_id == job, IngestTask.stage == "report")).one()
-        report.status, report.fingerprint = "failed", None  # None: its inputs changed, so it re-runs
+        report.status = "failed"
         db.commit()
 
     fake.proposal = regenerated
@@ -315,7 +315,7 @@ def test_retry_rebuilds_a_scratch_folder_that_is_gone(setup, scratch):
     assert not (tmp_path / "scratch" / str(job)).exists()  # released with the proposal stored
     with factory() as db:
         report = db.scalars(select(IngestTask).where(IngestTask.job_id == job, IngestTask.stage == "report")).one()
-        report.status, report.fingerprint = "failed", None
+        report.status = "failed"
         db.commit()
     if scratch == "lost_in_a_restart":
         worker = make_worker()

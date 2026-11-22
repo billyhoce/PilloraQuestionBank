@@ -67,9 +67,8 @@ attached to a question paper rather than confirmed). See [adr/0002](./adr/0002-q
 **Orphan answers** — Answer rectangles in a question paper whose number matches no question; kept
 on the paper so nothing is lost.
 
-**Fingerprint** — A hash of what a `done` task was produced from (input contents, the settings it
-reads, its stage version). A task whose fingerprint no longer matches, or whose artefacts are gone,
-is **stale** and reruns with everything downstream; one that matches completes without running.
+**Stale task** — A `done` task whose declared output files are gone (a lost scratch folder). A run
+reopens it with everything downstream.
 
 **Retry** — A person's request to return a job's failed and blocked tasks, and everything
 downstream, to the queue. Distinct from a lapsed lease, which is handed back automatically.

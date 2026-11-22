@@ -24,7 +24,6 @@ from question_extractor.ocr import encode_cells
 from question_extractor.tablepipeline import GRID_NAME, write_grid
 
 from .. import artefacts
-from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, SECTION, TABLE, Stage
 from ..sections import load_section
@@ -67,8 +66,5 @@ STAGE = Stage(
     run=run,
     needs=("split",),
     route=TABLE,
-    inputs=plan_inputs,
-    settings=extract_settings,
     outputs=lambda ctx: [ctx.path(ctx.section, GRID_NAME)],
-    version=3,  # v3: a paper with no header keeps text printed above the 40pt top margin
 )

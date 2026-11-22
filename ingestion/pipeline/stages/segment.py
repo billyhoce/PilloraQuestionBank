@@ -8,11 +8,10 @@ reasons as its error, because nothing downstream can run on it.
 
 from __future__ import annotations
 
-from ingester.segmenter import fixture_path, segment_into
+from ingester.segmenter import segment_into
 from ingester.segments import read_plan
 
 from .. import artefacts
-from ..fingerprint import ingest_settings, source_input
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import API, JOB, Stage
 
@@ -46,20 +45,11 @@ def run(ctx: StageContext) -> Outcome:
     )
 
 
-def _inputs(ctx: StageContext) -> list:
-    # the committed fixture is read instead of the model when there is one
-    return [source_input(ctx), fixture_path(ctx.source)]
-
-
 STAGE = Stage(
     name="segment",
     scope=JOB,
     kind=API,
     run=run,
     needs=("register",),
-    inputs=_inputs,
-    settings=ingest_settings,
     outputs=lambda ctx: [ctx.path(artefacts.SEGMENTS_NAME)],
-    # 2: segments carry `cover_pages`. The fingerprint does not cover the prompt text.
-    version=2,
 )

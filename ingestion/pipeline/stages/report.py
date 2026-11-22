@@ -42,7 +42,6 @@ from ingester.segments import SegmentPlan, read_plan
 from question_extractor.pipeline import paper_name
 
 from .. import artefacts, proposal
-from ..fingerprint import source_input
 from ..outcome import Outcome, StageContext, TaskSummary, done
 from ..registry import CPU, JOB, Stage
 from ..sections import load_section
@@ -198,24 +197,6 @@ def _first(tasks: list[TaskSummary], status: str) -> TaskSummary | None:
     return next((t for t in tasks if t.status == status), None)
 
 
-def _inputs(ctx: StageContext) -> list:
-    """What the report is built from: the booklet (pages no section drew are drawn from
-    it), the plan, the split map, every section's manifest and how each other task ended
-    (the report says what became of every section)."""
-    split = ctx.path(artefacts.SPLIT_DIR, artefacts.SPLIT_NAME)
-    manifests = sorted(ctx.job_dir.glob("*/manifest.json")) if ctx.job_dir.is_dir() else []
-    ended = sorted(
-        repr((t.section, t.stage, t.status, t.detail if t.status != "done" else "",
-              t.needs_review, t.warnings))
-        for t in ctx.tasks
-        if t.stage != STAGE.name
-    )
-    reviews = sorted(ctx.job_dir.glob("*/review")) if ctx.job_dir.is_dir() else []
-    return [
-        source_input(ctx), ctx.path(artefacts.SEGMENTS_NAME), split, *manifests, *reviews, *ended,
-    ]
-
-
 STAGE = Stage(
     name="report",
     scope=JOB,
@@ -223,20 +204,9 @@ STAGE = Stage(
     run=run,
     soft_needs=("register", "segment", "split"),
     after_sections=True,
-    inputs=_inputs,
-    settings=lambda ctx: {
-        "proposal_tolerance_pt": ctx.config.proposal_tolerance_pt,
-        "review_zoom": ctx.config.extract.review_zoom,
-        "review_webp_quality": ctx.config.extract.review_webp_quality,
-    },
     outputs=lambda ctx: [
         ctx.path(artefacts.REPORT_NAME),
         ctx.path(artefacts.PROPOSAL_NAME),
         ctx.path(proposal.PAGES_DIR),
     ],
-    # v2: proposal and pages/ are new outputs; v3: unrouted items carry their page range;
-    # v4: a straightened scan's rectangles stay straightened, its pages carry straightened_deg;
-    # v5: every paper lists every booklet page, with excluded_reason; pages no section drew are drawn
-    # v6: answer pages' reasons no longer flag the questions they answer
-    version=6,
 )

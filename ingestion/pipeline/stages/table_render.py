@@ -15,7 +15,6 @@ import logging
 
 from question_extractor.tablepipeline import LABELLED_NAME, read_labelled, render_table
 
-from ..fingerprint import plan_inputs, render_settings
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, SECTION, TABLE, Stage
 from ..sections import load_section
@@ -49,9 +48,6 @@ STAGE = Stage(
     run=run,
     needs=("questions",),
     route=TABLE,
-    inputs=lambda ctx: [*plan_inputs(ctx), ctx.path(ctx.section, LABELLED_NAME)],
-    settings=render_settings,
     outputs=lambda ctx: [ctx.path(ctx.section, "review")]
     + ([ctx.path(ctx.section, "_debug")] if ctx.debug else []),
-    version=2,  # v2: a scanned page's review image is straightened
 )

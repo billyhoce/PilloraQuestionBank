@@ -13,7 +13,6 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,7 +50,6 @@ CREATE TABLE IF NOT EXISTS ingest_task (
     traceback TEXT NOT NULL DEFAULT '',
     warnings TEXT NOT NULL DEFAULT '[]',
     needs_review INTEGER NOT NULL DEFAULT 0,
-    fingerprint TEXT,
     lease_until TEXT,
     started_at TEXT,
     finished_at TEXT,
@@ -64,7 +62,7 @@ CREATE INDEX IF NOT EXISTS ingest_task_status ON ingest_task (status);
 
 _COLUMNS = (
     "id, job_id, section, stage, status, attempts, reason, error, traceback, warnings, "
-    "needs_review, fingerprint, lease_until, started_at, finished_at, duration_ms"
+    "needs_review, lease_until, started_at, finished_at, duration_ms"
 )
 
 
@@ -93,7 +91,6 @@ def _task(row: sqlite3.Row) -> Task:
         traceback=row["traceback"],
         warnings=tuple(json.loads(row["warnings"])),
         needs_review=bool(row["needs_review"]),
-        fingerprint=row["fingerprint"],
         lease_until=_moment(row["lease_until"]),
         started_at=_moment(row["started_at"]),
         finished_at=_moment(row["finished_at"]),
@@ -137,12 +134,11 @@ class SQLiteStore:
                 if row is None:
                     self._db.execute("COMMIT")
                     return None
-                before = self._get(row["id"])
                 now = self._clock()
                 self._db.execute(
                     "UPDATE ingest_task SET status = ?, attempts = attempts + 1, "
                     "reason = '', error = '', traceback = '', warnings = '[]', needs_review = 0, "
-                    "fingerprint = NULL, started_at = ?, finished_at = NULL, duration_ms = NULL, "
+                    "started_at = ?, finished_at = NULL, duration_ms = NULL, "
                     "lease_until = ? WHERE id = ?",
                     (
                         RUNNING,
@@ -155,13 +151,7 @@ class SQLiteStore:
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
-            # The row is cleared; the caller still sees what the last run left.
-            return replace(
-                self._get(row["id"]),
-                fingerprint=before.fingerprint,
-                warnings=before.warnings,
-                needs_review=before.needs_review,
-            )
+            return self._get(row["id"])
 
     def heartbeat(self, task_id: int, lease_seconds: float) -> bool:
         with self._lock:
@@ -176,7 +166,6 @@ class SQLiteStore:
         task_id: int,
         outcome: Outcome,
         *,
-        fingerprint: str | None = None,
         spawn: Sequence[TaskSpec] = (),
     ) -> bool:
         if outcome.status not in (DONE, SKIPPED):
@@ -184,7 +173,7 @@ class SQLiteStore:
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                finished = self._finish(task_id, outcome, fingerprint)
+                finished = self._finish(task_id, outcome)
                 if finished and spawn:
                     self.add_tasks(spawn)
                 self._db.execute("COMMIT")
@@ -198,9 +187,7 @@ class SQLiteStore:
             raise ValueError(f"fail() takes failed, not {outcome.status}")
         return self._finish(task_id, outcome)
 
-    def _finish(
-        self, task_id: int, outcome: Outcome, fingerprint: str | None = None
-    ) -> bool:
+    def _finish(self, task_id: int, outcome: Outcome) -> bool:
         with self._lock:
             row = self._db.execute(
                 "SELECT started_at FROM ingest_task WHERE id = ? AND status = ?",
@@ -213,7 +200,7 @@ class SQLiteStore:
             duration = int((now - started).total_seconds() * 1000) if started else None
             self._db.execute(
                 "UPDATE ingest_task SET status = ?, reason = ?, error = ?, traceback = ?, "
-                "warnings = ?, needs_review = ?, fingerprint = ?, lease_until = NULL, finished_at = ?, "
+                "warnings = ?, needs_review = ?, lease_until = NULL, finished_at = ?, "
                 "duration_ms = ? "
                 "WHERE id = ?",
                 (
@@ -223,7 +210,6 @@ class SQLiteStore:
                     outcome.traceback,
                     json.dumps(list(outcome.warnings)),
                     int(outcome.needs_review),
-                    fingerprint if outcome.status == DONE else None,
                     _text(now),
                     duration,
                     task_id,

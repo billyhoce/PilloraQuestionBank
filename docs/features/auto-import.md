@@ -97,7 +97,8 @@ stateDiagram-v2
 ### Retry
 
 - **Retry** returns the job's failed and blocked tasks, plus everything downstream of them, to the
-  queue with their attempt counts reset. Tasks whose inputs are unchanged are not re-run.
+  queue with their attempt counts reset, and each of them runs again. Tasks that finished and are
+  not downstream of a failure keep their result.
 - Allowed on `queued`, `running`, `review_ready` and `failed` jobs; the pages offer it only on a job
   with a failed or blocked task (`tasks_failed`), since otherwise there is nothing to reopen.
 - The worker checks a retried job's artefacts before running it: tasks whose output went with the

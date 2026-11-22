@@ -23,7 +23,6 @@ from question_extractor.pipeline import DETECTIONS_NAME, render_saved
 from question_extractor.render import page_filename
 
 from .. import artefacts
-from ..fingerprint import plan_inputs, render_settings
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, QUESTION, SECTION, Stage
 from ..sections import load_section
@@ -62,12 +61,5 @@ STAGE = Stage(
     run=run,
     needs=("locate",),
     route=QUESTION,
-    inputs=lambda ctx: [
-        *plan_inputs(ctx),
-        ctx.path(ctx.section, DETECTIONS_NAME),
-        artefacts.scan_paths(ctx.job_dir, ctx.section)[0],
-    ],
-    settings=render_settings,
     outputs=_outputs,
-    version=2,  # v2: a scanned section is drawn from scan's straightened copy
 )

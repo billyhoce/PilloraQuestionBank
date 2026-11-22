@@ -1,8 +1,7 @@
 """``register``: identify the booklet and write ``job.json``.
 
-Records what later stages (and a human) need to know about the input: its sha256
-(the fingerprint a rerun compares), size, page count and the hash of the stage
-configuration. It also makes the too-large-to-ask check early, so a booklet the
+Records what later stages (and a human) need to know about the input: its sha256,
+size, page count and the hash of the stage configuration. It also makes the too-large-to-ask check early, so a booklet the
 Messages API cannot take is flagged at the first task rather than after a queue
 wait; with no committed fixture to fall back on, ``segment`` will then fail with
 the same reason.
@@ -76,8 +75,5 @@ STAGE = Stage(
     scope=JOB,
     kind=CPU,
     run=run,
-    inputs=lambda ctx: [ctx.source],
-    # job.json records the configuration's hash and the too-large check, so all of it counts
-    settings=lambda ctx: {"config": ctx.config.stage_config_hash()},
     outputs=lambda ctx: [ctx.path(artefacts.JOB_NAME)],
 )

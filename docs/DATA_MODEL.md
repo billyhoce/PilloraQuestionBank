@@ -163,8 +163,8 @@ See [features/auto-import.md](./features/auto-import.md) and
 - **ingest_task** — one stage of a job, optionally per section (`register`, `segment`, `split`,
   then per-section stages, then `report`).
   - `status`: `pending`, `ready`, `running`, `done`, `skipped`, `failed`, `blocked`.
-  - `attempts`, `reason`, `error`, last ~4 KB of `traceback`, `warnings`, `needs_review`,
-    `fingerprint` (for resuming), lease and timing columns.
+  - `attempts`, `reason`, `error`, last ~4 KB of `traceback`, `warnings`, `needs_review`, lease
+    and timing columns.
   - One task per (job, section, stage), including job-level tasks with no section.
 - **ingest_paper** — one paper a job proposed: the queryable mirror of the per-paper parts of
   `proposal` and `report`, used for matching across jobs.

@@ -48,10 +48,12 @@ Run a booklet as a **job** of small **stages**, each recorded as a **task** in a
   ready again until it has used its retry limit. Thresholds live in `PipelineConfig`.
 - A fan-out stage's completion and its section tasks are recorded in one `complete` call, so a crash
   cannot leave the fan-out unrecorded (and `report` free to run early).
-- A `done` task records a **fingerprint** of its inputs, settings and code version, and each stage
-  declares its outputs. A run starts by reopening stale tasks (and what follows them); a claimed
-  task whose fingerprint still matches completes without running, which is what lets a resumed
-  or retried job, or a webapp worker whose scratch folder was rebuilt, redo only what changed.
+- Each stage declares its outputs. A run starts by reopening `done` tasks whose outputs are
+  missing (and what follows them), which is what lets a resumed or retried job, or a webapp worker
+  whose scratch folder was rebuilt, redo only what was lost. A queued task always runs. (A
+  per-task fingerprint of inputs, settings and a hand-bumped stage version, which skipped a
+  queued task whose fingerprint still matched, was removed: a forgotten bump silently served
+  stale results, and the saving was small.)
   `pipeline retry` returns failed and blocked tasks and their downstream to the queue.
 
 ## Consequences

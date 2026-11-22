@@ -209,19 +209,19 @@ Runs once every section has settled, even if `register`, `segment` or `split` fa
 
 ## Resume, retry and staleness
 
-**Code:** `ingestion/pipeline/runner.py`, `fingerprint.py`, `config.py`, `store.py`
+**Code:** `ingestion/pipeline/runner.py`, `registry.py`, `config.py`, `store.py`
 
 - **Leases.** A claimed task holds a lease renewed by a heartbeat (locally 120 s, renewed every
   third). A dead runner's task returns to the queue when its lease lapses, up to 3 attempts, then
   fails. A stage that *reports* failure is never retried automatically.
 - **Retry** is a person's request: failed and blocked tasks, and everything downstream (including
   `report`), go back to the queue with attempts reset; everything else keeps its result.
-- **Fingerprint.** A `done` task records a hash of its inputs' content, the settings it reads and its
-  stage version. At the start of a run, a task whose fingerprint no longer matches, or whose outputs
-  are missing, is **stale** and reopened with everything downstream. A reopened task whose
-  fingerprint still matches completes as "unchanged" without running — so a rebuilt scratch folder
-  or a config change reruns only what is affected.
-- Not in any fingerprint: where Tesseract runs, scheduling knobs, `--force`.
+- **Missing artefacts.** Each stage declares the files it leaves behind. At the start of a run, a
+  `done` task with one of them missing (a lost or rebuilt scratch folder) is **stale** and reopened
+  with everything downstream.
+- **No result cache.** A task that is queued always runs. Finished tasks are never compared against
+  the code or configuration that made them: a code change shows up in new jobs, and in a retried
+  job's reopened tasks only.
 - Limit: a retried `split` that finds different sections does not remove tasks of vanished sections.
 
 ## Running locally / CLI

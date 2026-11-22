@@ -34,7 +34,6 @@ from question_extractor.tablequestions import build_table_questions
 from question_extractor.warnscope import collect_warnings, current_warnings
 
 from .. import artefacts
-from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed
 from ..registry import CPU, SECTION, TABLE, Stage
 from ..sections import load_section
@@ -91,14 +90,7 @@ STAGE = Stage(
     needs=("grid",),
     soft_needs=("ocr",),
     route=TABLE,
-    inputs=lambda ctx: [
-        *plan_inputs(ctx),
-        ctx.path(ctx.section, GRID_NAME),
-        ctx.path(ctx.section, artefacts.OCR_NAME),  # absent for a digital section or a failed ocr
-    ],
-    settings=extract_settings,
     outputs=lambda ctx: [
         ctx.path(ctx.section, name) for name in ("manifest.json", "tables.json", LABELLED_NAME)
     ],
-    version=2,  # v2: a paper with no header keeps text printed above the 40pt top margin
 )

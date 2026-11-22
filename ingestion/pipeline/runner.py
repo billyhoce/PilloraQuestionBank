@@ -31,7 +31,6 @@ from pathlib import Path
 from question_extractor.logcontext import log_context
 from question_extractor.warnscope import collect_warnings
 
-from . import fingerprint
 from .artefacts import OPTIONS_NAME, read_options, write_json
 from .config import PipelineConfig
 from .outcome import FAILED, Outcome, StageContext, TaskSummary, Unmet, failed
@@ -54,9 +53,6 @@ from .store import (
 from .store import FAILED as TASK_FAILED
 
 log = logging.getLogger(__name__)
-
-# What a task that was found unchanged and not run again records as its reason.
-UNCHANGED = "unchanged: its inputs match the last run and its artefacts are present"
 
 # Statuses that stop a task's dependents from running.
 _BROKEN = (TASK_FAILED, BLOCKED)
@@ -188,36 +184,14 @@ class Runner:
         started = self._clock()
         self._refresh(task.job_id)
         stage, ctx = self._prepare(task, {t.key: t for t in self.store.tasks(task.job_id)})
-        expected = self._fingerprint(stage, ctx)
-        unchanged = (
-            expected is not None
-            and task.fingerprint == expected
-            and fingerprint.outputs_exist(stage, ctx)
-        )
-        if unchanged:
-            # What the claim returns of the last run is what is still on disk: keep it.
-            log.info("inputs unchanged; keeping the last result")
-            outcome = Outcome(
-                DONE,
-                reason=UNCHANGED,
-                needs_review=task.needs_review,
-                warnings=task.warnings,
-            )
-        else:
-            outcome = self._execute(task, stage, ctx)
+        outcome = self._execute(task, stage, ctx)
         log.info("task %s in %.1fs", outcome.status, self._clock() - started)
         if outcome.status == FAILED:
             self.store.fail(task.id, outcome)
         else:
             # A fan-out stage records its tasks in the same transaction as its own
-            # completion (a crash between the two would let `report` run early). A fan-out
-            # stage found unchanged has nothing new to create: its tasks are already there.
-            self.store.complete(
-                task.id,
-                outcome,
-                fingerprint=expected,
-                spawn=() if unchanged else self._fan_out(task, stage, outcome),
-            )
+            # completion (a crash between the two would let `report` run early).
+            self.store.complete(task.id, outcome, spawn=self._fan_out(task, stage, outcome))
         self._refresh(task.job_id)
 
     def run(self, *, watch: bool = False) -> int:
@@ -268,16 +242,6 @@ class Runner:
             tasks=summaries,
         )
         return stage, ctx
-
-    @staticmethod
-    def _fingerprint(stage: Stage, ctx: StageContext) -> str | None:
-        """The fingerprint of the task's inputs now; ``None`` when they cannot be read
-        (the task then runs, and its stage reports whatever is wrong)."""
-        try:
-            return fingerprint.compute(stage, ctx)
-        except Exception:
-            log.warning("could not fingerprint the task's inputs; running it", exc_info=True)
-            return None
 
     def _execute(self, task: Task, stage: Stage, ctx: StageContext) -> Outcome:
         ctx.job_dir.mkdir(parents=True, exist_ok=True)
@@ -369,15 +333,13 @@ class Runner:
         return waiting
 
     def revalidate(self, job_id: str) -> list[Task]:
-        """Reopen the finished tasks of a job that are stale; returns them.
+        """Reopen the finished tasks of a job whose artefacts are gone; returns them.
 
-        A ``done`` task is stale when its recorded fingerprint is not the one its inputs
-        give now (an input artefact, the configuration it reads or its code changed) or
-        when an artefact it should have left is missing (a scratch folder that was
-        rebuilt). Everything downstream of a stale task is stale with it. The reopened
-        tasks go back to ``pending`` and then ``ready``; each, when claimed, is run again
-        unless its fingerprint turns out unchanged (an upstream task that came out the
-        same). Failed tasks are left for :meth:`retry`.
+        A ``done`` task is stale when a file its stage declares in ``outputs`` is missing
+        (a scratch folder that was lost or rebuilt). Everything downstream of a stale task
+        is stale with it, and all of them run again. Nothing else is checked: a task whose
+        artefacts are present keeps its result even if the code or configuration that made
+        it has changed since. Failed tasks are left for :meth:`retry`.
         """
         tasks = {t.key: t for t in self.store.tasks(job_id)}
         waiting = self._dependents(tasks)
@@ -386,8 +348,7 @@ class Runner:
             if task.status != DONE:
                 continue
             stage, ctx = self._prepare(task, tasks)
-            expected = self._fingerprint(stage, ctx)
-            if expected is None or task.fingerprint != expected or not fingerprint.outputs_exist(stage, ctx):
+            if not all(path.exists() for path in stage.outputs(ctx)):
                 stale.add(task.key)
         # Everything downstream of a stale task that has finished, whichever way, is stale.
         stack = list(stale)

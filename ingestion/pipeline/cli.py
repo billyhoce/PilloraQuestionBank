@@ -108,7 +108,7 @@ def _add_runner_options(parser: argparse.ArgumentParser) -> None:
         help=(
             "how long a claimed task stays this runner's without a heartbeat (default: "
             f"{PipelineConfig.lease_seconds:g}); a runner killed mid-task has its task handed "
-            "back after this long. Heartbeats go out every third of it. Not part of any fingerprint"
+            "back after this long. Heartbeats go out every third of it"
         ),
     )
     parser.add_argument(

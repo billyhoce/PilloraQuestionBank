@@ -34,7 +34,6 @@ from question_extractor.scanpaper import read_scan_record
 from question_extractor.warnscope import collect_warnings, current_warnings
 
 from .. import artefacts
-from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed, skipped
 from ..registry import CPU, QUESTION, SECTION, Stage
 from ..sections import load_section
@@ -98,10 +97,6 @@ def run(ctx: StageContext) -> Outcome:
     )
 
 
-def _inputs(ctx: StageContext) -> list:
-    return [*plan_inputs(ctx), *artefacts.scan_paths(ctx.job_dir, ctx.section)]
-
-
 STAGE = Stage(
     name="locate",
     scope=SECTION,
@@ -110,11 +105,8 @@ STAGE = Stage(
     needs=("split",),
     soft_needs=("scan",),
     route=QUESTION,
-    inputs=_inputs,
-    settings=extract_settings,
     outputs=lambda ctx: [
         ctx.path(ctx.section, "manifest.json"),
         ctx.path(ctx.section, DETECTIONS_NAME),
     ],
-    version=6,  # v6: a question's last crop ends at a right-aligned answer line
 )

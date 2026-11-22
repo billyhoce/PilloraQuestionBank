@@ -21,7 +21,6 @@ from ingester.router import needs_ocr
 from question_extractor.scanpaper import read_scanned_paper
 
 from .. import artefacts
-from ..fingerprint import extract_settings, plan_inputs
 from ..outcome import Outcome, StageContext, done, failed, skipped
 from ..registry import QUESTION, SECTION, SUBPROCESS, Stage
 from ..sections import load_section
@@ -57,8 +56,5 @@ STAGE = Stage(
     run=run,
     needs=("split",),
     route=QUESTION,
-    inputs=plan_inputs,
-    settings=extract_settings,  # without ocr_command: where Tesseract runs, not how it reads
     outputs=lambda ctx: list(artefacts.scan_paths(ctx.job_dir, ctx.section)),
-    version=2,  # v2: a section of mostly picture pages is OCR'd too
 )

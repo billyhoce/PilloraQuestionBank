@@ -27,8 +27,10 @@ scope, a kind, its dependencies and whether it fans out.
   section's route is recovered from the stages it has (:meth:`Registry.route_of`):
   any stage only one route has names it, so a job made before a stage was added to
   its route (a question section with no ``scan`` task) is still recognised.
-- **inputs / settings / outputs / version**: what the task fingerprint is made of and
-  what "its artefacts exist" checks (``pipeline.fingerprint``).
+- **outputs**: the files a ``done`` task must leave behind. A run reopens a ``done`` task
+  whose outputs are missing (a lost scratch folder), with everything downstream of it
+  (:meth:`~pipeline.runner.Runner.revalidate`). Nothing else about a finished task is
+  checked: results are never compared against the code or configuration that made them.
 - **after_sections**: a job-scope stage that also waits for every *section* task of the job
   to settle (``done``, ``skipped``, ``failed`` or ``blocked``). Sections do not exist when
   the job is submitted (``split`` fans them out), so the stage cannot name them in ``needs``;
@@ -81,14 +83,8 @@ class Stage:
     fan_out: bool = False
     after_sections: bool = False  # job-scope only: also wait for every section task to settle
     route: str | None = None  # section stages only: the chain this stage belongs to
-    # What the stage's artefacts are a function of, for the task fingerprint
-    # (pipeline.fingerprint): the files it reads (a path is hashed by content, a string
-    # is taken as is), the configuration subset and options it reads, the files it must
-    # leave behind, and a version to bump when its code changes what it writes.
-    inputs: Callable[[StageContext], Sequence[Path | str]] = _nothing
-    settings: Callable[[StageContext], object] = _nothing
+    # The files a done task must leave behind; a missing one reruns the task (see above).
     outputs: Callable[[StageContext], Sequence[Path]] = _nothing
-    version: int = 1
 
 
 class Registry:

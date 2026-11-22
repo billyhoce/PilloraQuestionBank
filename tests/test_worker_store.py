@@ -84,18 +84,18 @@ def test_claims_oldest_job_first_and_skips_cancelled_jobs(env):
         assert task.status == "ready"
 
 
-def test_claim_returns_previous_fingerprint_but_clears_the_row(env):
+def test_claim_clears_what_the_last_run_recorded(env):
     factory, user, _clock, _ = env
     job = make_job(factory, user)
     with factory() as db:
         task = db.scalars(select(IngestTask)).one()
-        task.fingerprint, task.warnings, task.needs_review = "abc", ["w"], True
+        task.warnings, task.needs_review, task.error = ["w"], True, "boom"
         db.commit()
     claimed = store_for(env).claim_ready(600)
-    assert (claimed.fingerprint, claimed.warnings, claimed.needs_review) == ("abc", ("w",), True)
+    assert (claimed.warnings, claimed.needs_review, claimed.error) == ((), False, "")
     with factory() as db:
         row = db.scalars(select(IngestTask).where(IngestTask.job_id == job)).one()
-        assert (row.fingerprint, row.warnings, row.needs_review) == (None, [], False)
+        assert (row.warnings, row.needs_review, row.error) == ([], False, "")
         assert row.lease_until is not None
 
 
@@ -148,9 +148,9 @@ def test_complete_creates_the_fan_out_in_the_same_transaction(env):
     store = store_for(env)
     task = store.claim_ready(600)
     spawn = [TaskSpec(str(job), "locate", "q1"), TaskSpec(str(job), "render", "q1")]
-    assert store.complete(task.id, done(), fingerprint="fp", spawn=spawn)
+    assert store.complete(task.id, done(), spawn=spawn)
     tasks = {(t.section, t.stage): t for t in store.tasks(str(job))}
-    assert tasks[(None, "register")].status == "done" and tasks[(None, "register")].fingerprint == "fp"
+    assert tasks[(None, "register")].status == "done"
     assert tasks[(None, "register")].duration_ms is not None
     assert tasks[("q1", "locate")].status == "pending"
     # a lost lease creates nothing
@@ -158,14 +158,14 @@ def test_complete_creates_the_fan_out_in_the_same_transaction(env):
     assert ("q2", "locate") not in {(t.section, t.stage) for t in store.tasks(str(job))}
 
 
-def test_fail_records_the_error_and_no_fingerprint(env):
+def test_fail_records_the_error(env):
     factory, user, _clock, _ = env
     job = make_job(factory, user)
     store = store_for(env)
     task = store.claim_ready(600)
     assert store.fail(task.id, failed("boom", warnings=("w",)))
     [t] = store.tasks(str(job))
-    assert (t.status, t.error, t.warnings, t.fingerprint) == ("failed", "boom", ("w",), None)
+    assert (t.status, t.error, t.warnings) == ("failed", "boom", ("w",))
     store.reopen([t.id])
     assert store.tasks(str(job))[0].status == "pending"
 
