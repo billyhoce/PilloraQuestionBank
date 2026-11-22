@@ -5,7 +5,8 @@ in [users-and-premium.md](./users-and-premium.md).
 
 **Code:** `app/routes/auth.py`, `app/services/auth.py`, `app/services/google_oauth.py`,
 `app/schemas/auth.py`, `frontend/src/context/AuthContext.jsx`, `frontend/src/pages/LoginPage.jsx`,
-`frontend/src/pages/RegisterPage.jsx`, `frontend/src/components/GoogleSignInButton.jsx`,
+`frontend/src/pages/RegisterPage.jsx`, `frontend/src/pages/passwordRules.js`,
+`frontend/src/components/PasswordInput.jsx`, `frontend/src/components/GoogleSignInButton.jsx`,
 `frontend/src/components/ProtectedRoute.jsx`
 **Related:** [users-and-premium.md](./users-and-premium.md), [DATA_MODEL.md](../DATA_MODEL.md),
 [DEPLOYMENT.md](../DEPLOYMENT.md) (Google Cloud Console setup, secrets)
@@ -30,8 +31,11 @@ in [users-and-premium.md](./users-and-premium.md).
 2. Rules:
    - Names are trimmed; blank or longer than 100 characters is rejected.
    - Password needs ≥ 8 characters, an uppercase letter, a lowercase letter, a digit and a special
-     character (enforced server-side; the page shows the rule as hint text).
-   - Password and confirmation must match (checked in the browser).
+     character. Enforced server-side; the page mirrors the rules (`frontend/src/pages/passwordRules.js`
+     — change both) as a checklist that ticks each rule off while typing, and refuses to submit a
+     password that breaks one, naming the rules it breaks.
+   - Password and confirmation must match (checked in the browser; flagged under the field while typing).
+   - Both password fields have a show/hide toggle.
 3. Outcome by address:
    - **New address** → account created as Normal.
    - **Unclaimed invite** → the invite is *claimed*: it gets the password, keeps its role and premium,

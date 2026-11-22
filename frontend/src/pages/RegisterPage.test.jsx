@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import RegisterPage from './RegisterPage'
@@ -24,12 +24,14 @@ function renderRegister({ user = null, loading = false } = {}) {
   )
 }
 
-async function fillForm({ first = 'Ada', last = 'Lovelace', confirm = 'Secure123!' } = {}) {
+async function fillForm({
+  first = 'Ada', last = 'Lovelace', password = 'Secure123!', confirm = password,
+} = {}) {
   const user = userEvent.setup()
   await user.type(screen.getByLabelText('First name'), first)
   await user.type(screen.getByLabelText('Last name'), last)
   await user.type(screen.getByLabelText('Email'), 'ada@example.com')
-  await user.type(screen.getByLabelText('Password'), 'Secure123!')
+  await user.type(screen.getByLabelText('Password'), password)
   await user.type(screen.getByLabelText('Confirm password'), confirm)
   await user.click(screen.getByRole('button', { name: 'Create account' }))
 }
@@ -71,6 +73,49 @@ describe('RegisterPage', () => {
     await fillForm({ confirm: 'Different123!' })
     expect(api.auth.register).not.toHaveBeenCalled()
     expect(screen.getByText('Passwords do not match.')).toBeInTheDocument()
+  })
+
+  it('blocks a weak password and names every rule it breaks', async () => {
+    renderRegister()
+    await fillForm({ password: 'secure' })
+    expect(api.auth.register).not.toHaveBeenCalled()
+    expect(screen.getByText(
+      'Password needs: at least 8 characters, an uppercase letter, a number, a special character.'
+    )).toBeInTheDocument()
+  })
+
+  it('ticks off password rules as they are met', async () => {
+    renderRegister()
+    await userEvent.setup().type(screen.getByLabelText('Password'), 'abcdefgh')
+    const rules = within(screen.getByRole('list', { name: 'Password requirements' }))
+    expect(rules.getByText('At least 8 characters').closest('li')).toHaveAttribute('data-met', 'true')
+    expect(rules.getByText('A lowercase letter').closest('li')).toHaveAttribute('data-met', 'true')
+    expect(rules.getByText('An uppercase letter').closest('li')).toHaveAttribute('data-met', 'false')
+  })
+
+  it('flags a confirmation that does not match while typing', async () => {
+    renderRegister()
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('Password'), 'Secure123!')
+    await user.type(screen.getByLabelText('Confirm password'), 'Secure')
+    expect(screen.getByText('Does not match the password above.')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Confirm password'), '123!')
+    expect(screen.queryByText('Does not match the password above.')).not.toBeInTheDocument()
+  })
+
+  it('reveals and re-hides each password field', async () => {
+    renderRegister()
+    const user = userEvent.setup()
+    const password = screen.getByLabelText('Password')
+    expect(password).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(password).toHaveAttribute('type', 'text')
+    expect(screen.getByLabelText('Confirm password')).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(password).toHaveAttribute('type', 'password')
+
+    await user.click(screen.getByRole('button', { name: 'Show confirm password' }))
+    expect(screen.getByLabelText('Confirm password')).toHaveAttribute('type', 'text')
   })
 
   it('shows the server error when registration fails', async () => {
