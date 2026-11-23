@@ -4,15 +4,10 @@ import userEvent from '@testing-library/user-event'
 import InfoTooltip from './InfoTooltip'
 
 describe('InfoTooltip', () => {
-  it('renders the trigger button with the given aria-label', () => {
-    render(<InfoTooltip label="What does this do?">Helpful text.</InfoTooltip>)
-    expect(screen.getByRole('button', { name: 'What does this do?' })).toBeInTheDocument()
-    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
-  })
-
   it('reveals the content on hover', async () => {
     const user = userEvent.setup()
     render(<InfoTooltip label="Info">Helpful text.</InfoTooltip>)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
     await user.hover(screen.getByRole('button', { name: 'Info' }))
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Helpful text.')
   })

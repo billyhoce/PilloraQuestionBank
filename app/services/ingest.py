@@ -1,42 +1,66 @@
 import uuid
 from datetime import datetime, UTC
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import fitz  # PyMuPDF
 from PIL import Image
 
 from app.ai.filename_extractor import extract_metadata
-from app.logger import Timer, log
-from app.models.orm import Paper, Question, QuestionPage, QuestionPart
+from app.logger import Timer, log, log_event, log_job_event
+from app.models.orm import IngestJob, Paper, Question, QuestionPage, QuestionPart
+from app.services.ingest_events import add_event
 from app.pdf.image_processing import get_dimensions, standardize, to_webp_bytes
 from app.storage.s3_client import copy_only, delete_object, get_presigned_url, put_image
 
 
-def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
-    images = []
+def iter_pdf_pages(pdf_bytes: bytes) -> Iterator[Image.Image]:
+    """Yield each page as a 300 dpi RGB image, rendering lazily.
+
+    A 300 dpi A4 page is ~26 MB, so an 80-page booklet held at once is ~2 GB.
+    The pixmap is released as soon as its pixels are copied into the PIL image,
+    and the next page is not rendered until the caller asks for it.
+    """
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         for page in doc:
             pix = page.get_pixmap(dpi=300)
-            images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-    return images
+            try:
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            finally:
+                del pix
+            yield img
+            # The suspended generator frame would otherwise keep this page alive
+            # while the next one is rendered.
+            del img
 
 
-def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
+def upload_pages(
+    pdf_bytes: bytes, filename: str, db: Any, suggested_metadata: dict | None = None
+) -> dict:
+    """Render ``pdf_bytes`` into temp page images. ``suggested_metadata`` (already known, e.g.
+    from an auto-import job) skips the filename extraction."""
     with Timer() as t_total:
-        with Timer() as t_raster:
-            images = pdf_to_images(pdf_bytes)
-        log.info(f"{'upload_pages':<22}| rasterize | {t_raster.s}  ({len(images)} pages)")
-
         upload_id = str(uuid.uuid4())
         pages = []
-        t_proc = t_s3 = 0.0
+        t_raster = t_proc = t_s3 = 0.0
 
-        for i, img in enumerate(images):
+        # Render, standardise and upload one page at a time, dropping every
+        # reference to a page before the next is rendered (see iter_pdf_pages).
+        page_iter = iter_pdf_pages(pdf_bytes)
+        i = 0
+        while True:
+            with Timer() as _t:
+                img = next(page_iter, None)
+            t_raster += _t.elapsed
+            if img is None:
+                break
+
             with Timer() as _t:
                 std = standardize(img)
                 webp = to_webp_bytes(std)
                 w, h = get_dimensions(std)
             t_proc += _t.elapsed
+            del img, std
 
             key = f"tmp/{upload_id}/page_{i}.webp"
 
@@ -44,26 +68,40 @@ def upload_pages(pdf_bytes: bytes, filename: str, db: Any) -> dict:
                 put_image(key, webp)
                 url = get_presigned_url(key, expires_in=7200)
             t_s3 += _t.elapsed
+            del webp
 
             pages.append({
                 "temp_key": key,
                 "url": url,
                 "dimensions": {"width": w, "height": h},
             })
+            i += 1
 
-        n = len(images)
-        log.info(f"{'upload_pages':<22}| img_proc  | {t_proc:.3f}s  ({n} pages)")
-        log.info(f"{'upload_pages':<22}| s3_upload | {t_s3:.3f}s  ({n} pages)")
+        n = len(pages)
 
         with Timer() as t_meta:
-            suggested = extract_metadata(filename, db)
-        log.info(f"{'upload_pages':<22}| ai_extract| {t_meta.s}")
+            suggested = (
+                suggested_metadata
+                if suggested_metadata is not None
+                else extract_metadata(filename, db)
+            )
 
-    log.info(f"{'upload_pages':<22}| TOTAL     | {t_total.s}")
+    log_event(
+        f"manual import: {n} page(s) prepared in {t_total.elapsed:.1f}s: render {t_raster:.1f}s, "
+        f"process {t_proc:.1f}s, S3 {t_s3:.1f}s, metadata {t_meta.elapsed:.1f}s"
+    )
     return {"pages": pages, "suggested_metadata": suggested}
 
 
-def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
+def confirm_import(
+    payload: dict,
+    created_by: Any,
+    db: Any,
+    before_commit: Callable[[Paper], None] | None = None,
+) -> Paper:
+    """Create the paper and its images. ``before_commit(paper)``, if given, runs after the S3
+    copies and just before the commit, so whatever it writes (e.g. ``source_job_id`` and a job
+    outcome) commits in the same transaction as the paper; if it raises, nothing is committed."""
     try:
         paper = Paper(
             subject_id=payload["subject_id"],
@@ -84,6 +122,8 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         for q_data in payload["questions"]:
             question = Question(
                 question_number=q_data["question_number"],
+                section=q_data.get("section"),
+                proposal_question_index=q_data.get("proposal_question_index"),
                 created_at=datetime.now(UTC),
             )
             # Topics and marks arrive later, at the topic-review step; until then
@@ -102,6 +142,8 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
                     page_type=p_data["page_type"],
                     width_px=p_data["width_px"],
                     height_px=p_data["height_px"],
+                    source_page=p_data.get("source_page"),
+                    source_rect=p_data.get("source_rect"),
                 ))
                 pages_to_move.append((p_data["temp_key"], canonical_key))
 
@@ -123,6 +165,13 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         for temp_key, canonical_key in pages_to_move:
             copy_only(temp_key, canonical_key)
             copied_keys.append(canonical_key)
+        if before_commit is not None:
+            before_commit(paper)
+        # Same transaction as the paper: pending answer-only papers with its key now see it (in a
+        # savepoint, and never raising, so it cannot fail the import).
+        from app.services.ingest_matching import match_for_new_paper
+
+        match_for_new_paper(db, paper)
         db.commit()
     except Exception:
         db.rollback()
@@ -137,14 +186,16 @@ def confirm_import(payload: dict, created_by: Any, db: Any) -> Paper:
         try:
             delete_object(temp_key)
         except Exception:
-            pass
+            log.warning("could not delete the temporary image %s", temp_key, exc_info=True)
 
     return paper
 
 
-def delete_paper(paper_id: int, db: Any) -> list[str]:
+def delete_paper(paper_id: int, db: Any, actor: Any = None) -> list[str]:
     """Delete a paper and its DB cascades; return S3 image keys that the caller
-    should clean up after the surrounding transaction commits."""
+    should clean up after the surrounding transaction commits. When the paper came from an
+    auto-import job (``source_job_id``, or the job's ``confirmed_paper_ids``) a ``paper_deleted``
+    event is logged against that job."""
     paper = (
         db.query(Paper)
         .filter(Paper.id == paper_id)
@@ -157,6 +208,23 @@ def delete_paper(paper_id: int, db: Any) -> list[str]:
         page.image_key for question in paper.questions for page in question.pages
     ]
 
+    job_ids = {paper.source_job_id} if paper.source_job_id is not None else set()
+    job_ids |= {
+        j.id for j in db.query(IngestJob).filter(IngestJob.confirmed_paper_ids.isnot(None))
+        if paper_id in (j.confirmed_paper_ids or [])
+    }
+    details = dict(
+        paper_id=paper_id, year=paper.year, paper_number=paper.paper_number,
+        school_id=paper.school_id, questions=len(paper.questions), images=len(image_keys),
+    )
+
     db.delete(paper)
+    db.flush()
+    for job_id in sorted(job_ids, key=str):
+        add_event(db, job_id, "paper_deleted", actor_user_id=getattr(actor, "id", None), **details)
+        log_job_event(
+            job_id, f"bank paper {paper_id} deleted by user {getattr(actor, 'id', None)}",  # no request context names them
+            **{k: v for k, v in details.items() if k != "paper_id"},
+        )
     db.flush()
     return image_keys

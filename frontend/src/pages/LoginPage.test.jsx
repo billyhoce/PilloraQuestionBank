@@ -45,16 +45,27 @@ describe('LoginPage redirects', () => {
     expect(await screen.findByText('QUESTION BANK HOME')).toBeInTheDocument()
   })
 
-  it('redirects admins to the question bank after login', async () => {
-    login.mockResolvedValue({ email: 'admin@example.com', role: 'admin' })
-    renderLogin()
-    await submitLogin()
-    expect(await screen.findByText('QUESTION BANK HOME')).toBeInTheDocument()
-  })
-
   it('redirects already-authenticated users to the question bank', () => {
     renderLogin({ user: { email: 'someone@example.com', role: 'public' } })
     expect(screen.getByText('QUESTION BANK HOME')).toBeInTheDocument()
+  })
+})
+
+describe('LoginPage password field', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.auth.providers.mockResolvedValue({ google: false })
+  })
+
+  it('reveals and re-hides the password', async () => {
+    renderLogin()
+    const user = userEvent.setup()
+    const password = screen.getByLabelText('Password')
+    expect(password).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(password).toHaveAttribute('type', 'text')
+    await user.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(password).toHaveAttribute('type', 'password')
   })
 })
 

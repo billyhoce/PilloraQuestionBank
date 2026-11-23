@@ -15,9 +15,15 @@ class SchoolLevelResponse(BaseModel):
     model_config = _orm
 
 
+class SubjectRequest(BaseModel):
+    name: str
+    code: Optional[str] = None
+
+
 class SubjectResponse(BaseModel):
     id: int
     name: str
+    code: Optional[str] = None
     model_config = _orm
 
 

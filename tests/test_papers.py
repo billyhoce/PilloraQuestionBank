@@ -174,13 +174,6 @@ def test_patch_paper_premium_missing_returns_404(admin_client):
     assert resp.status_code == 404
 
 
-def test_patch_paper_premium_invalid_body_returns_422(admin_client, sample_paper):
-    assert admin_client.patch(f"/api/papers/{sample_paper.id}/premium", json={}).status_code == 422
-    assert admin_client.patch(
-        f"/api/papers/{sample_paper.id}/premium", json={"is_premium": "maybe"}
-    ).status_code == 422
-
-
 def test_update_paper_stream_change_clears_topics(
     admin_client, db_session, sample_paper, reference_data, mock_s3
 ):

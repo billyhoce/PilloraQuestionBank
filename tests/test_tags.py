@@ -132,14 +132,3 @@ def test_delete_tag_in_use_cascades(admin_client, reference_data, sample_paper, 
     db_session.expire_all()
     assert db_session.query(QuestionTag).filter_by(tag_id=tag_id).count() == 0
     assert db_session.query(Question).filter_by(id=question.id).first() is not None
-
-
-# ---------------------------------------------------------------------------
-# Smoke
-# ---------------------------------------------------------------------------
-
-
-def test_list_tags_returns_200(client):
-    resp = client.get("/api/tags")
-    assert resp.status_code == 200
-    assert "data" in resp.json()

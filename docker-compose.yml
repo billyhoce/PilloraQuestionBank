@@ -7,6 +7,9 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      # The browser POSTs PDFs straight to the bucket (presigned POST): MinIO's CORS is server-wide,
+      # not per bucket. Mirrors the S3 bucket CORS rule in docs/DEPLOYMENT.md (POST from the app origin).
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:5173,http://localhost:3000,http://localhost:8000"
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -27,6 +30,35 @@ services:
       mc mb --ignore-existing local/pillora-dev;
       exit 0;
       "
+
+  # docker compose run --rm tesseract <image|list.txt> <outbase|stdout> [-l eng] [--dpi N] [pdf|hocr|tsv|txt]
+  # ingestion/ is mounted at /work, so paths are given relative to ingestion/.
+  # Built on demand (never started by `up`): `docker compose build tesseract`.
+  tesseract:
+    build: ingestion/docker/tesseract
+    image: pillora-tesseract
+    network_mode: none
+    profiles: [tools]
+    volumes:
+      - ./ingestion:/work
+
+  # Ingest worker in the production image (Debian, apt Tesseract 5.3, same limits as
+  # deploy/docker-compose.prod.yml). `docker compose up -d --build`. Runs a built copy
+  # of the code: rebuild after changing app/ or ingestion/.
+  worker:
+    build: .
+    image: pillora-api:local
+    command: ["python", "-m", "app.worker"]
+    profiles: [worker]
+    env_file: .env
+    environment:
+      S3_ENDPOINT_URL: http://minio:9000
+      INGEST_OCR_COMMAND: tesseract
+    cpus: "1.0"
+    mem_limit: 6g
+    depends_on:
+      minio:
+        condition: service_healthy
 
 volumes:
   minio_data:

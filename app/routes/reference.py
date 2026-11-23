@@ -29,6 +29,7 @@ from app.schemas.reference import (
     SchoolResponse,
     StreamRequest,
     StreamResponse,
+    SubjectRequest,
     SubjectResponse,
     SubtopicRequest,
     SubtopicResponse,
@@ -127,9 +128,14 @@ def get_subject(subject_id: int, db: Session = Depends(get_db)):
     return obj
 
 
+def _code(code: Optional[str]) -> Optional[str]:
+    """A subject code as stored: trimmed, blank as NULL."""
+    return (code or "").strip() or None
+
+
 @router.post("/subjects", response_model=SubjectResponse, status_code=201)
-def create_subject(payload: NameRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    obj = Subject(name=payload.name)
+def create_subject(payload: SubjectRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    obj = Subject(name=payload.name, code=_code(payload.code))
     db.add(obj)
     try:
         db.flush()
@@ -140,11 +146,12 @@ def create_subject(payload: NameRequest, db: Session = Depends(get_db), _: User 
 
 
 @router.put("/subjects/{subject_id}", response_model=SubjectResponse)
-def update_subject(subject_id: int, payload: NameRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def update_subject(subject_id: int, payload: SubjectRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     obj = db.get(Subject, subject_id)
     if obj is None:
         _not_found("Subject")
     obj.name = payload.name
+    obj.code = _code(payload.code)
     try:
         db.flush()
     except IntegrityError:

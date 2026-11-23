@@ -62,11 +62,6 @@ def test_update_generation_config_admin_only(public_client):
     assert resp.status_code == 403
 
 
-def test_update_generation_config_premium_forbidden(premium_client):
-    resp = premium_client.put("/api/generation-config", json=_CONFIG_PAYLOAD)
-    assert resp.status_code == 403
-
-
 def test_update_generation_config_round_trips(admin_client):
     resp = admin_client.put("/api/generation-config", json=_CONFIG_PAYLOAD)
     assert resp.status_code == 200

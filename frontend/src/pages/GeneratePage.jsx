@@ -37,6 +37,7 @@ const EMPTY_FILTERS = {
   paper_number: '',
   topic_ids: [],
   exclusive: false,
+  tag_ids: [],
   search: '',
 }
 
@@ -66,6 +67,7 @@ function filtersToSelectPayload(filters) {
     paper_number: filters.paper_number || null,
     topic_ids: filters.topic_ids || [],
     exclusive: !!filters.exclusive,
+    tag_ids: filters.tag_ids || [],
     search: filters.search || null,
   }
 }

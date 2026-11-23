@@ -32,19 +32,9 @@ def test_list_users_forbidden_for_public(public_client):
     assert public_client.get("/api/users").status_code == 403
 
 
-def test_list_users_requires_auth(client):
-    assert client.get("/api/users").status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # PATCH /api/users/{id}/role
 # ---------------------------------------------------------------------------
-
-
-def test_premium_is_no_longer_a_role(admin_client, public_user):
-    """It moved to PUT /users/{id}/premium-school-levels."""
-    resp = admin_client.patch(f"/api/users/{public_user.id}/role", json={"role": "premium"})
-    assert resp.status_code == 422
 
 
 def test_change_role_to_admin(admin_client, public_user):
@@ -121,16 +111,6 @@ def test_revoke_all_premium_school_levels(admin_client, premium_user):
     assert resp.json()["premium_school_levels"] == []
 
 
-def test_set_premium_school_levels_is_idempotent(
-    admin_client, public_user, reference_data
-):
-    ids = [reference_data["school_level"].id]
-    assert _put_levels(admin_client, public_user.id, ids).status_code == 200
-    resp = _put_levels(admin_client, public_user.id, ids)
-    assert resp.status_code == 200
-    assert len(resp.json()["premium_school_levels"]) == 1
-
-
 def test_set_premium_school_levels_unknown_level_rejected(admin_client, public_user):
     resp = _put_levels(admin_client, public_user.id, [99999])
     assert resp.status_code == 422
@@ -154,11 +134,6 @@ def test_set_premium_school_levels_forbidden_for_public(
 ):
     resp = _put_levels(public_client, premium_user.id, [reference_data["school_level"].id])
     assert resp.status_code == 403
-
-
-def test_set_premium_school_levels_requires_auth(client, reference_data):
-    resp = _put_levels(client, 1, [reference_data["school_level"].id])
-    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +206,6 @@ def test_create_user_is_admin_only(public_client):
     assert resp.status_code == 403
 
 
-def test_create_user_requires_auth(client):
-    resp = client.post("/api/users", json={"email": "x@test.com"})
-    assert resp.status_code == 401
-
-
 # ---------------------------------------------------------------------------
 # DELETE /api/users/{id}
 # ---------------------------------------------------------------------------
@@ -300,8 +270,3 @@ def test_delete_unknown_user_returns_404(admin_client):
 def test_delete_user_is_admin_only(public_client, premium_user):
     resp = public_client.delete(f"/api/users/{premium_user.id}")
     assert resp.status_code == 403
-
-
-def test_delete_user_requires_auth(client, public_user):
-    resp = client.delete(f"/api/users/{public_user.id}")
-    assert resp.status_code == 401

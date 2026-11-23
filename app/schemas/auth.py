@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
 
 from app.schemas.reference import SchoolLevelResponse
 
+# Mirrored in frontend/src/pages/passwordRules.js (the register page's live checklist) — change both.
 _PASSWORD_RULES = [
     (r".{8,}", "at least 8 characters"),
     (r"[A-Z]", "at least one uppercase letter"),

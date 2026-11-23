@@ -1,55 +1,44 @@
 # Generation Config
 
-**Scope:** The admin-set presets and cover-title list that drive every non-admin paper generation and
-pre-fill the Generate form. How they are *enforced* at generation time is in
-[paper-generation.md](./paper-generation.md#role-enforcement-on-generatepaper); how they are *drawn*
-is in [pdf-rendering.md](./pdf-rendering.md).
+Admin-set presets and the cover-title list that govern every non-admin paper generation and pre-fill
+the admin's Generate form. Edited at `/admin/generation-config` (nav: **Generation Config**).
 
-`GenerationConfig` is a **single row** (`ck_generation_config_singleton` enforces `id = 1`);
-`CoverTitle` is the admin-curated list of titles non-admins must pick from. The Alembic migration
-seeds the row with canonical defaults and one title, `"Topical Worksheets"`. Those defaults live in
-`app/services/generation_config.py` (`DEFAULT_COVER_TITLE`, `DEFAULT_COVER_BODY`,
-`DEFAULT_HEADER_TEXT`) and `get_or_create_config` lazily re-creates the row if missing, so the app
-self-heals on an unseeded database. Field shapes are in
-[DATA_MODEL.md](../DATA_MODEL.md#core-tables).
+**Code:** `app/routes/generation_config.py`, `app/services/generation_config.py`,
+`frontend/src/pages/admin/GenerationConfigPage.jsx`, `frontend/src/components/generate/RichTextEditor.jsx`
+**Related:** [paper-generation.md](./paper-generation.md) (how presets are enforced),
+[pdf-rendering.md](./pdf-rendering.md) (how they are drawn), [DATA_MODEL.md](../DATA_MODEL.md)
 
-## API
+## What is configured
 
-Router: `app/routes/generation_config.py`; service: `app/services/generation_config.py`.
+| Setting | Type | Used for |
+|---|---|---|
+| **Cover titles** | list of names | non-admins must pick one; the **first** (oldest) is the default |
+| Subtitle 1 / 2 placeholder | plain text | grey hint text in the Generate form's subtitle inputs |
+| Cover body | rich text | the letter on the question paper's cover |
+| Header | rich text | branding right-aligned on the top rule of every page; multi-line, stacking upward |
+| Additional instructions | rich text | band below the top rule on the question paper's first page |
+| Footer | rich text | bottom-left of every page |
 
-```
-GET    /api/generation-config    -- any authenticated user. Returns { titles: [{id, name}] (id
-                                    order — the first is the non-admin dropdown default),
-                                    subtitle1_placeholder, subtitle2_placeholder, cover_body,
-                                    header_text, additional_instructions, footer_text }.
-                                    Nothing here is secret (every value is printed in the PDFs
-                                    users generate); writes are what's restricted.
-PUT    /api/generation-config    -- admin. Replaces the five preset fields; returns the GET shape.
-                                    cover_body / header_text / additional_instructions /
-                                    footer_text are rich-text HTML, stored as-is and sanitized at
-                                    render time (app/pdf/rich_text.py), same as the request path.
-GET    /api/cover-titles         -- any authenticated user. { data: [{id, name}] } in id order.
-POST   /api/cover-titles         -- admin. Body { name }. Duplicate -> 409. Returns 201.
-PUT    /api/cover-titles/:id     -- admin. Body { name }. Duplicate -> 409, unknown id -> 404.
-DELETE /api/cover-titles/:id     -- admin. Plain delete (nothing references titles). 204.
-```
+- Rich text = paragraphs with **bold / italic / underline / link**; links print blue and stay
+  clickable in the PDF. Values are stored as entered and sanitized when a PDF is rendered.
+- There is exactly one config. A fresh database is seeded with defaults — the Pillora letter body,
+  the Pillora website/Telegram header, placeholder hints, blank instructions and footer — and one
+  title, **Topical Worksheets**. If the config is ever missing it is recreated with those defaults (titles are not
+re-seeded).
 
-Serving the live config is what lets the frontend pre-fill the editable fields without keeping its
-own copy of the defaults.
+## Rules
 
-## Admin UI
+- **Read:** any signed-in user (every value is printed on the PDFs they generate, so nothing is
+  secret). **Write:** admins only.
+- Saving the presets replaces all six preset fields at once.
+- Cover-title names are unique; adding or renaming to an existing name is rejected. Deleting a title
+  is unrestricted — PDFs already generated keep the text.
+- With no titles configured, non-admin covers are untitled and admins default to a custom title.
+- Admins can still override any preset per generation and type a custom title; non-admins cannot
+  ([paper-generation.md](./paper-generation.md#cover-header-and-footer-controls)).
 
-`/admin/generation-config` (`GenerationConfigPage.jsx`, nav link **Generation Config**):
+## Admin page
 
-- **Cover Titles** — list / add / edit / delete via the shared reference CRUD stack (`SimpleTab` +
-  `ReferenceTable` + `SimpleNameModal` + `ConfirmDialog`), wired to `api.coverTitles`. Users
-  generating a paper must pick from this list (the first entry is the dropdown default); admins can
-  also type a custom title during generation.
-- **Generation Presets** form — **subtitle 1 / subtitle 2 placeholders** (the grey hint text in the
-  Generate form) as plain inputs, then four **rich-text editors** (the same `RichTextEditor` the
-  Generate page uses): the **cover body**, the **header** (branding drawn right-aligned on the top
-  rule of every page — multi-line, stacking upward from the rule), the **additional instructions**
-  (below the top rule on the question paper), and the **footer** (bottom-left of every page). All
-  four support **bold / italic / underline / link**, and links print blue and stay clickable in the
-  PDF. Saved via `PUT /api/generation-config` (`api.generationConfig.update`) with an inline
-  success/error notice.
+- **Cover Titles** — list / add / edit / delete, same table-and-modal pattern as reference data.
+- **Generation Presets** — the two placeholder inputs, then four rich-text editors (cover body,
+  header, additional instructions, footer), saved together with an inline success/error notice.

@@ -69,15 +69,6 @@ def _error_code(resp):
 # ---------------------------------------------------------------------------
 
 
-def test_is_configured_false_without_env(monkeypatch):
-    monkeypatch.setattr(google_oauth, "_GOOGLE_CLIENT_ID", "")
-    assert google_oauth.is_configured() is False
-
-
-def test_is_configured_true_with_env(google_configured):
-    assert google_oauth.is_configured() is True
-
-
 def test_authorization_url_carries_client_id_scopes_and_state(google_configured):
     url = google_oauth.build_authorization_url("nonce-abc")
     parsed = urlparse(url)

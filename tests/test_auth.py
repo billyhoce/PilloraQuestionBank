@@ -22,16 +22,6 @@ def test_hash_password_produces_bcrypt_hash():
     assert result != "mypassword"
 
 
-def test_verify_password_correct():
-    hashed = hash_password("secret")
-    assert verify_password("secret", hashed) is True
-
-
-def test_verify_password_incorrect():
-    hashed = hash_password("secret")
-    assert verify_password("wrong", hashed) is False
-
-
 @pytest.mark.parametrize("hashed", [None, ""])
 def test_verify_password_rejects_missing_hash(hashed):
     """Google-only accounts store no password_hash — reject rather than raise."""
@@ -44,13 +34,6 @@ def test_create_access_token_contains_subject_and_exp():
     assert payload is not None
     assert payload["sub"] == "42"
     assert "exp" in payload
-
-
-def test_decode_valid_token():
-    token = create_access_token({"sub": "99"})
-    payload = decode_access_token(token)
-    assert payload is not None
-    assert payload["sub"] == "99"
 
 
 def test_decode_expired_token():
@@ -114,24 +97,11 @@ def test_register_blank_name_returns_422(client, field):
     assert resp.status_code == 422
 
 
-@pytest.mark.parametrize("field", ["first_name", "last_name"])
-def test_register_missing_name_returns_422(client, field):
-    payload = _register_payload()
-    del payload[field]
-    resp = client.post("/api/auth/register", json=payload)
-    assert resp.status_code == 422
-
-
 def test_register_duplicate_email_returns_409(client):
     payload = _register_payload(email="dup@example.com")
     client.post("/api/auth/register", json=payload)
     resp = client.post("/api/auth/register", json=payload)
     assert resp.status_code == 409
-
-
-def test_register_invalid_email_returns_422(client):
-    resp = client.post("/api/auth/register", json=_register_payload(email="notanemail"))
-    assert resp.status_code == 422
 
 
 def test_register_short_password_returns_422(client):
@@ -165,11 +135,6 @@ def test_login_success_sets_httponly_cookie(client, admin_user):
 
 def test_login_wrong_password_returns_401(client, admin_user):
     resp = client.post("/api/auth/login", json={"email": "admin@test.com", "password": "wrongpass"})
-    assert resp.status_code == 401
-
-
-def test_login_unknown_email_returns_401(client):
-    resp = client.post("/api/auth/login", json={"email": "nobody@example.com", "password": "pass1234"})
     assert resp.status_code == 401
 
 

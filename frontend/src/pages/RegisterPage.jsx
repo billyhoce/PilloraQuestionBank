@@ -4,7 +4,28 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
 import ErrorBanner from '../components/ErrorBanner'
 import GoogleSignInButton from '../components/GoogleSignInButton'
+import PasswordInput from '../components/PasswordInput'
 import Spinner from '../components/Spinner'
+import { PASSWORD_RULES, passwordFailures } from './passwordRules'
+
+// Each rule with a live tick or cross; neutral grey until the user starts typing.
+function PasswordChecklist({ id, password }) {
+  return (
+    <ul id={id} className="mt-2 space-y-0.5 text-xs" aria-label="Password requirements">
+      {PASSWORD_RULES.map((rule) => {
+        const met = rule.test(password)
+        const tone = !password ? 'text-gray-400' : met ? 'text-green-600' : 'text-red-600'
+        return (
+          <li key={rule.label} className={`flex items-center gap-1.5 ${tone}`} data-met={met}>
+            <span aria-hidden="true" className="w-3 text-center">{password && met ? '✓' : password ? '✗' : '•'}</span>
+            {rule.label}
+            <span className="sr-only">{met ? ' (met)' : ' (not met)'}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
 
 export default function RegisterPage() {
   const { user, loading } = useAuth()
@@ -29,6 +50,11 @@ export default function RegisterPage() {
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    const failures = passwordFailures(password)
+    if (failures.length) {
+      setError(`Password needs: ${failures.map((f) => f.toLowerCase()).join(', ')}.`)
+      return
+    }
     if (password !== confirm) {
       setError('Passwords do not match.')
       return
@@ -93,28 +119,30 @@ export default function RegisterPage() {
           </div>
           <div>
             <label htmlFor="register-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input
+            <PasswordInput
               id="register-password"
-              type="password"
+              revealLabel="password"
               required
+              aria-describedby="register-password-rules"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <p className="mt-1 text-xs text-gray-400">
-              Min 8 characters, must include uppercase, lowercase, number, and special character.
-            </p>
+            <PasswordChecklist id="register-password-rules" password={password} />
           </div>
           <div>
             <label htmlFor="register-confirm" className="block text-sm font-medium text-gray-700 mb-1">Confirm password</label>
-            <input
+            <PasswordInput
               id="register-confirm"
-              type="password"
+              revealLabel="confirm password"
               required
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            {confirm && confirm !== password && (
+              <p className="mt-1 text-xs text-red-600">Does not match the password above.</p>
+            )}
           </div>
           <button
             type="submit"

@@ -1,50 +1,18 @@
-"""Tests for the import pipeline: image processing, confirm service, and routes."""
-import io
+"""Tests for the import pipeline: PDF page rendering, confirm service, and routes."""
+import gc
+import weakref
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import anthropic
 import httpx
 import pytest
-from PIL import Image
 from sqlalchemy.orm import Session
 
 from app.ai.topic_labeler import TruncatedResponseError
 from app.models.orm import Paper, Question, QuestionPage, QuestionPart, QuestionTopic
-from app.pdf.image_processing import standardize, to_webp_bytes
-from app.services.ingest import confirm_import, pdf_to_images
-
-
-# ---------------------------------------------------------------------------
-# Image standardization (pure functions tested separately in test_image_processing)
-# Re-tested here in import-pipeline context for integration confidence
-# ---------------------------------------------------------------------------
-
-
-def test_standardize_image_downscales_wide_to_1760():
-    img = Image.new("RGB", (2480, 500), color=(100, 150, 200))
-    result = standardize(img)
-    assert result.width == 1760
-
-
-def test_standardize_image_keeps_narrow_unchanged():
-    img = Image.new("RGB", (1000, 500), color=(0, 100, 0))
-    result = standardize(img)
-    assert result.size == (1000, 500)
-
-
-def test_standardize_image_content_only_no_left_margin():
-    img = Image.new("RGB", (2480, 300), color=(0, 100, 0))
-    result = standardize(img)
-    # No white margin baked in — top-left is content.
-    assert result.getpixel((0, 0))[:3] == (0, 100, 0)
-
-
-def test_standardize_image_returns_webp_bytes():
-    img = Image.new("RGB", (2480, 400))
-    data = to_webp_bytes(img, quality=85)
-    reopened = Image.open(io.BytesIO(data))
-    assert reopened.format == "WEBP"
+from app.services import ingest as ingest_module
+from app.services.ingest import confirm_import, iter_pdf_pages, upload_pages
 
 
 def _make_fitz_doc(num_pages=1, width=200, height=300):
@@ -66,14 +34,82 @@ def _make_fitz_doc(num_pages=1, width=200, height=300):
     return mock_doc
 
 
-def test_pdf_to_images_calls_fitz_open(minimal_pdf_bytes):
-    mock_doc = _make_fitz_doc(num_pages=1)
+def test_iter_pdf_pages_is_lazy(minimal_pdf_bytes):
+    mock_doc = _make_fitz_doc(num_pages=3)
+    mock_doc.__iter__ = MagicMock(return_value=iter(_counting_pages(3)))
 
-    with patch("app.services.ingest.fitz.open", return_value=mock_doc) as mock_open:
-        result = pdf_to_images(minimal_pdf_bytes)
-        mock_open.assert_called_once()
-    assert len(result) == 1
-    assert isinstance(result[0], Image.Image)
+    with patch("app.services.ingest.fitz.open", return_value=mock_doc):
+        gen = iter_pdf_pages(minimal_pdf_bytes)
+        assert _RENDERED == []  # nothing rendered until the first page is requested
+        next(gen)
+        assert _RENDERED == [0]
+        next(gen)
+        assert _RENDERED == [0, 1]
+
+
+_RENDERED: list[int] = []
+
+
+def _counting_pages(n, width=200, height=300):
+    """Pages whose get_pixmap records the order in which they are rendered."""
+    _RENDERED.clear()
+    pages = []
+    for idx in range(n):
+        pix = MagicMock(width=width, height=height, samples=bytes([255] * (width * height * 3)))
+        page = MagicMock()
+
+        def render(dpi, idx=idx, pix=pix):
+            _RENDERED.append(idx)
+            return pix
+
+        page.get_pixmap.side_effect = render
+        pages.append(page)
+    return pages
+
+
+def test_upload_pages_processes_one_page_at_a_time(minimal_pdf_bytes):
+    """Page n+1 is not rendered until page n has been uploaded and released."""
+    events: list[str] = []
+    live: list[weakref.ref] = []
+    mock_doc = _make_fitz_doc(num_pages=3)
+    pages = _counting_pages(3)
+    for idx, page in enumerate(pages):
+        inner = page.get_pixmap.side_effect
+
+        def render(dpi, idx=idx, inner=inner):
+            events.append(f"render{idx}")
+            # Every earlier page's PIL image must already be garbage collected.
+            gc.collect()
+            assert all(r() is None for r in live), "an earlier page is still alive"
+            return inner(dpi)
+
+        page.get_pixmap.side_effect = render
+    mock_doc.__iter__ = MagicMock(return_value=iter(pages))
+
+    real_standardize = ingest_module.standardize
+
+    def spy_standardize(img):
+        out = real_standardize(img)
+        live.append(weakref.ref(img))
+        live.append(weakref.ref(out))
+        return out
+
+    def spy_put(key, data):
+        events.append(f"put{key[-6:-5]}")
+
+    with (
+        patch("app.services.ingest.fitz.open", return_value=mock_doc),
+        patch("app.services.ingest.standardize", new=spy_standardize),
+        patch("app.services.ingest.put_image", side_effect=spy_put),
+        patch("app.services.ingest.get_presigned_url", return_value="http://u"),
+        patch("app.services.ingest.extract_metadata", return_value={}),
+    ):
+        result = upload_pages(minimal_pdf_bytes, "x.pdf", db=None)
+
+    assert events == ["render0", "put0", "render1", "put1", "render2", "put2"]
+    assert [p["temp_key"].rsplit("/", 1)[1] for p in result["pages"]] == [
+        "page_0.webp", "page_1.webp", "page_2.webp",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -852,3 +888,89 @@ def test_delete_paper_removes_rows_and_s3(admin_client, sample_paper, db_session
 def test_delete_paper_missing_returns_204(admin_client):
     resp = admin_client.delete("/api/import/papers/99999")
     assert resp.status_code == 204
+
+
+def test_confirm_survives_failed_temp_delete_and_deletes_the_rest(db_session, mock_s3, reference_data, admin_user):
+    temp0, temp1 = "tmp/upload-del/page_0.webp", "tmp/upload-del/page_1.webp"
+    for k in (temp0, temp1):
+        mock_s3.put_object(Bucket="test-bucket", Key=k, Body=b"fake")
+    pages = [
+        {"temp_key": temp0, "page_type": "question", "page_order": 1, "width_px": 100, "height_px": 100},
+        {"temp_key": temp1, "page_type": "answer", "page_order": 1, "width_px": 100, "height_px": 100},
+    ]
+    payload = _make_confirm_payload(reference_data, admin_user, [{"question_number": 1, "pages": pages}])
+    from app.storage.s3_client import delete_object as real_delete
+
+    def flaky(key):
+        if key == temp0:
+            raise RuntimeError("S3 down")
+        real_delete(key)
+
+    with patch("app.services.ingest.delete_object", side_effect=flaky):
+        paper = confirm_import(payload=payload, created_by=admin_user, db=db_session)
+
+    assert paper.id is not None and db_session.query(Paper).count() == 1
+    mock_s3.head_object(Bucket="test-bucket", Key=temp0)  # leaked, left to the lifecycle rule
+    keys = [o["Key"] for o in mock_s3.list_objects_v2(Bucket="test-bucket").get("Contents", [])]
+    assert temp1 not in keys
+
+
+def test_confirm_before_commit_failure_rolls_back_paper(db_session, mock_s3, reference_data, admin_user):
+    temp = "tmp/upload-bc/page_0.webp"
+    mock_s3.put_object(Bucket="test-bucket", Key=temp, Body=b"fake")
+    payload = _make_confirm_payload(reference_data, admin_user, [{"question_number": 1, "pages": [
+        {"temp_key": temp, "page_type": "question", "page_order": 1, "width_px": 100, "height_px": 100}]}])
+
+    def fail(paper):
+        raise RuntimeError("nope")
+
+    with pytest.raises(RuntimeError):
+        confirm_import(payload=payload, created_by=admin_user, db=db_session, before_commit=fail)
+    assert db_session.query(Paper).count() == 0
+    mock_s3.head_object(Bucket="test-bucket", Key=temp)
+
+
+def test_manual_confirm_leaves_provenance_null(db_session, mock_s3, reference_data, admin_user):
+    test_confirm_creates_question_pages(db_session, mock_s3, reference_data, admin_user)
+    q = db_session.query(Question).first()
+    assert q.section is None and q.proposal_question_index is None
+    assert all(p.source_page is None and p.source_rect is None for p in db_session.query(QuestionPage))
+
+
+def _job_for(db_session, admin_user, **kw):
+    import uuid as _uuid
+    from app.models.orm import IngestJob
+
+    job = IngestJob(
+        id=_uuid.uuid4(), created_by=admin_user.id, filename="x.pdf", source_key="ingest/x/source.pdf",
+        sha256="0" * 64, page_count=1, status="confirmed", **kw,
+    )
+    db_session.add(job)
+    db_session.flush()
+    return job
+
+
+@pytest.mark.parametrize("route", ["/api/import/papers/{}", "/api/papers/{}"])
+def test_delete_paper_logs_event_on_source_job(admin_client, sample_paper, db_session, admin_user, route):
+    from app.models.orm import IngestEvent
+
+    job = _job_for(db_session, admin_user)
+    sample_paper.source_job_id = job.id
+    db_session.flush()
+    paper_id = sample_paper.id
+
+    with patch("app.routes.ingest.delete_object"), patch("app.routes.papers.delete_object"):
+        assert admin_client.delete(route.format(paper_id)).status_code == 204
+
+    events = db_session.query(IngestEvent).filter_by(job_id=job.id, kind="paper_deleted").all()
+    assert len(events) == 1
+    assert events[0].data["paper_id"] == paper_id
+    assert events[0].actor_user_id == admin_user.id
+
+
+def test_delete_paper_without_source_job_logs_nothing(admin_client, sample_paper, db_session):
+    from app.models.orm import IngestEvent
+
+    with patch("app.routes.ingest.delete_object"):
+        assert admin_client.delete(f"/api/import/papers/{sample_paper.id}").status_code == 204
+    assert db_session.query(IngestEvent).filter_by(kind="paper_deleted").count() == 0

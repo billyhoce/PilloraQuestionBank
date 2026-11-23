@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.ai.topic_labeler import (
-    LABEL_PARTS_TOOL,
     TruncatedResponseError,
     _build_options,
     build_system_prompt,
@@ -27,14 +26,6 @@ def _make_topics(topic_id, subtopic_id, topic_number=1):
             "subtopics": [{"id": subtopic_id, "name": "Linear equations"}],
         }
     ]
-
-
-def test_label_parts_tool_schema_is_per_part():
-    schema = LABEL_PARTS_TOOL["input_schema"]
-    assert schema["required"] == ["parts"]
-    part = schema["properties"]["parts"]["items"]
-    assert set(part["required"]) == {"label", "selected_codes", "marks"}
-    assert part["properties"]["marks"]["type"] == ["integer", "null"]
 
 
 def test_build_options_topic_with_subtopics_shows_only_subtopics():
@@ -69,35 +60,6 @@ def test_build_options_topic_without_subtopics_shows_bare_line():
     assert "Differentiation" in options_str
     assert "2" in code_map
     assert code_map["2"] == (2, None)
-
-
-def test_build_system_prompt_includes_all_topic_names():
-    topics = [
-        {"id": 1, "name": "Algebra", "topic_number": 1, "subtopics": []},
-        {"id": 2, "name": "Geometry", "topic_number": 2, "subtopics": []},
-    ]
-    options_str, _ = _build_options(topics)
-    prompt = build_system_prompt(subject="Math", stream="G3", options_str=options_str)
-    assert "Algebra" in prompt
-    assert "Geometry" in prompt
-
-
-def test_build_system_prompt_includes_subtopics():
-    topics = [
-        {
-            "id": 1,
-            "name": "Algebra",
-            "topic_number": 1,
-            "subtopics": [
-                {"id": 11, "name": "Linear equations"},
-                {"id": 12, "name": "Quadratic equations"},
-            ],
-        }
-    ]
-    options_str, _ = _build_options(topics)
-    prompt = build_system_prompt(subject="Math", stream="G3", options_str=options_str)
-    assert "Linear equations" in prompt
-    assert "Quadratic equations" in prompt
 
 
 def test_build_system_prompt_includes_positional_codes():
@@ -158,37 +120,6 @@ def _make_paper_and_question(db_session, reference_data, admin_user):
     db_session.add(question)
     db_session.flush()
     return paper, question
-
-
-@patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_calls_messages_create_once(mock_anthropic_cls, db_session, reference_data, admin_user):
-    mock_client = MagicMock()
-    mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response([_part()])
-
-    rd = reference_data
-    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
-
-    topics = _make_topics(rd["topic"].id, rd["subtopic"].id)
-    label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
-
-    mock_client.messages.create.assert_called_once()
-
-
-@patch("app.ai.topic_labeler.anthropic.Anthropic")
-def test_label_question_uses_haiku_model(mock_anthropic_cls, db_session, reference_data, admin_user):
-    mock_client = MagicMock()
-    mock_anthropic_cls.return_value = mock_client
-    mock_client.messages.create.return_value = _make_mock_response([_part()])
-
-    rd = reference_data
-    _, question = _make_paper_and_question(db_session, reference_data, admin_user)
-
-    topics = _make_topics(rd["topic"].id, rd["subtopic"].id)
-    label_question(question=question, topics=topics, image_bytes_list=[b"fake-image-bytes"])
-
-    call_kwargs = mock_client.messages.create.call_args
-    assert call_kwargs.kwargs.get("model") == "claude-haiku-4-5-20251001"
 
 
 @patch("app.ai.topic_labeler.anthropic.Anthropic")

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
 import ErrorBanner from '../components/ErrorBanner'
 import GoogleSignInButton from '../components/GoogleSignInButton'
+import PasswordInput from '../components/PasswordInput'
 import Spinner from '../components/Spinner'
 
 // Codes the backend appends to /login?error=... when a Google sign-in fails.
@@ -68,9 +69,10 @@ export default function LoginPage() {
           </div>
           <div>
             <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input
+            <PasswordInput
               id="login-password"
-              type="password"
+              revealLabel="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
