@@ -4,6 +4,7 @@ import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
 import Spinner from '../../components/Spinner'
 import AgeBadge from './AgeBadge'
+import { formatUsd, monthLabel } from './costFormat'
 import JobDetail from './JobDetail'
 import { AWAITING_QUERY } from './jobAge'
 import { CANCELLABLE, STATUS_LABELS, canRetry, formatCreated } from './jobStatus'
@@ -19,9 +20,23 @@ function parseJobSearch(term) {
   return null
 }
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// This and last month's Claude spend across every job (Singapore calendar months).
+function Spend({ spend }) {
+  if (!spend) return null
+  const month = m => `${monthLabel(m.month)} ${formatUsd(m.usd)} (${plural(m.jobs, 'job')})`
+  return (
+    <p className="text-sm text-gray-600" aria-label="Claude spend">
+      Claude spend: {month(spend.this_month)} · {month(spend.last_month)}
+    </p>
+  )
+}
+
 // Every job, settled ones included, with search and filters. Unfiltered it shows `allJobs` (the
 // page's own polled list); a filter fetches its own list, again whenever `version` moves.
-export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
+// `spend` is this and last month's Claude spend, from the page's list.
+export default function JobHistory({ allJobs, spend, version, onRetry, onCancel }) {
   const [term, setTerm] = useState('')
   const [filter, setFilter] = useState({})
   const [awaiting, setAwaiting] = useState(false)
@@ -66,7 +81,10 @@ export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
 
   return (
     <section aria-labelledby="job-history" className="mt-8">
-      <h2 id="job-history" className="text-lg font-semibold text-gray-800 mb-2">All jobs</h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 mb-2">
+        <h2 id="job-history" className="text-lg font-semibold text-gray-800">All jobs</h2>
+        <Spend spend={spend} />
+      </div>
       <form onSubmit={handleSearch} className="flex items-center gap-2 mb-2">
         <input
           type="search"
@@ -112,6 +130,7 @@ export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
               <th className="px-3 py-2 font-medium">File</th>
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium">Created</th>
+              <th className="px-3 py-2 font-medium text-right">Claude cost</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
@@ -139,6 +158,9 @@ export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
                     {formatCreated(job.created_at)}
                     <AgeBadge job={job} />
                   </td>
+                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap text-gray-600">
+                    {job.cost_usd != null ? formatUsd(job.cost_usd) : '—'}
+                  </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {job.status === 'review_ready' && (
                       <Link to={`/admin/import/jobs/${job.id}/review`} className="text-blue-700 hover:underline mr-3">
@@ -159,7 +181,7 @@ export default function JobHistory({ allJobs, version, onRetry, onCancel }) {
                 </tr>
                 {openId === job.id && (
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <td colSpan={4} className="px-3 py-2">
+                    <td colSpan={5} className="px-3 py-2">
                       <JobDetail jobId={job.id} version={version} />
                     </td>
                   </tr>

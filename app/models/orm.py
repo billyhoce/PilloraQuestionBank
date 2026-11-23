@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -628,6 +629,44 @@ class IngestEvent(Base):
         ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
     )
     data: Mapped[dict] = mapped_column(_JSON, nullable=False, default=dict, server_default=text("'{}'"))
+
+
+class IngestClaudeCall(Base):
+    """One Claude call made for an ingest job, with its tokens and USD cost (``app/ai/job_cost.py``).
+
+    Append-only and kept forever, so cost can be broken down per call and summed across jobs.
+    ``kind`` is ``segment`` (find the papers in the booklet), ``metadata`` (one paper's metadata,
+    ``paper_key`` and ``source`` = ``cover`` / ``filename`` saying which) or ``legacy``: one row per job
+    from before calls were itemised, holding that job's old ``report["cost"]`` totals.
+    ``run`` is how many times the job had been retried when the call was made (0 = first run);
+    ``attempt`` is the task's attempt within that run."""
+
+    __tablename__ = "ingest_claude_call"
+    __table_args__ = (Index("ix_ingest_claude_call_job_id_id", "job_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ingest_job.id", ondelete="CASCADE"), nullable=False
+    )
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    paper_key: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    stage: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    section: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    cache_write: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    cache_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # NULL when the model has no price in app/logger.py's _PRICES.
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class IngestTask(Base):

@@ -220,9 +220,9 @@ def main() -> int:
 
     configure_logging()
     # The segment stage's Messages API calls go to the app log with the others' (and prices),
-    # and into the job's report["cost"].
+    # and into the job's Claude calls (app/ai/job_cost.py).
     segment_request.usage_listener = lambda model, usage, request_id, reply, seconds: record_usage(
-        "find the papers in the booklet", model, usage, request_id, reply=reply, seconds=seconds
+        "find the papers in the booklet", model, usage, request_id, kind="segment", reply=reply, seconds=seconds
     )
 
     settings = load_settings()

@@ -8,6 +8,7 @@ import JobDetail from './JobDetail'
 import JobHistory from './JobHistory'
 import PdfDropZone from './PdfDropZone'
 import PipelineStepper from './PipelineStepper'
+import { formatUsd } from './costFormat'
 import { jobPhase, phaseCaption } from './pipelinePhases'
 import { ACTIVE, CANCELLABLE, IN_PIPELINE, canRetry } from './jobStatus'
 import { useUploadQueue } from './uploadQueueContext'
@@ -82,6 +83,7 @@ function JobRow({ job, workerAlive, open, onToggle, onRetry, onCancel, version }
             {orphanUpload ? 'Upload not finished (started in another tab or session)' : phaseCaption(job)}
             {job.page_count ? ` · ${plural(job.page_count, 'page')}` : ''}
             {job.warnings_count > 0 && <span className="text-amber-700"> · {plural(job.warnings_count, 'warning')}</span>}
+            {job.cost_usd != null && <span title="Claude cost so far"> · {formatUsd(job.cost_usd)}</span>}
             <AgeBadge job={job} />
           </div>
           {phase.state === 'failed' && job.error && <div className="text-xs text-red-600 break-words">{job.error}</div>}
@@ -116,6 +118,7 @@ function Count({ n, label, tone = 'text-gray-700' }) {
 export default function AutoImport() {
   const uploads = useUploadQueue()
   const [jobs, setJobs] = useState(null)
+  const [spend, setSpend] = useState(null)
   const [workerAlive, setWorkerAlive] = useState(true)
   const [version, setVersion] = useState(0)
   const [listError, setListError] = useState(null)
@@ -136,6 +139,7 @@ export default function AutoImport() {
     }
     if (done.length) setFinished(f => [...done, ...f.filter(x => !done.some(d => d.id === x.id))])
     setJobs(res.jobs)
+    setSpend(res.spend ?? null)
     setWorkerAlive(res.workerAlive !== false)
     setVersion(v => v + 1)
     setListError(null)
@@ -271,7 +275,7 @@ export default function AutoImport() {
         </section>
       )}
 
-      <JobHistory allJobs={jobs} version={version} onRetry={handleRetry} onCancel={handleCancel} />
+      <JobHistory allJobs={jobs} spend={spend} version={version} onRetry={handleRetry} onCancel={handleCancel} />
     </div>
   )
 }

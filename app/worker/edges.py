@@ -47,6 +47,7 @@ from pipeline.registry import Registry, Stage
 from pipeline.store import TaskSpec
 from sqlalchemy.orm import Session
 
+from app.log_context import log_context
 from app.logger import log_job_event
 from app.models.orm import IngestJob
 from app.services.ingest_jobs import (
@@ -184,7 +185,8 @@ class Edges:
             for question, answer in pair_segments(plan.segments):
                 key = paper_key(question, answer)
                 cover = self._cover_pdf(source, question or answer, job_uuid)
-                papers[key] = extract_paper_metadata_safely(self._extract_metadata, job.filename, db, cover)
+                with log_context(paper=key):  # the call's cost row names the paper
+                    papers[key] = extract_paper_metadata_safely(self._extract_metadata, job.filename, db, cover)
                 found = sorted(k for k, v in papers[key].items() if v is not None and k != "extracted")
                 # Whether the cover or the filename was read is on the Claude call's own line.
                 log_job_event(job_uuid, f"paper {key} metadata: {', '.join(found) or 'none found'}")
@@ -209,7 +211,7 @@ class Edges:
             return failed("report wrote no proposal.json")
         proposal = artefacts.read_json(proposal_path)
         with self._factory() as db:
-            job = db.get(IngestJob, job_uuid, with_for_update=True)  # cost writes lock the row too
+            job = db.get(IngestJob, job_uuid, with_for_update=True)
             if job is None or job.status in API_OWNED:
                 return outcome  # cancelled while it ran: leave no objects behind
             pages = ctx.path(PAGES_DIR)

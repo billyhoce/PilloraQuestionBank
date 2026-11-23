@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import ErrorBanner from '../../components/ErrorBanner'
+import JobCost from './JobCost'
 
 function formatDuration(ms) {
   if (ms == null) return '—'
@@ -47,6 +48,7 @@ export default function JobDetail({ jobId, version }) {
   return (
     <>
     <JobId id={job.id} />
+    <JobCost cost={job.cost} />
     <table className="w-full text-xs" aria-label={`Tasks of ${job.filename}`}>
       <thead>
         <tr className="text-left text-gray-500">

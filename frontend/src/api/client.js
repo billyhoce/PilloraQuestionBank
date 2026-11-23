@@ -122,7 +122,8 @@ export const api = {
       return { job_id }
     },
     // Every admin's jobs, newest first; optional status, `{ job_id }` or `{ paper_id }` filters.
-    // Resolves to { jobs, workerAlive, heartbeatAgeS } (the worker's liveness comes with the list).
+    // Resolves to { jobs, workerAlive, heartbeatAgeS, spend } (the worker's liveness and this and last
+    // month's Claude spend come with the list).
     listJobs: (status, { job_id, paper_id, unmatched_answers } = {}) => {
       const params = new URLSearchParams()
       if (status) params.set('status', status)
@@ -134,6 +135,7 @@ export const api = {
         jobs: r.data,
         workerAlive: r.worker_alive,
         heartbeatAgeS: r.heartbeat_age_s,
+        spend: r.spend,
       }))
     },
     getJob: (id) => request('GET', `/api/import/jobs/${id}`),

@@ -8,7 +8,7 @@ attaches every proposed paper.
 `app/services/ingest_confirm.py`, `app/services/ingest_papers.py`, `app/services/ingest_events.py`,
 `app/worker/` (`main.py`, `store.py`, `edges.py`, `sweep.py`, `reconcile.py`), `app/ai/job_cost.py`,
 `app/storage/`, `frontend/src/features/import/` (`AutoImport.jsx`, `UploadQueue.jsx`,
-`PdfDropZone.jsx`, `JobHistory.jsx`, `JobDetail.jsx`, `ReviewQueuePage.jsx`, `queueGroups.js`,
+`PdfDropZone.jsx`, `JobHistory.jsx`, `JobDetail.jsx`, `JobCost.jsx`, `costFormat.js`, `ReviewQueuePage.jsx`, `queueGroups.js`,
 `ReviewPage.jsx`, `PaperEditor.jsx`, `useJobReview.js`, `proposalReducer.js`, `MetadataSidebar.jsx`,
 `SchoolCombobox.jsx`)
 **Related:** [ingestion-pipeline.md](./ingestion-pipeline.md) (what the worker does to a booklet,
@@ -173,7 +173,7 @@ import, or Manual import when one is in progress in this tab.
 - Counts above it (uploading, queued, running, failed) and a link to the review queue with the
   number of jobs ready.
 - Each job row shows:
-  - filename (click to open the job detail), page count, warnings, age badge
+  - filename (click to open the job detail), page count, warnings, Claude cost so far, age badge
   - a step tracker — Upload → Read PDF → Find papers → Split → Extract questions → Assemble — green
     behind, blue in progress, red where it failed
   - a caption ("Extract questions · 5/9 tasks", "Waiting for the worker", "Failed at Read PDF"),
@@ -188,16 +188,26 @@ import, or Manual import when one is in progress in this tab.
 
 **All jobs**
 - Every job, settled ones included, newest first: filename, status, failure reason, created time,
-  age badge, and **Review** (`review_ready`), **Retry** (a failed or blocked task to reopen),
+  age badge, Claude cost, and **Review** (`review_ready`), **Retry** (a failed or blocked task to reopen),
   **Cancel** where allowed.
 - **Age badge** on unsettled jobs: "waiting N days" / "waiting today" since upload; amber after
   **14 days**.
 - Filters, combinable: **Awaiting review** (`review_ready` + `failed`), **Unmatched answers** (a
   pending answer-only paper linked to no question paper), and a search box taking a job id (UUID) or
   a numeric paper id (finds the job that created that paper).
-- **Job detail:** the job id with **Copy**, and every task with stage, section, status (and needs
-  review), duration, warnings, reason or error, plus a collapsible traceback for a failed task.
-  Refreshes with the poll.
+- **Claude spend** above the list: this and last calendar month (Singapore time), in USD with the
+  number of jobs that made a call in it, across every job whatever the filter.
+- **Job detail:** the job id with **Copy**; the job's Claude cost; and every task with stage,
+  section, status (and needs review), duration, warnings, reason or error, plus a collapsible
+  traceback for a failed task. Refreshes with the poll.
+- **Claude cost** (job detail): the total and number of calls, expanding to one row per call in
+  the order made: what it was for ("Find papers in booklet", "Paper q1 metadata (from cover)"),
+  model, input tokens (cache reads beside them), output tokens and cost, then a total row.
+  - A call made after a Retry is tagged "retry N"; a task's later attempt in one run "attempt N".
+    Every call counts in the total: that money was spent.
+  - A job from before calls were itemised shows only its total ("per-call breakdown not
+    recorded").
+  - A call on a model with no price counts no cost; the line then says the total is low.
 
 ## Review queue
 
@@ -414,7 +424,7 @@ Compares the database with S3 and the scratch disk. **Report-only** until
 
 ## Observability
 
-Nothing below is shown in the UI except task details in the job detail; read it from the logs or the
+Nothing below is shown in the UI except task details and Claude cost in the job detail; read it from the logs or the
 database.
 
 - **Logs:** one plain-English line per event on stdout from both containers, led by its context
@@ -433,6 +443,7 @@ database.
   claimed, task finished (including lease-expiry failures), retry, cancelled, proposal edited, paper
   confirmed / skipped / attached / deleted, reconcile (and historical `expired`). Task rows are
   overwritten on re-run; the events keep every attempt.
-- **Claude cost:** every Claude call made for a job (segmentation, per-paper metadata) logs its
-  request id, model, tokens and USD cost, and adds to a running per-job total (calls, tokens, cache
-  writes/hits, cost) kept on the job record. Concurrent calls never lose each other's update.
+- **Claude cost:** every Claude call made for a job (segmentation and its retry model, per-paper
+  metadata) logs its request id, model, tokens and USD cost, and is stored as its own row with the
+  paper it was for, the run (retries so far) and task attempt. A failed cost write is logged and
+  never fails the call. Prices live in `app/logger.py`; an unpriced model stores no cost.

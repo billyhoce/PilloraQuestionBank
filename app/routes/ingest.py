@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.ai.job_cost import costs_by_job, job_cost, monthly_spend
 from app.ai.topic_labeler import TruncatedResponseError
 from app.db import get_db
 from app.deps import (
@@ -563,7 +564,12 @@ def list_ingest_jobs(
         )
     jobs = q.order_by(IngestJob.created_at.desc(), IngestJob.id).all()
     papers = _papers_by_job(db, jobs)
-    return {"data": [{**_job_out(j), "papers": papers[j.id]} for j in jobs], **worker_state(db)}
+    costs = costs_by_job(db, [j.id for j in jobs])
+    return {
+        "data": [{**_job_out(j), "papers": papers[j.id], "cost_usd": costs.get(j.id)} for j in jobs],
+        "spend": monthly_spend(db),
+        **worker_state(db),
+    }
 
 
 @router.get("/jobs/{job_id}")
@@ -576,6 +582,7 @@ def get_ingest_job(
     return {
         **_job_out(job),
         "report": job.report,
+        "cost": job_cost(db, job.id),
         "tasks": [_task_out(t) for t in job.tasks],
         **worker_state(db),
     }

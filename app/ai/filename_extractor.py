@@ -238,6 +238,7 @@ def _call(client, ref_data: dict, filename: str, cover: bytes | None) -> dict:
     record_usage(
         "read paper metadata from the cover" if cover is not None else "read paper metadata from the filename",
         MODEL, resp.usage, getattr(resp, "_request_id", None),
+        kind="metadata", source="cover" if cover is not None else "filename",
         reply=tool_input, seconds=t_call.s, stop_reason=resp.stop_reason,
     )
     return tool_input

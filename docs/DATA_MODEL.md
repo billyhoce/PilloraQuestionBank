@@ -137,6 +137,7 @@ erDiagram
     INGEST_JOB ||--o{ INGEST_TASK : "runs as"
     INGEST_JOB ||--o{ INGEST_PAPER : proposes
     INGEST_JOB ||--o{ INGEST_EVENT : "audited by"
+    INGEST_JOB ||--o{ INGEST_CLAUDE_CALL : "spent on"
     INGEST_PAPER |o--o| INGEST_PAPER : "answer-only linked to"
     INGEST_PAPER }o--o| PAPER : "confirmed as / proposed match"
     INGEST_PAPER ||--o{ INGEST_MATCH_REJECTION : "turned down"
@@ -155,8 +156,8 @@ See [features/auto-import.md](./features/auto-import.md) and
   - `proposal` — the pipeline's proposed papers/questions/pages; `proposal_edited` — the admin's
     edits. Together the source of truth for a paper's contents during review.
   - `report` — run summary: metadata read from each paper's cover, `review_outcome` per paper
-    (`confirmed` / `skipped` / `attached`; the job is `confirmed` once every paper has one), and the
-    job's Claude `cost`.
+    (`confirmed` / `skipped` / `attached`; the job is `confirmed` once every paper has one). Older
+    jobs also hold a Claude `cost` total there, superseded by `ingest_claude_call` and not read.
   - `debug` — the segmentation and ingest reports, kept after the worker's scratch folder is gone.
   - `confirmed_paper_ids` — papers this job created or added answers to, in order.
   - `error`; `created_by` (a user with jobs cannot be deleted).
@@ -189,6 +190,14 @@ See [features/auto-import.md](./features/auto-import.md) and
 - **ingest_event** — append-only audit trail, never pruned: job created, task claimed/finished,
   retry, cancel, proposal edited, paper confirmed/skipped/attached/deleted, reconciler findings.
   Holds the actor (null for the worker) and details.
+- **ingest_claude_call** — one row per Claude call made for a job, append-only, never pruned.
+  - `kind`: `segment` (find the papers), `metadata` (one paper's metadata; `paper_key`, and
+    `source` = `cover` / `filename`), or `legacy`: one row per job from before calls were itemised,
+    holding its old `report.cost` totals, dated at the job's creation.
+  - `model`, input/output/cache-write/cache-hit tokens, `cost_usd` (null for an unpriced model),
+    `seconds`, Anthropic `request_id`; `stage`, `section`, `run` (the job's retries before the
+    call) and `attempt` (the task's attempt in that run).
+  - Summed per job for the job list and per Singapore calendar month for the spend line.
 - **worker_heartbeat** — single row the worker updates: last seen, version, current job, last daily
   sweep.
 

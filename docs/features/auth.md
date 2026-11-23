@@ -46,6 +46,7 @@ in [users-and-premium.md](./users-and-premium.md).
 
 ## Sign in (password)
 
+- The password field has a show/hide toggle.
 - Unknown email, wrong password and an **unclaimed invite** all give the same generic error
   ("Unknown email or incorrect password").
 - An account that has a Google link but **no password** gets a specific message: *"This account was

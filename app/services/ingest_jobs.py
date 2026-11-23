@@ -132,9 +132,9 @@ def extract_paper_metadata_safely(extract_metadata, filename: str, db: Session, 
 def record_paper_metadata(job: IngestJob, db: Session, papers: dict[str, dict]) -> None:
     """Merge ``papers`` (paper key to metadata) into ``report["paper_metadata"]``.
 
-    Called by the worker's ``segment`` task, after the extractions (each adds its cost to
-    ``report["cost"]`` from another session, so this holds the row lock only for the write).
-    Locks the job row and re-reads it so the write does not clobber that cost, and commits.
+    Called by the worker's ``segment`` task, after the extractions (so the row lock is held
+    only for the write). Locks the job row and re-reads it so the write does not clobber
+    another writer's report fields, and commits.
     """
     db.get(IngestJob, job.id, with_for_update=True, populate_existing=True)
     report = dict(job.report or {})

@@ -51,6 +51,24 @@ describe('LoginPage redirects', () => {
   })
 })
 
+describe('LoginPage password field', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.auth.providers.mockResolvedValue({ google: false })
+  })
+
+  it('reveals and re-hides the password', async () => {
+    renderLogin()
+    const user = userEvent.setup()
+    const password = screen.getByLabelText('Password')
+    expect(password).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(password).toHaveAttribute('type', 'text')
+    await user.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(password).toHaveAttribute('type', 'password')
+  })
+})
+
 describe('LoginPage Google sign-in', () => {
   beforeEach(() => vi.clearAllMocks())
 

@@ -108,6 +108,25 @@ describe('AutoImport', () => {
     expect(badges.map(b => b.dataset.stale)).toEqual(['false', 'false', 'true'])
   })
 
+  it('shows the Claude cost on each job row and the monthly spend over the history', async () => {
+    api.import.listJobs.mockResolvedValue({
+      ...listing([
+        { ...JOBS[0], cost_usd: 0.384 },
+        { ...JOBS[1], cost_usd: 0.002 },
+        { id: 'j0', filename: 'free.pdf', status: 'cancelled', created_at: '2026-10-05T10:00:00Z', cost_usd: null },
+      ]),
+      spend: { this_month: { month: '2026-11', usd: 4.214, jobs: 37 }, last_month: { month: '2026-10', usd: 9.8, jobs: 1 } },
+    })
+    renderPage()
+    await screen.findAllByText('second.pdf')
+    expect(within(board()).getByTitle('Claude cost so far')).toHaveTextContent('$0.38')
+    const rows = within(history()).getAllByRole('row').slice(1)
+    expect(rows.map(r => r.cells[3].textContent)).toEqual(['$0.38', '<$0.01', '—'])
+    expect(within(history()).getByLabelText('Claude spend')).toHaveTextContent(
+      'Claude spend: Nov 2026 $4.21 (37 jobs) · Oct 2026 $9.80 (1 job)',
+    )
+  })
+
   it('computes waiting days from created_at', () => {
     expect(waitingDays('2026-10-01T00:00:00Z', Date.parse('2026-10-13T12:00:00Z'))).toBe(12)
     expect(waitingDays('garbage')).toBeNull()
